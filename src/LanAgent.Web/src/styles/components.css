@@ -1,0 +1,220 @@
+/* ── Remaining global component styles (not covered by Naive UI or scoped styles) ── */
+
+/* ---- Markdown body (MarkdownRenderer.vue) ---- */
+.markdown-body { line-height: var(--line-height-3); color: var(--color-text-primary); }
+.markdown-body h1, .markdown-body h2, .markdown-body h3,
+.markdown-body h4, .markdown-body h5, .markdown-body h6 {
+  font-weight: var(--font-weight-semibold);
+  margin: var(--space-4) 0 var(--space-2);
+  line-height: var(--line-height-2);
+}
+.markdown-body h1 { font-size: var(--font-size-600); }
+.markdown-body h2 { font-size: var(--font-size-500); }
+.markdown-body h3 { font-size: var(--font-size-400); }
+.markdown-body p { margin: var(--space-3) 0; }
+.markdown-body p:first-child { margin-top: 0; }
+.markdown-body p:last-child { margin-bottom: 0; }
+.markdown-body ul, .markdown-body ol { padding-left: var(--space-5); margin: var(--space-3) 0; }
+.markdown-body li { margin: var(--space-1) 0; }
+.markdown-body code {
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+  background: var(--color-neutral-6);
+  padding: 2px 5px;
+  border-radius: var(--radius-4);
+  border: 1px solid var(--color-stroke-default);
+}
+.markdown-body pre { margin: var(--space-3) 0; }
+.markdown-body pre code { background: none; border: none; padding: 0; font-size: inherit; }
+.markdown-body blockquote {
+  border-left: 3px solid var(--color-accent);
+  padding-left: var(--space-4);
+  color: var(--color-text-secondary);
+  margin: var(--space-3) 0;
+}
+.markdown-body table { border-collapse: collapse; width: 100%; margin: var(--space-3) 0; }
+.markdown-body th, .markdown-body td {
+  border: 1px solid var(--color-stroke-default);
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+}
+.markdown-body th { background: var(--color-bg-layer2); font-weight: var(--font-weight-semibold); }
+.markdown-body a { color: var(--color-accent); text-decoration: none; }
+.markdown-body a:hover { text-decoration: underline; }
+.markdown-body hr { border: none; border-top: 1px solid var(--color-stroke-default); margin: var(--space-5) 0; }
+
+/* ---- Code block (MarkdownRenderer.vue) ---- */
+.code-block {
+  background: var(--color-neutral-4);
+  border: 1px solid var(--color-stroke-default);
+  border-radius: var(--radius-8);
+  overflow: hidden;
+  font-size: var(--font-size-200);
+}
+[data-theme="dark"] .code-block { background: #0d1117; }
+
+.code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-neutral-6);
+  border-bottom: 1px solid var(--color-stroke-default);
+}
+[data-theme="dark"] .code-block-header { background: #161b22; }
+
+.code-lang {
+  font-size: var(--font-size-100);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.copy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px var(--space-2);
+  background: transparent;
+  border: 1px solid var(--color-stroke-default);
+  border-radius: var(--radius-4);
+  font-size: var(--font-size-100);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all var(--motion-duration-fast);
+}
+.copy-btn:hover { background: var(--color-bg-hover); color: var(--color-text-primary); }
+
+.code-block pre {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  line-height: 1.6;
+}
+
+/* ---- Tool call card (ToolCallCard.vue) ---- */
+.tool-call-card {
+  background: var(--color-bg-layer2);
+  border: 1px solid var(--color-stroke-default);
+  border-radius: var(--radius-8);
+  margin: var(--space-2) 0;
+  overflow: hidden;
+  font-size: var(--font-size-200);
+}
+.tool-call-card.status-running { border-color: var(--color-accent); }
+.tool-call-card.status-done { border-color: var(--color-success); }
+.tool-call-card.status-error { border-color: var(--color-error); }
+
+/* ---- Message bubble (MessageBubble.vue) ---- */
+.message-bubble {
+  position: relative;
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-6);
+  transition: background var(--motion-duration-fast);
+}
+.message-bubble:hover { background: var(--color-bg-layer1); }
+.message-bubble.role-user { flex-direction: row-reverse; }
+.message-bubble.role-user .bubble-body {
+  background: var(--color-accent);
+  color: var(--color-text-on-accent);
+  border-radius: var(--radius-12) var(--radius-4) var(--radius-12) var(--radius-12);
+  padding: var(--space-3) var(--space-4);
+  max-width: 70%;
+}
+.message-bubble.role-assistant .bubble-body {
+  flex: 1;
+  max-width: 100%;
+}
+.bubble-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--color-bg-layer2);
+  border: 1px solid var(--color-stroke-default);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 16px;
+}
+.message-bubble.role-user .bubble-avatar {
+  background: var(--color-accent-subtle);
+}
+
+/* ---- Nav item (NavItem.vue) ---- */
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-6);
+  color: var(--color-text-secondary);
+  text-decoration: none;
+  font-size: var(--font-size-300);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  transition: all var(--motion-duration-fast);
+  white-space: nowrap;
+  overflow: hidden;
+  border: none;
+  background: transparent;
+  width: 100%;
+  text-align: left;
+}
+.nav-item:hover { background: var(--color-bg-hover); color: var(--color-text-primary); }
+.nav-item.active { background: var(--color-bg-selected); color: var(--color-accent); }
+.nav-item .nav-icon { width: 18px; height: 18px; flex-shrink: 0; }
+
+/* ---- Conversation item (ConversationItem.vue) ---- */
+.conv-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-6);
+  cursor: pointer;
+  transition: background var(--motion-duration-fast);
+}
+.conv-item:hover { background: var(--color-bg-hover); }
+.conv-item.active { background: var(--color-bg-selected); }
+.conv-item.active .conv-item-title { color: var(--color-accent); }
+.conv-item-actions {
+  display: none;
+  gap: 2px;
+}
+.conv-item:hover .conv-item-actions { display: flex; }
+
+/* ---- Settings rows (SettingsView.vue) ---- */
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--color-stroke-default);
+}
+.setting-row:last-child { border-bottom: none; }
+.setting-row-label {
+  font-size: var(--font-size-300);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+}
+.setting-row-desc {
+  font-size: var(--font-size-200);
+  color: var(--color-text-secondary);
+  margin-top: 2px;
+}
+
+/* ---- Grids (SkillsView + ApiConfigView) ---- */
+.skills-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: var(--space-4);
+}
+.provider-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: var(--space-4);
+}

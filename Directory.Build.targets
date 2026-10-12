@@ -1,0 +1,14 @@
+<Project>
+  <Target Name="CopyAgentSandboxFiles" AfterTargets="Build" Condition="'$(CopyAgentSandbox)' == 'true'">
+    <PropertyGroup>
+      <AgentSandboxBuildDirectory>$(MSBuildThisFileDirectory)src/LanAgent.Sandbox/bin/$(Configuration)/net8.0/$(RuntimeIdentifier)/</AgentSandboxBuildDirectory>
+    </PropertyGroup>
+    <ItemGroup>
+      <AgentSandboxFiles Include="$(AgentSandboxBuildDirectory)**/*" Exclude="$(AgentSandboxBuildDirectory)win-x64/**/*;$(AgentSandboxBuildDirectory)linux-x64/**/*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(AgentSandboxFiles)" DestinationFiles="@(AgentSandboxFiles->'$(OutDir)sandbox/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="PublishAgentSandboxFiles" AfterTargets="Publish" Condition="'$(CopyAgentSandbox)' == 'true'">
+    <MSBuild Projects="$(MSBuildThisFileDirectory)src/LanAgent.Sandbox/LanAgent.Sandbox.csproj" Targets="Publish" Properties="Configuration=$(Configuration);PublishDir=$(PublishDir)sandbox/;CopyAgentSandbox=false;PublishSingleFile=false;RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=$(SelfContained)" />
+  </Target>
+</Project>

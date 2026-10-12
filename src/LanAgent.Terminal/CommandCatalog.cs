@@ -1,0 +1,56 @@
+namespace LanAgent.Terminal;
+
+internal sealed record CommandHint(string Text, string Description, string Usage = "", bool Advanced = false, bool IsSkill = false)
+{
+    public string MarkerMarkup => !Text.StartsWith('/') ? "" : IsSkill ? "[blue]● 技能[/] " : "[green]● 命令[/] ";
+}
+
+internal static class CommandCatalog
+{
+    private static readonly string[] CommonCommands = ["/help", "/model", "/login", "/new", "/resume", "/tasks", "/permissions", "/undo", "/settings", "/exit"];
+
+    public static IReadOnlyList<CommandHint> Common => Builtins.Where(c => !c.Advanced).ToArray();
+    public static IReadOnlyList<CommandHint> Builtins { get; } = Build();
+
+    private static IReadOnlyList<CommandHint> Build() => All
+        .Select(c => c with { Advanced = !CommonCommands.Contains(c.Text) })
+        .OrderBy(c => c.Advanced ? CommonCommands.Length : Array.IndexOf(CommonCommands, c.Text))
+        .ToArray();
+
+    private static IEnumerable<CommandHint> All => new CommandHint[]
+    {
+        new("/agents", "子代理角色列表与配置", "[list|show 名称|import 路径.json|remove 名称]"),
+        new("/queue", "管理已保存的待处理输入", "[list|steer|queue|edit|delete ID|run]"),
+        new("/timeline", "按用户消息定位历史并执行消息操作", "[list|jump|copy|restore|fork|revert ID]"),
+        new("/fork", "选择完整会话或历史消息之前分支", "[--before 消息ID [标题]]"),
+        new("/steer", "在模型步骤边界更新当前任务", "任务说明"),
+        new("/parent", "返回父会话"), new("/children", "查看或进入当前会话的子代理", "[子会话 ID]"),
+        new("/copy", "复制会话 Markdown", "[last 最后回复|id 会话ID]"),
+        new("/permissions directories", "查看会话记住的外部目录", "[clear 撤销全部]"),
+        new("/context-size", "设置当前模型上下文容量", "[100k|200k|400k|1M|自定义数值]"),
+        new("/background", "启动后台任务并继续聊天", "任务描述"), new("/subagents", "设置子代理默认模型；默认跟随当前模型", "[inherit|配置名 [模型 ID]]"), new("/tasks", "子代理和后台任务：结果、授权与取消"), new("/tasks show", "查看任务结果", "ID"), new("/tasks approve", "处理任务授权", "ID"), new("/tasks answer", "回答任务问题", "ID"), new("/tasks cancel", "取消任务", "ID"),
+        new("/plugins", ".NET 插件管理 / NuGet 商店"), new("/plugins search", "搜索 LanAgent 标签包", "关键词"), new("/plugins install", "安装并启用 NuGet 插件", "包ID 版本"), new("/plugins import", "安装本地插件包", "路径.nupkg"), new("/plugins enable", "启用插件", "包ID"), new("/plugins disable", "禁用插件", "包ID"), new("/plugins remove", "卸载插件", "包ID"), new("/ext", "执行插件命令", "名称 参数"),
+        new("/hooks", "生命周期 Hooks"), new("/hooks enable", "启用 Hook", "名称"), new("/hooks disable", "禁用 Hook", "名称"), new("/login", "账号登录 · 内置提供商与插件", "[提供商]"), new("/login codex", "Continue with ChatGPT · 自动获取模型"), new("/login status", "查看账号与模型连接状态"), new("/logout", "退出账号登录", "[提供商]"),
+        new("/help", "快速上手与常用操作", "[all 查看全部命令]"), new("/skills", "技能管理面板"),
+        new("/skills list", "列出指令技能"), new("/skills add", "创建技能"), new("/skills import", "导入 SKILL.md 和支持文件", "路径 [project|user]"),
+        new("/skills show", "查看技能正文", "名称"), new("/skills enable", "启用技能", "名称"), new("/skills disable", "禁用技能", "名称"), new("/skills remove", "卸载技能入口", "名称"), new("/skills export", "导出技能包", "名称 目录"),
+        new("/mcp", "MCP 连接管理面板"), new("/mcp list", "连接状态与诊断"), new("/mcp add", "添加 stdio / HTTP 服务"), new("/mcp edit", "编辑服务连接", "名称"),
+        new("/mcp connect", "连接或重新连接", "名称"), new("/mcp disconnect", "断开连接", "名称"), new("/mcp tools", "查看服务工具和 JSON Schema", "名称"),
+        new("/mcp enable", "启用服务", "名称"), new("/mcp disable", "禁用并断开", "名称"), new("/mcp remove", "移除服务", "名称"),
+        new("/mcp import", "导入 mcpServers 配置", "路径"), new("/mcp export", "导出脱敏配置", "路径"),
+        new("/mcp prompts", "列出服务提示模板", "名称"), new("/mcp prompt", "加载提示模板并发起任务", "名称 模板 [参数JSON]"), new("/mcp resources", "列出资源", "名称"), new("/mcp read", "读取文本资源", "名称 URI"),
+        new("/providers", "提供商配置管理"), new("/providers add", "添加预设或自定义提供商"), new("/providers edit", "编辑地址、Key、协议和参数", "名称"),
+        new("/providers refresh", "自动获取模型列表", "名称"), new("/providers models", "手动编辑模型列表", "名称"), new("/providers show", "查看脱敏配置", "名称"),
+        new("/providers enable", "启用提供商", "名称"), new("/providers disable", "禁用提供商", "名称"), new("/providers remove", "删除提供商", "名称"),
+        new("/model", "切换提供商与模型", "[配置名] [模型 ID]"), new("/models", "查看可用模型"), new("/effort", "设置思考强度或预算", "[级别] [预算]"),
+        new("/new", "开始新任务，旧会话自动保留"), new("/sessions", "会话列表", "[搜索词]"), new("/resume", "选择或恢复历史会话", "[ID]"),
+        new("/rename", "重命名当前会话", "标题"), new("/branch", "复制当前会话并切换", "[标题]"), new("/history", "查看当前对话"), new("/export", "导出 Markdown 或 JSON", "[路径.md|路径.json] [--no-thinking] [--no-tools]"),
+        new("/context", "上下文占用与消息统计"), new("/stats", "按模型查看累计输入、输出和总 Token 用量"), new("/compact", "模型总结并归档旧上下文", "[重点]"),
+        new("/checkpoints", "查看任务检查点"), new("/diff", "查看文件工具修改预览", "[检查点 ID]"), new("/undo", "撤销上一轮对话和文件修改"), new("/redo", "重做已撤销任务"),
+        new("/status", "模型、工作区、权限与连接状态"), new("/permissions", "切换权限模式", "[ask|full|plan]"), new("/permissions full", "完全访问 · 不逐次审核"), new("/plan", "切换只读规划模式"),
+        new("/tools", "查看当前 C# 工具契约"), new("/doctor", "检查 Python / PowerShell / Hyperlight"),
+        new("/memory", "查看或编辑项目指令", "[show|set 内容]"), new("/init", "创建项目指令模板"),
+        new("/settings", "显示与主题设置", "[verbose on|off]"), new("/exit", "退出并保留会话"),
+        new("/themes", "切换并保存界面主题", "[night|warm|light]"), new("/spinner", "切换并保存加载指示，默认 Mindblown", "[list|样式名称]"), new("/thinking", "显示/隐藏思考内容"), new("/details", "显示/隐藏工具详情"), new("/mcp auth", "给 MCP 绑定认证入口", "服务 ID|none"), new("/providers auth", "给模型绑定认证入口", "配置 ID|none")
+    };
+}

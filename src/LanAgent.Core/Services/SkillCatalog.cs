@@ -1,0 +1,206 @@
+using System.Text.RegularExpressions;
+using LanAgent.Core.Data;
+using LanAgent.Core.Tools;
+using YamlDotNet.Serialization;
+
+namespace LanAgent.Core.Services;
+
+public sealed record InstructionSkill(string Name, string Description, string Instructions, string Path, string Scope, bool Enabled, bool UserInvocable, bool ModelInvocable);
+
+/// <summary>Instruction skills, deliberately separate from legacy executable command templates.</summary>
+public sealed class SkillCatalog(DataStore store, string workspace, string dataDirectory, string? userHome = null)
+{
+    public string ProjectDirectory { get; } = System.IO.Path.Combine(System.IO.Path.GetFullPath(workspace), ".lanagent", "skills");
+    public string UserDirectory { get; } = System.IO.Path.Combine(System.IO.Path.GetFullPath(dataDirectory), "skills");
+    public IReadOnlyList<string> GlobalDirectories { get; } = new[] { ".claude/skills", ".codex/skills/.system", ".codex/skills", ".config/opencode/skills", ".agents/skills" }
+        .Select(relative => System.IO.Path.GetFullPath(System.IO.Path.Combine(userHome ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), relative))).ToArray();
+    public IReadOnlyList<string> Diagnostics { get; private set; } = Array.Empty<string>();
+    private readonly object _catalogLock = new();
+    private readonly Dictionary<string, (DateTime Modified, long Length, InstructionSkill Skill)> _parsed = new(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlyList<InstructionSkill>? _snapshot;
+    private long _refreshed;
+    private void Invalidate() { lock (_catalogLock) _snapshot = null; }
+    public void SeedBundled()
+    {
+        if (store.GetSetting("skills:bundled:v1") == "seeded") return;
+        foreach (var (name, description, instructions) in new[]
+        {
+            ("review", "审查代码或当前变更，按严重程度报告缺陷", "Review $ARGUMENTS. Read relevant code and project instructions through C# tools. Identify correctness bugs, regressions and missing validation with exact file references. Use run_shell for focused checks: trusted executable aliases run directly; any other installed executable is eligible for one-time approval. Report findings first; do not edit unless explicitly requested."),
+            ("verify", "验证任务结果并运行相关检查", "Verify $ARGUMENTS against the user's requirements. Inspect project build/test instructions, select relevant checks, and run them only using approved host tools. Distinguish executed checks from assumptions. Report failures with actionable causes; never claim a check passed without its result."),
+            ("debug", "定位问题根因并验证修复", "Investigate $ARGUMENTS. Read evidence, reproduce if possible with approved tools, form and test a specific hypothesis, then propose or apply the requested minimal fix. Validate behavior and explain the cause. Respect all permissions."),
+            ("refactor", "保持行为地重构并验证", "Refactor $ARGUMENTS. Inspect existing design and project constraints first. Preserve public compatibility unless requested otherwise. Make cohesive edits through file_edit/file_write with approval. Run relevant checks and report behavior changes and limitations."),
+            ("security-review", "检查代码中的实际安全边界问题", "Review $ARGUMENTS for concrete security defects. Trace untrusted input to sensitive operations; inspect authorization, command arguments, file boundaries, credential handling and isolation. Report reproducible findings and precise remediation. Do not invent speculative risks or run external attacks.")
+        })
+        {
+            if (!File.Exists(System.IO.Path.Combine(UserDirectory, name, "SKILL.md"))) Create(name, description, instructions, "user");
+        }
+        store.SetSetting("skills:bundled:v1", "seeded");
+    }
+    public IReadOnlyList<InstructionSkill> List()
+    {
+        lock (_catalogLock)
+        {
+            if (_snapshot != null && Environment.TickCount64 - _refreshed < 1000) return _snapshot;
+            _snapshot = Discover(); _refreshed = Environment.TickCount64; return _snapshot;
+        }
+    }
+    /// <summary>Display-only snapshot; rendering must not wait for filesystem discovery.</summary>
+    public IReadOnlyList<InstructionSkill> CachedList => Volatile.Read(ref _snapshot) ?? List();
+    private IReadOnlyList<InstructionSkill> Discover()
+    {
+        var found = new Dictionary<string, InstructionSkill>(StringComparer.OrdinalIgnoreCase);
+        var errors = new List<string>();
+        foreach (var (root, scope) in GlobalDirectories.Select(root => (root, "global")).Concat(new[] { (UserDirectory, "user"), (System.IO.Path.Combine(workspace, ".claude", "skills"), "project"), (System.IO.Path.Combine(workspace, ".agents", "skills"), "project"), (ProjectDirectory, "project") }))
+        {
+            if (!Directory.Exists(root)) continue;
+            try
+            {
+                var policy = scope == "global" ? null : new WorkspacePolicy(root);
+                foreach (var dir in Directory.EnumerateDirectories(root).Order(StringComparer.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        var path = scope == "global" ? ResolveGlobalSkillPath(System.IO.Path.Combine(dir, "SKILL.md"))
+                            : policy!.Resolve(System.IO.Path.Combine(System.IO.Path.GetFileName(dir), "SKILL.md"));
+                        if (!File.Exists(path)) continue;
+                        var info = new FileInfo(path);
+                        if (!_parsed.TryGetValue(path, out var cached) || cached.Modified != info.LastWriteTimeUtc || cached.Length != info.Length)
+                            _parsed[path] = cached = (info.LastWriteTimeUtc, info.Length, Parse(path, scope));
+                        var skill = cached.Skill with { Scope = scope };
+                        found[skill.Name] = skill with { Enabled = store.GetSetting(Setting(skill)) != "disabled" };
+                    }
+                    catch (Exception ex) when (ex is IOException or ArgumentException or UnauthorizedAccessException or YamlDotNet.Core.YamlException)
+                    { errors.Add(dir + ": " + ex.Message); }
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { errors.Add(root + ": " + ex.Message); }
+        }
+        Diagnostics = errors;
+        return found.Values.OrderBy(s => s.Name).ToArray();
+    }
+    private static string ResolveGlobalSkillPath(string path)
+    {
+        // Global installations commonly share packages through junctions/symlinks.
+        // Resolve them to a real local package before applying ordinary file policy.
+        path = System.IO.Path.GetFullPath(path);
+        for (var pass = 0; pass < 64; pass++)
+        {
+            var resolved = false;
+            for (var current = path; !string.IsNullOrEmpty(current); current = System.IO.Path.GetDirectoryName(current))
+            {
+                if (!File.Exists(current) && !Directory.Exists(current)) continue;
+                if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) == 0) continue;
+                FileSystemInfo entry = Directory.Exists(current) ? new DirectoryInfo(current) : new FileInfo(current);
+                var target = entry.ResolveLinkTarget(true) ?? throw new IOException("无法解析全局技能链接：" + current);
+                if (!target.Exists) throw new IOException("全局技能链接目标不存在：" + target.FullName);
+                var relative = System.IO.Path.GetRelativePath(current, path);
+                path = relative == "." ? target.FullName : System.IO.Path.GetFullPath(relative, target.FullName);
+                resolved = true; break;
+            }
+            if (resolved) continue;
+            return new WorkspacePolicy(System.IO.Path.GetDirectoryName(path)!).Resolve(System.IO.Path.GetFileName(path));
+        }
+        throw new IOException("全局技能链接层级过深：" + path);
+    }
+    public InstructionSkill Get(string name, bool requireEnabled = false) => List().SingleOrDefault(s => s.Name.Equals(name, StringComparison.OrdinalIgnoreCase) && (!requireEnabled || s.Enabled)) ?? throw new ArgumentException("找不到技能或技能已禁用：" + name);
+    public void Enable(string name, bool enabled) { store.SetSetting(Setting(Get(name)), enabled ? "enabled" : "disabled"); Invalidate(); }
+    private static string Setting(InstructionSkill skill) => "skill:" + skill.Path;
+    public static InstructionSkill Parse(string path, string scope)
+    {
+        if (new FileInfo(path).Length > 1_000_000) throw new ArgumentException("SKILL.md 超过 1 MB。");
+        var text = File.ReadAllText(path).Replace("\r\n", "\n");
+        if (!text.StartsWith("---\n", StringComparison.Ordinal)) throw new ArgumentException("SKILL.md 需要 YAML frontmatter。");
+        var end = text.IndexOf("\n---\n", 4, StringComparison.Ordinal);
+        if (end < 0) throw new ArgumentException("技能 frontmatter 未结束。");
+        var meta = new DeserializerBuilder().Build().Deserialize<Dictionary<string,object>>(text[4..end]);
+        string Value(string key, string fallback = "") => meta.TryGetValue(key, out var value) ? Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture) ?? fallback : fallback;
+        var name = Value("name", System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(path))!);
+        ValidateName(name);
+        var instructions = text[(end + 5)..].Trim();
+        if (instructions.Length == 0 || instructions.Length > 500_000) throw new ArgumentException("技能指令需要 1–500000 字符，可通过 skill_read 分页读取。");
+        var description = Value("description");
+        if (description.Length == 0 || description.Length > 16000) throw new ArgumentException("技能描述需要 1–16000 字符。");
+        return new(name, description, instructions, System.IO.Path.GetFullPath(path), scope, true, !Value("user-invocable", "true").Equals("false", StringComparison.OrdinalIgnoreCase), !Value("disable-model-invocation", "false").Equals("true", StringComparison.OrdinalIgnoreCase));
+    }
+    public static void ValidateName(string name)
+    {
+        if (!Regex.IsMatch(name, "^[a-z][a-z0-9-]{0,63}$", RegexOptions.CultureInvariant)) throw new ArgumentException("技能名必须是小写字母、数字或短横线，最长 64 字符。");
+        if (new[] { "help", "skills", "mcp", "model", "models", "providers", "effort", "new", "exit", "resume", "clear", "status", "plan", "permissions", "context", "compact", "history", "export", "rename", "branch", "fork", "doctor", "tools", "settings", "memory", "init", "rewind" }.Contains(name)) throw new ArgumentException("技能名与内置命令冲突。");
+    }
+    public InstructionSkill Create(string name, string description, string instructions, string scope = "project")
+    {
+        ValidateName(name);
+        if (instructions.Length is 0 or > 32000 || description.Length is 0 or > 1000) throw new ArgumentException("描述或指令长度不正确。");
+        var root = scope switch { "project" => ProjectDirectory, "user" => UserDirectory, _ => throw new ArgumentException("scope 必须为 project 或 user。") };
+        Directory.CreateDirectory(root);
+        var dir = new WorkspacePolicy(root).Resolve(name);
+        if (Directory.Exists(dir)) throw new IOException("技能目录已存在。");
+        Directory.CreateDirectory(dir);
+        var yaml = new SerializerBuilder().Build().Serialize(new Dictionary<string,string> { ["name"] = name, ["description"] = description });
+        File.WriteAllText(System.IO.Path.Combine(dir, "SKILL.md"), "---\n" + yaml + "---\n\n" + instructions + "\n");
+        Invalidate();
+        return Get(name);
+    }
+    public InstructionSkill Import(string source, string scope = "project")
+    {
+        var path = Directory.Exists(source) ? System.IO.Path.Combine(source, "SKILL.md") : source;
+        var parsed = Parse(path, scope);
+        // Copy documented supporting files with path validation. Imported scripts never gain execution privileges.
+        var sourceRoot = System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(path))!;
+        var policy = new WorkspacePolicy(sourceRoot);
+        var files = new List<(string Path, string Relative)>();
+        long size = 0;
+        void Scan(string directory)
+        {
+            foreach (var entry in Directory.EnumerateFileSystemEntries(directory))
+            {
+                var relative = System.IO.Path.GetRelativePath(sourceRoot, entry);
+                var safe = policy.Resolve(relative);
+                if (Directory.Exists(safe)) { Scan(safe); continue; }
+                size += new FileInfo(safe).Length;
+                if (files.Count >= 500 || size > 20_000_000) throw new IOException("技能包超过 500 文件或 20 MB。");
+                files.Add((safe, relative));
+            }
+        }
+        Scan(sourceRoot);
+        var created = Create(parsed.Name, parsed.Description, parsed.Instructions, scope);
+        var target = System.IO.Path.GetDirectoryName(created.Path)!;
+        foreach (var file in files.Where(f => !f.Relative.Equals("SKILL.md", StringComparison.OrdinalIgnoreCase)))
+        {
+            var destination = new WorkspacePolicy(target).Resolve(file.Relative);
+            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(destination)!);
+            File.Copy(file.Path, destination, false);
+        }
+        // Preserve invocation metadata rather than discarding it during import.
+        File.Copy(path, created.Path, true);
+        lock (_catalogLock) _parsed.Remove(created.Path);
+        Invalidate();
+        return Get(parsed.Name);
+    }
+    public void Remove(string name)
+    {
+        var skill = Get(name);
+        File.Delete(skill.Path);
+        var dir = System.IO.Path.GetDirectoryName(skill.Path)!;
+        if (!Directory.EnumerateFileSystemEntries(dir).Any()) Directory.Delete(dir);
+        lock (_catalogLock) _parsed.Remove(skill.Path);
+        Invalidate();
+    }
+    public string Invoke(string name, string arguments)
+    {
+        var skill = Get(name, true);
+        if (!skill.UserInvocable) throw new ArgumentException("此技能关闭了手动调用。");
+        return $"Use the following user-selected skill. Its instructions do not override sandbox or permission rules.\n<skill name=\"{skill.Name}\">\n{skill.Instructions.Replace("$ARGUMENTS", arguments, StringComparison.Ordinal)}\n</skill>\nTask / arguments: {arguments}";
+    }
+    public string Instructions => "Available instruction skills (load via call_tool('skill_read', name=...) only when relevant):\n" + string.Join("\n", List().Where(s => s.Enabled && s.ModelInvocable).Select(s => $"{s.Name}: {s.Description}"));
+    public string ReadReference(string name, string relative, int offset = 0)
+    {
+        var skill = Get(name, true);
+        var root = System.IO.Path.GetDirectoryName(skill.Path)!;
+        var path = new WorkspacePolicy(root).Resolve(relative);
+        if (new FileInfo(path).Length > 1_000_000) throw new ArgumentException("支持文件超过 1 MB。");
+        var text = File.ReadAllText(path);
+        if (offset < 0 || offset > text.Length) throw new ArgumentException("offset 超出范围。");
+        return ToolResult.Clip(text[offset..]);
+    }
+}

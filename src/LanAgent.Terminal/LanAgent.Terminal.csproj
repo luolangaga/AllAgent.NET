@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <RollForward>Major</RollForward>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>lanagent</AssemblyName>
+    <CopyAgentSandbox>true</CopyAgentSandbox>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>lanagent</ToolCommandName>
+    <PackageId>LanAgent.Terminal</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>LanAgent</Authors>
+    <Description>LanAgent terminal AI agent with Hyperlight microVM CodeAct execution for Windows x64.</Description>
+    <PackageTags>LanAgent;AI;Agent;CLI;CodeAct</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageOutputPath>../../artifacts/packages</PackageOutputPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="../../docs/nuget-tool.zh-CN.md" Pack="true" PackagePath="/README.md" />
+    <ProjectReference Include="../LanAgent.Core/LanAgent.Core.csproj" />
+    <ProjectReference Include="../LanAgent.Sandbox/LanAgent.Sandbox.csproj" ReferenceOutputAssembly="false" />
+    <PackageReference Include="Spectre.Console" Version="0.57.2" />
+  </ItemGroup>
+  <!-- Tool packing collects ResolvedFileToPublish, not files copied after Publish. -->
+  <Target Name="IncludeSandboxInToolPackage" AfterTargets="ComputeFilesToPublish" Condition="'$(PackAsTool)' == 'true'">
+    <PropertyGroup>
+      <ToolSandboxPublishDirectory>$(MSBuildProjectDirectory)/obj/$(Configuration)/$(TargetFramework)/tool-sandbox/</ToolSandboxPublishDirectory>
+    </PropertyGroup>
+    <MSBuild Projects="../LanAgent.Sandbox/LanAgent.Sandbox.csproj" Targets="Publish"
+             Properties="Configuration=$(Configuration);PublishDir=$(ToolSandboxPublishDirectory);CopyAgentSandbox=false;PublishSingleFile=false;SelfContained=false;UseAppHost=true;RuntimeIdentifier=$(RuntimeIdentifier)" />
+    <ItemGroup>
+      <ToolSandboxFiles Include="$(ToolSandboxPublishDirectory)**/*" />
+      <ResolvedFileToPublish Include="@(ToolSandboxFiles)">
+        <RelativePath>sandbox/%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+</Project>

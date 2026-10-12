@@ -1,0 +1,19 @@
+<Solution>
+  <Folder Name="/plugins/">
+    <Project Path="plugins/LanAgent.WorkBuddy/LanAgent.WorkBuddy.csproj" />
+  </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/LanAgent.SamplePlugin/LanAgent.SamplePlugin.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/LanAgent.Core/LanAgent.Core.csproj" />
+    <Project Path="src/LanAgent.Desktop/LanAgent.Desktop.csproj" />
+    <Project Path="src/LanAgent.Terminal/LanAgent.Terminal.csproj" />
+    <Project Path="src/LanAgent.Sandbox/LanAgent.Sandbox.csproj" />
+    <Project Path="src/LanAgent.ToolGenerator/LanAgent.ToolGenerator.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/LanAgent.ProcessProbe/LanAgent.ProcessProbe.csproj" />
+    <Project Path="tests/LanAgent.Tests/LanAgent.Tests.csproj" />
+  </Folder>
+</Solution>

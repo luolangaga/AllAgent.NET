@@ -1,0 +1,4 @@
+{
+  "functions": ["call_tool", "print", "len", "range", "str", "int", "float", "bool", "list", "dict", "tuple", "set", "sum", "min", "max", "sorted", "enumerate", "zip", "abs", "round", "all", "any", "isinstance"],
+  "methods": ["get", "keys", "values", "items", "append", "extend", "pop", "sort", "reverse", "count", "index", "split", "splitlines", "strip", "lstrip", "rstrip", "lower", "upper", "replace", "startswith", "endswith", "join"]
+}
