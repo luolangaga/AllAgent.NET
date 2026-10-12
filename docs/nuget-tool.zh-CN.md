@@ -8,7 +8,7 @@ LanAgent 的终端 AI Agent，安装后的命令为 `lanagent`。
 
 ## 安装与使用
 
-发布到 NuGet.org 后：
+安装已发布到 NuGet.org 的版本：
 
 ```powershell
 dotnet tool install --global LanAgent.Terminal
@@ -25,16 +25,22 @@ dotnet tool update --global LanAgent.Terminal
 dotnet tool uninstall --global LanAgent.Terminal
 ```
 
-## 本地打包与安装
+## 从源码打包并通过本地 NuGet 源安装
 
 在仓库根目录运行（打包需 .NET SDK）：
 
 ```powershell
-dotnet pack src/LanAgent.Terminal -c Release
-dotnet tool install --global LanAgent.Terminal --add-source ./artifacts/packages --version 1.0.0
+dotnet pack src/LanAgent.Terminal -c Release -p:Version=1.0.1
+dotnet tool install --global LanAgent.Terminal --add-source ./artifacts/packages --version 1.0.1
 ```
 
-版本默认为 1.0.0，可通过 `-p:Version=1.0.1` 覆盖。sandbox 的文件作为工具运行文件放入包内的 `sandbox/` 子目录，不依赖另外发布 LanAgent.Core 或 LanAgent.Sandbox 包。
+更新到刚打包的本地版本：
+
+```powershell
+dotnet tool update --global LanAgent.Terminal --add-source ./artifacts/packages --version 1.0.1
+```
+
+版本默认在 `src/LanAgent.Terminal/LanAgent.Terminal.csproj` 中维护，也可以通过 `-p:Version=1.0.2` 覆盖。sandbox 的文件作为工具运行文件放入包内的 `sandbox/` 子目录，不依赖另外发布 LanAgent.Core 或 LanAgent.Sandbox 包。
 
 ## 发布
 

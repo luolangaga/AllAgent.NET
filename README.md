@@ -56,23 +56,55 @@ Agent 可以在指定工作区内调用已安装的 `git`、`dotnet`、`rg`、No
 | 模型 | 可用的模型服务配置，或受支持的账号登录 |
 | Node.js / npm | 仅桌面 Web 前端开发或构建需要；终端内置搜索无需安装 |
 
-### 2. 从源码启动
+### 2. 通过 NuGet 安装
 
-在 PowerShell 中执行：
+从 NuGet.org 安装已发布版本：
+
+```powershell
+dotnet tool install --global LanAgent.Terminal
+lanagent --help
+lanagent doctor
+```
+
+若当前版本尚未发布到 NuGet.org，可从源码打包并通过本地 NuGet 源安装：
 
 ```powershell
 git clone https://github.com/luolangaga/LanAgent.git
 cd LanAgent
-
-# 检查环境；--install 会在确认后尝试安装缺失依赖
-.\agent.ps1 doctor
-.\agent.ps1 doctor --install
-
-# 在你要处理的项目中开始聊天
-.\agent.ps1 chat --workspace C:\Projects\MyProject
+dotnet pack src/LanAgent.Terminal -c Release -p:Version=1.0.1
+dotnet tool install --global LanAgent.Terminal --add-source ./artifacts/packages --version 1.0.1
 ```
 
-模型和扩展管理不需要启动沙箱；首次任务才检查执行环境。
+如之前已安装同一版本，更新本地包：
+
+```powershell
+dotnet tool update --global LanAgent.Terminal --add-source ./artifacts/packages --version 1.0.1
+```
+
+新安装者执行 `dotnet tool install`；从旧版本升级时执行 `dotnet tool update`。
+
+首次运行前检查 Windows 环境：
+
+```powershell
+lanagent doctor
+# 可选：检查并在确认后通过 winget 安装依赖
+lanagent doctor --install
+```
+
+NuGet Tool 会安装 `lanagent` 命令。完成模型配置后即可使用：
+
+```powershell
+lanagent chat --workspace C:\Projects\MyProject
+```
+
+进入聊天后按 **F2** 配置模型或选择提供商，也可使用 `/login` 登录。安装后升级或卸载：
+
+```powershell
+dotnet tool update --global LanAgent.Terminal
+dotnet tool uninstall --global LanAgent.Terminal
+```
+
+如要从源码启动开发版本，可继续使用 `./agent.ps1`；模型和扩展管理无需启动沙箱，首次执行任务时才检查执行环境。
 
 ### 3. 选择模型，描述任务
 
