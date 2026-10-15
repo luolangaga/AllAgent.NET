@@ -32,7 +32,7 @@
     <AvaloniaResource Include="Assets\web\**\*" Condition="Exists('Assets\web\index.html')" />
   </ItemGroup>
 
-  <!-- Build Vue frontend before dotnet build (skip in CI with -p:SkipWebBuild=true) -->
+  <!-- Build React frontend before dotnet build (skip in CI with -p:SkipWebBuild=true) -->
   <Target Name="BuildWebFrontend" BeforeTargets="BeforeBuild"
           Condition="'$(SkipWebBuild)' != 'true' AND Exists('$(MSBuildThisFileDirectory)..\LanAgent.Web\package.json')">
     <Exec Command="npm run build"

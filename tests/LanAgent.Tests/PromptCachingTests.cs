@@ -61,20 +61,30 @@ public sealed class PromptCachingTests
         Assert.Equal("Research this", body["contents"]![0]!["parts"]![0]!["text"]!.GetValue<string>());
     }
 
-    [Fact]
-    public async Task CodeActKeepsReusableGuidanceBeforeRuntimeContextAndPermissionChanges()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CodeActKeepsReusableGuidanceBeforeRuntimeContextAndPermissionChanges(bool includeCapabilities)
     {
-        var registry = new ToolRegistry(); registry.Register(new FixtureTools());
+        var registry = new ToolRegistry(); registry.Register(new FixtureTools(includeCapabilities));
         await using var ask = new CodeActProvider(registry, new PythonCodeValidator("unused"), new FixtureSandbox("runtime-A"));
         await using var full = new CodeActProvider(registry, new PythonCodeValidator("unused"), new FixtureSandbox("runtime-B"), fullAccess: true);
         await ask.PrepareAsync(); await full.PrepareAsync();
-        var marker = "\n\nSandbox runtime guidance:\n";
+        var marker = "\n\n## Sandbox runtime\n";
         var askPrefix = ask.Instructions[..ask.Instructions.IndexOf(marker, StringComparison.Ordinal)];
         var fullPrefix = full.Instructions[..full.Instructions.IndexOf(marker, StringComparison.Ordinal)];
         Assert.Equal(askPrefix, fullPrefix);
         Assert.StartsWith("You are LanAgent", askPrefix);
-        Assert.Contains("web_search", askPrefix);
-        Assert.Contains("start_agent", askPrefix);
+        if (includeCapabilities)
+        {
+            Assert.Contains("web_search", askPrefix); Assert.Contains("start_agent", askPrefix);
+            Assert.Contains("## Research", askPrefix); Assert.Contains("## Delegation", askPrefix);
+        }
+        else
+        {
+            Assert.DoesNotContain("web_search", askPrefix); Assert.DoesNotContain("start_agent", askPrefix);
+            Assert.DoesNotContain("## Research", askPrefix); Assert.DoesNotContain("## Delegation", askPrefix);
+        }
         Assert.True(askPrefix.IndexOf("\"Z\"", StringComparison.Ordinal) < askPrefix.IndexOf("\"a\"", StringComparison.Ordinal));
         Assert.Contains("runtime-A", ask.Instructions); Assert.Contains("FULL ACCESS", full.Instructions);
     }
@@ -85,9 +95,9 @@ public sealed class PromptCachingTests
         public Task<ToolResult> ExecuteAsync(string code, IReadOnlyList<AgentToolDescriptor> tools, HostToolCallback callback, CancellationToken ct) => Task.FromResult(ToolResult.Success("unused"));
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
-    private sealed class FixtureTools : IAgentToolSet
+    private sealed class FixtureTools(bool includeCapabilities) : IAgentToolSet
     {
-        public IReadOnlyList<AgentToolDescriptor> Definitions => [new("a", "lower", JsonSerializer.SerializeToElement(new { type = "object" }), ToolRisk.Read), new("Z", "upper", JsonSerializer.SerializeToElement(new { type = "object" }), ToolRisk.Read)];
+        public IReadOnlyList<AgentToolDescriptor> Definitions => new[] { "a", "Z" }.Concat(includeCapabilities ? new[] { "web_search", "start_agent" } : []).Select(name => new AgentToolDescriptor(name, "Fixture " + name, JsonSerializer.SerializeToElement(new { type = "object" }), ToolRisk.Read)).ToArray();
         public ValueTask<ToolResult> InvokeAsync(string name, JsonElement arguments, CancellationToken ct) => ValueTask.FromResult(ToolResult.Success("unused"));
     }
 }

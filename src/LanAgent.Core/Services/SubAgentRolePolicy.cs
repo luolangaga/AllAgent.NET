@@ -14,7 +14,7 @@ public sealed class SubAgentRolePolicy(Func<bool> readOnly, string workspace, Ex
         if (Evaluate(tool, arguments).Effect == "deny") return ToolResult.Failure("Current agent permission rules deny this operation. Do not retry or bypass this restriction.");
         if (!readOnly()) return null;
         if (tool.Risk != ToolRisk.Read) return ToolResult.Failure("Current child role is read-only. Do not retry or bypass this restriction.");
-        if (tool.Name is "file_read" or "list_directory")
+        if (tool.Name is "file_read" or "list_directory" or "file_search" or "file_glob" or "read" or "grep" or "find" or "ls")
         {
             try { _workspace.Value.Resolve(ToolArguments.Get(arguments, "path", ".")); }
             catch (Exception ex) when (ex is UnauthorizedAccessException or ArgumentException or IOException)
@@ -39,17 +39,21 @@ public sealed class SubAgentRolePolicy(Func<bool> readOnly, string workspace, Ex
     private (string? Name, string Effect, string? Version) Evaluate(AgentToolDescriptor tool, JsonElement arguments)
     {
         var current = role?.Invoke();
+        var canonical = tool.Name switch { "file_read" => "read", "file_write" => "write", "file_edit" => "edit", "file_search" => "grep", "file_glob" => "find", "list_directory" => "ls", _ => tool.Name };
+        if (current?.Tools is { } tools && !tools.Contains(canonical, StringComparer.Ordinal) && !tools.Contains(tool.Name, StringComparer.Ordinal))
+            return (current.Name, "deny", JsonSerializer.Serialize(current));
         if (current?.Permissions == null) return (current?.Name, "allow", null);
         var action = tool.Name switch
         {
-            "file_read" => "read", "file_write" => "write", "file_edit" => "edit", "list_directory" => "list",
-            "run_shell" => "bash", "web_fetch" => "webfetch", "web_search" => "websearch",
+            "file_read" => "read", "file_write" => "write", "file_edit" => "edit", "list_directory" or "ls" => "list",
+            "run_shell" or "powershell" => "bash", "web_fetch" => "webfetch", "web_search" => "websearch",
             "skill_read" or "skill_reference" => "skill", "subagent" or "start_agent" => "task", _ => tool.Name
         };
         var resource = tool.Name switch
         {
-            "file_read" or "file_write" or "file_edit" or "list_directory" => _workspace.Value.ResolveForApproval(ToolArguments.Get(arguments, "path", ".")),
+            "file_read" or "file_write" or "file_edit" or "list_directory" or "file_search" or "file_glob" or "read" or "write" or "edit" or "grep" or "find" or "ls" => _workspace.Value.ResolveForApproval(ToolArguments.Get(arguments, "path", ".")),
             "run_shell" => ToolArguments.Get<string>(arguments, "exe") + " " + string.Join(" ", ToolArguments.Get<string[]>(arguments, "args", [])),
+            "bash" or "powershell" => ToolArguments.Get<string>(arguments, "command", ""),
             "web_fetch" => ToolArguments.Get<string>(arguments, "url", "*"),
             "web_search" => ToolArguments.Get<string>(arguments, "query", "*"),
             "skill_read" or "skill_reference" => ToolArguments.Get<string>(arguments, "name", "*"),

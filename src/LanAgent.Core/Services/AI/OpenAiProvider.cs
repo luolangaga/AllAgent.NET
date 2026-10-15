@@ -36,7 +36,7 @@ public class OpenAiProvider : IAiProvider
         var baseUrl = config.BaseUrl.TrimEnd('/');
         var body = BuildRawRequestBody(config, request, hasTools);
 
-        using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
+        using var http = ModelHttpClient.Create(TimeSpan.FromMinutes(5));
         http.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", $"Bearer {config.ApiKey}");
 
         if (!string.IsNullOrEmpty(config.ExtraHeadersJson))
@@ -239,7 +239,7 @@ public class OpenAiProvider : IAiProvider
         };
 
         body["temperature"] = config.Temperature;
-        body["max_tokens"] = config.MaxTokens;
+        body["max_tokens"] = ModelCatalog.OutputLimit(config);
         ReasoningSettings.Apply(body, config);
 
         if (hasTools)

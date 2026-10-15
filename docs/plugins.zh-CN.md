@@ -46,7 +46,7 @@ dotnet pack samples/LanAgent.SamplePlugin -c Release -o artifacts/packages
 
 安装后输入 `/ext hello 小明`；`/hooks` 会显示 `example.audit`。`/tools` 中可查看 `example_clock`、`example_note`。后者写入插件自己的数据目录，依然要求逐次授权。插件模型 ID 为 `example-local`，协议 ID 为 `example`，明确标记为离线演示模型，不会伪装成远程 LLM。
 
-SDK 包 `artifacts/packages/LanAgent.Core.1.0.0.nupkg` 包含公共契约和 Roslyn 工具源生成器。本次只在本地生成包，未向公共 NuGet 发布。外部项目可以把 `artifacts/packages` 加为本地 NuGet 源，再引用该 SDK。构建使用支持 Roslyn 4.14 的 SDK；仓库环境使用 .NET 11 SDK，目标运行时仍为 .NET 8。
+SDK 包 `LanAgent.Core` 包含公共契约和 Roslyn 工具源生成器，使用 `dotnet add package LanAgent.Core --version 1.1.0` 从 NuGet 引用。源码和 SDK 使用 `GPL-3.0-only` 许可证，包中附带许可证正文与第三方声明。构建使用支持 Roslyn 4.14 的 SDK，目标运行时为 .NET 8。
 
 ## 包与入口清单
 
@@ -66,7 +66,7 @@ SDK 包 `artifacts/packages/LanAgent.Core.1.0.0.nupkg` 包含公共契约和 Ros
     <Description>插件功能说明</Description>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="LanAgent.Core" Version="1.0.0"
+    <PackageReference Include="LanAgent.Core" Version="1.1.0"
                       ExcludeAssets="runtime" PrivateAssets="all" />
     <None Include="lanagent-plugin.json" Pack="true" PackagePath="lanagent/" />
   </ItemGroup>
@@ -126,7 +126,7 @@ public partial class MyTools
 }
 ```
 
-方法所在类必须为 `partial`，返回 `Task<ToolResult>`，参数支持 `string`、`int`、`bool`、`string[]` 和 `CancellationToken`。源生成器生成 `IAgentToolSet` 实现、参数 Schema 和强类型调用分派；不支持的签名给出 `LA001` 编译诊断。文件写入使用 `Risk = ToolRisk.Write`，进程或外部执行使用 `Risk = ToolRisk.Execute`；默认 Read 只能用于读取和纯逻辑。
+方法所在类必须为 `partial`，返回 `Task<ToolResult>`，参数支持 `string`、`int`、`bool`、这些类型的数组、带 Description 的基础类型属性 record 及其数组，以及 `CancellationToken`。源生成器生成 `IAgentToolSet` 实现、参数 Schema 和强类型调用分派；不支持的签名给出 `LA001` 编译诊断。文件写入使用 `Risk = ToolRisk.Write`，进程或外部执行使用 `Risk = ToolRisk.Execute`；默认 Read 只能用于读取和纯逻辑。
 
 模型依然只收到 `execute_code`。插件工具通过 CodeAct 描述注册，调用格式为：
 
@@ -136,6 +136,50 @@ print(result)
 ```
 
 `call_tool` 使用一个字面量工具名和关键字参数，不能把整个参数对象作为第二个位置参数。Python 禁止 import、eval、直接文件和网络访问。C# 层验证参数、执行前 Hook、授权及审计；返回结构化 JSON，文本字段最多 20000 字符，聚合结果最多 64000 字符。工具作者需裁剪敏感数据、校验路径/主机范围，尊重取消及超时。宿主无法替不可信 DLL 实施系统权限隔离。
+
+## 干预系统提示词、工具与 Skills
+
+除了原有的工具、模型提供商、命令、认证和生命周期 Hook，现在可以通过 `AddTurnExtension` 与 `AddRequestExtension` 参与 Agent 运行。终端已接入，前台、后台与子 Agent 均继承这些扩展；自定义类库宿主需把 `plugins.Extensions` 和对应 `SkillCatalog` 分别传给 `AgentOptions.Extensions`、`AgentOptions.Skills`。桌面宿主目前未加载 `PluginHost`，不会自动获得终端已安装插件的这些能力。
+
+```csharp
+using LanAgent.Core.Extensions;
+using LanAgent.Core.Services;
+using LanAgent.Core.Services.AI;
+
+context.AddTurnExtension(new AgentTurnExtension("myplugin.configure", (turn, ct) =>
+{
+    ct.ThrowIfCancellationRequested();
+    // 追加或直接替换会话系统提示词，不修改持久化会话。
+    turn.SystemPrompt += "\n回答时先给出结论，再列出证据。";
+    // 对内置、MCP 和插件工具均可按注册名称筛选。
+    turn.Tools.Remove("run_shell");
+    // 本轮隐藏技能，或注入/替换同名技能。
+    turn.Skills.Remove("debug");
+    turn.Skills["my-review"] = new InstructionSkill(
+        "my-review", "团队审查规范", "优先检查数据丢失和并发错误，引用具体文件。",
+        "", "plugin", true, false, true);
+    return ValueTask.CompletedTask;
+}, Order: 10));
+
+context.AddRequestExtension(new AgentRequestExtension("myplugin.context", (request, ct) =>
+{
+    ct.ThrowIfCancellationRequested();
+    // 主 Agent 循环每次调用模型前执行，可检查、追加、替换或删除发送的消息。
+    // 这也允许修改完整的系统上下文，包括项目指令和记忆块。
+    request.Messages.Insert(1, new ChatMessage("system", "采用团队约定的输出格式。"));
+    return ValueTask.CompletedTask;
+}));
+```
+
+`AgentTurnContext` 包含 `SessionId`、`WorkspaceRoot`、`IsSubAgent`、`UserMessage`、可写的 `SystemPrompt`、工具名集合 `Tools` 和技能字典 `Skills`。它在每个用户回合准备沙箱之前执行一次；工具筛选同时影响目录、沙箱注册和实际调用，猜出被禁用的名称也不能调用。新增工具继续使用 `AddTools`；集合不能启用未注册的工具，角色与宿主授权仍会检查。
+
+Skills 使用本轮快照，`skill_list`、`skill_read`、`skill_reference` 和注入的技能目录保持一致。删除或禁用的技能不能通过技能工具访问，不改写磁盘或全局启用设置。内存技能的 `Path` 可为空，此时没有支持文件；需要支持文件时填写真实 `SKILL.md` 路径。`UserInvocable` 不会自动为临时技能创建终端斜杠命令。通用文件读取工具仍遵循宿主文件权限，技能筛选不负责封锁磁盘文件。
+
+`AgentRequestContext` 包含会话 ID、子 Agent 标志、从 1 开始的模型步骤编号 `Iteration` 和可编辑的 `Messages`。修改只作用于当前请求，不回写会话历史；同一次网络重试复用处理结果，不会重复追加。该接口作用于主任务的模型循环，不包含自动记忆提炼和上下文压缩的辅助请求。修改发送的工具协议消息时，插件作者需保持工具调用与结果配对。模型工具入口仍固定为 `execute_code`，提示词修改不会改变宿主真正的执行权限。
+
+同类扩展按 `Order` 升序、再按扩展名排序；后执行者可以修改前面的结果。每次回调最多 5 秒，支持同步回调超时、取消与包含扩展名的错误诊断；异常和超时会停止本次操作。每个回调操作独立副本，超时后继续运行的回调不能提交迟到的修改。修改仅在回调内有效，禁止保留上下文并在后台修改。不同会话使用独立作用域，共享注册表/技能目录时不会互相污染。扩展随插件启用和禁用，无需重启；`/hooks` 开关仅控制原有生命周期 Hook。
+
+示例插件现已包含 `example.turn`、`example.request` 及仅在任务中可见的 `example-review` 技能，可直接打包试用。
 
 ## 模型提供商与终端命令
 

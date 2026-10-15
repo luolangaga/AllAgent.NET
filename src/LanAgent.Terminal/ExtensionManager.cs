@@ -90,14 +90,34 @@ internal sealed class ExtensionManager(PluginHost host, BackgroundTasks tasks, s
     {
         if (words.FirstOrDefault() is "status" or "list") { await LoginStatusAsync(ct); return; }
         Idle();
+        await ModelCatalog.RefreshAsync(ct);
         IAuthenticationProvider selected;
+        if (words.FirstOrDefault() is { } providerId && ProviderCatalog.Find(providerId) != null && !Authentication.Any(a => a.Id == providerId))
+        {
+            if (words.Count > 1) throw new ArgumentException("自定义提供商使用 /login custom。");
+            await new ModelManager(store, ui, args, () => host.Providers, FindAuthentication, () => Authentication).AddCustomAsync(providerId);
+            return;
+        }
         if (words.Count > 0) selected = FindAuthentication(words[0]);
         else
         {
             ManagementUi.Interactive(ui);
-            var choices = Authentication.Select(a => a.Name + " · " + a.Id).Prepend("返回").ToArray();
+            const string customChoice = "添加自定义提供商 · API Key / 本地服务";
+            var apiChoices = ProviderCatalog.All.Concat(ModelCatalog.Providers).DistinctBy(p => p.Id).Where(p => p.Id != "custom" && !Authentication.Any(a => a.Id == p.Id)).ToArray();
+            var choices = Authentication.Select(a => a.Name + " · " + a.Id).Concat(apiChoices.Select(p => p.Name + " · API Key · " + p.Id)).Append(customChoice).Prepend("返回").ToArray();
             var choice = ManagementUi.Choose("登录账号 · 选择提供商", choices);
             if (choice == "返回") return;
+            if (choice == customChoice)
+            {
+                await new ModelManager(store, ui, args, () => host.Providers, FindAuthentication, () => Authentication).AddCustomAsync();
+                return;
+            }
+            var apiPreset = apiChoices.FirstOrDefault(p => choice == p.Name + " · API Key · " + p.Id);
+            if (apiPreset != null)
+            {
+                await new ModelManager(store, ui, args, () => host.Providers, FindAuthentication, () => Authentication).AddCustomAsync(apiPreset.Id);
+                return;
+            }
             selected = Authentication.Single(a => choice == a.Name + " · " + a.Id);
             var operation = ManagementUi.Choose(selected.Name, "登录", "查看状态", "退出登录", "返回");
             if (operation == "返回") return;
@@ -144,6 +164,8 @@ internal sealed class ExtensionManager(PluginHost host, BackgroundTasks tasks, s
                 var models = await accountModels.ModelProvider.ListModelsAsync(config, ct);
                 if (models.Count == 0) throw new InvalidOperationException("账号没有返回可用模型。");
                 config.Models = models.Select(m => m.Id).ToList();
+                ModelCatalog.Remember(config, models);
+                config.MaxTokens = 0;
                 config.DefaultModel = ui.Interactive && !ui.Json
                     ? ManagementUi.Choose("选择账号模型", models, m => m.DisplayName + " · " + m.Id).Id : config.Models[0];
                 if (previous != null) { config.Id = previous.Id; store.UpdateApiConfig(config); }
@@ -207,6 +229,8 @@ internal sealed class ExtensionManager(PluginHost host, BackgroundTasks tasks, s
             var models = await ManagementUi.Busy("获取该 ChatGPT 账号可用的模型", token => new AuthenticatedAiProvider(new ResponsesProvider(), authentication).ListModelsAsync(config, token), ct);
             if (models.Count == 0) throw new InvalidOperationException("该账号暂未返回可展示的模型，请检查工作区权限后重试。");
             config.Models = models.Select(m => m.Id).ToList();
+                ModelCatalog.Remember(config, models);
+                config.MaxTokens = 0;
             if (ui.Interactive && !ui.Json) config.DefaultModel = ManagementUi.Choose("选择 ChatGPT 模型", models, m => m.DisplayName + " · " + m.Id).Id;
             else if (!config.Models.Contains(config.DefaultModel)) config.DefaultModel = config.Models[0];
             config.IsEnabled = true;

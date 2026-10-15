@@ -5,14 +5,16 @@ using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
+using System.Security.Cryptography;
+using System.Text;
 using LanAgent.Core.Models;
 using LanAgent.Core.Services.AI;
 
 namespace LanAgent.Core.Data;
 
 /// <summary>
-/// JSON file-based data store. Thread-safe, atomic writes with fsync,
-/// post-write verification, and automatic backup recovery.
+/// JSON manifest plus immutable per-conversation revisions. Thread-safe,
+/// atomic commits with fsync, checksum verification and backup recovery.
 /// </summary>
 public partial class DataStore : IDisposable
 {
@@ -23,22 +25,32 @@ public partial class DataStore : IDisposable
     private readonly ReaderWriterLockSlim _lock = new();
     private StoreData _data;
     private bool _disposed;
+    private readonly bool _readOnly;
+    private byte[]? _savedHash;
+    private (long Length, DateTime Modified)? _savedStamp;
+    internal long PersistenceWrites { get; private set; }
 
     public DataStore() : this(null) { }
 
-    public DataStore(string? dataDirectory)
+    public DataStore(string? dataDirectory) : this(dataDirectory, false) { }
+
+    private DataStore(string? dataDirectory, bool readOnly)
     {
+        _readOnly = readOnly;
         var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
         var dir = dataDirectory ?? Path.Combine(appData, "LanAgent");
-        Directory.CreateDirectory(dir);
+        if (!readOnly) Directory.CreateDirectory(dir);
         _filePath = Path.Combine(dir, "lanagent.json");
         _bakPath = Path.Combine(dir, "lanagent.json.bak");
         _tmpPath = Path.Combine(dir, "lanagent.json.tmp");
         _logPath = Path.Combine(dir, "lanagent.log");
+        _conversationDirectory = Path.Combine(dir, "conversations");
         _data = new StoreData();
 
         Log($"[DataStore] Starting up. File={_filePath}");
+        using var startup = new StorageTransaction(_filePath);
         Load();
+        InitializeConversationFiles();
         Log($"[DataStore] Loaded. Conversations={_data.Conversations.Count}, Skills={_data.Skills.Count}, ApiConfigs={_data.ApiConfigs.Count}, Settings={_data.AppSettings.Count}");
     }
 
@@ -46,6 +58,7 @@ public partial class DataStore : IDisposable
 
     private void Log(string message)
     {
+        if (_readOnly) return;
         try
         {
             var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {message}{Environment.NewLine}";
@@ -79,7 +92,7 @@ public partial class DataStore : IDisposable
     public void AddConversation(Conversation conv)
     {
         _lock.EnterWriteLock();
-        try { _data.Conversations.Add(conv); SaveAndVerify(); }
+        try { using var transaction = BeginTransaction(); _data.Conversations.Add(conv); SaveAndVerify(conv.Id); }
         finally { _lock.ExitWriteLock(); }
     }
 
@@ -88,9 +101,13 @@ public partial class DataStore : IDisposable
         _lock.EnterWriteLock();
         try
         {
+            using var transaction = BeginTransaction();
             var idx = _data.Conversations.FindIndex(c => c.Id == conv.Id);
-            if (idx >= 0) _data.Conversations[idx] = conv;
-            SaveAndVerify();
+            if (idx < 0) throw new InvalidOperationException("会话已被删除，请刷新会话列表。");
+            if (_externallyChanged.Contains(conv.Id) && !ReferenceEquals(_data.Conversations[idx], conv))
+                throw new InvalidOperationException("会话已被另一终端更新，请重新打开，避免覆盖历史。");
+            _data.Conversations[idx] = conv;
+            SaveAndVerify(conv.Id);
         }
         finally { _lock.ExitWriteLock(); }
     }
@@ -98,7 +115,7 @@ public partial class DataStore : IDisposable
     public void DeleteConversation(Guid id)
     {
         _lock.EnterWriteLock();
-        try { _data.Conversations.RemoveAll(c => c.Id == id); _data.PendingInputs.RemoveAll(item => item.ConversationId == id); SaveAndVerify(); }
+        try { using var transaction = BeginTransaction(); _data.Conversations.RemoveAll(c => c.Id == id); _data.PendingInputs.RemoveAll(item => item.ConversationId == id); SaveAndVerify(); }
         finally { _lock.ExitWriteLock(); }
     }
 
@@ -120,9 +137,10 @@ public partial class DataStore : IDisposable
         _lock.EnterWriteLock();
         try
         {
+            using var transaction = BeginTransaction();
             var conv = _data.Conversations.FirstOrDefault(c => c.Id == conversationId);
             conv?.Messages.Add(msg);
-            SaveAndVerify();
+            SaveAndVerify(conversationId);
         }
         finally { _lock.ExitWriteLock(); }
     }
@@ -141,6 +159,7 @@ public partial class DataStore : IDisposable
         _lock.EnterWriteLock();
         try
         {
+            using var transaction = BeginTransaction();
             var index = _data.TokenUsageStats.FindIndex(s => s.ProviderId == providerId && s.ModelId == modelId);
             var current = index >= 0 ? _data.TokenUsageStats[index] : new ModelUsageStats(providerId, modelId);
             var updated = current with
@@ -157,7 +176,7 @@ public partial class DataStore : IDisposable
                 conversation.CachedInputTokens = checked(conversation.CachedInputTokens + Math.Clamp(cached, 0, Math.Max(0, usage?.InputTokens ?? 0)));
                 conversation.CacheUsageRequests = checked(conversation.CacheUsageRequests + 1);
             }
-            SaveAndVerify();
+            SaveAndVerify(conversationId);
         }
         finally { _lock.ExitWriteLock(); }
     }
@@ -184,14 +203,14 @@ public partial class DataStore : IDisposable
     public void AddSkill(Skill skill)
     {
         _lock.EnterWriteLock();
-        try { _data.Skills.Add(skill); SaveAndVerify(); }
+        try { using var transaction = BeginTransaction(); _data.Skills.Add(skill); SaveAndVerify(); }
         finally { _lock.ExitWriteLock(); }
     }
 
     public void AddSkills(IEnumerable<Skill> skills)
     {
         _lock.EnterWriteLock();
-        try { _data.Skills.AddRange(skills); SaveAndVerify(); }
+        try { using var transaction = BeginTransaction(); _data.Skills.AddRange(skills); SaveAndVerify(); }
         finally { _lock.ExitWriteLock(); }
     }
 
@@ -200,6 +219,7 @@ public partial class DataStore : IDisposable
         _lock.EnterWriteLock();
         try
         {
+            using var transaction = BeginTransaction();
             var idx = _data.Skills.FindIndex(s => s.Id == skill.Id);
             if (idx >= 0) _data.Skills[idx] = skill;
             SaveAndVerify();
@@ -210,7 +230,7 @@ public partial class DataStore : IDisposable
     public void DeleteSkill(Guid id)
     {
         _lock.EnterWriteLock();
-        try { _data.Skills.RemoveAll(s => s.Id == id); SaveAndVerify(); }
+        try { using var transaction = BeginTransaction(); _data.Skills.RemoveAll(s => s.Id == id); SaveAndVerify(); }
         finally { _lock.ExitWriteLock(); }
     }
 
@@ -243,7 +263,7 @@ public partial class DataStore : IDisposable
     public void AddApiConfig(ApiConfig config)
     {
         _lock.EnterWriteLock();
-        try { _data.ApiConfigs.Add(config); SaveAndVerify(); }
+        try { using var transaction = BeginTransaction(); _data.ApiConfigs.Add(config); SaveAndVerify(); }
         finally { _lock.ExitWriteLock(); }
     }
 
@@ -252,6 +272,7 @@ public partial class DataStore : IDisposable
         _lock.EnterWriteLock();
         try
         {
+            using var transaction = BeginTransaction();
             var idx = _data.ApiConfigs.FindIndex(a => a.Id == config.Id);
             if (idx >= 0) _data.ApiConfigs[idx] = config;
             SaveAndVerify();
@@ -262,7 +283,7 @@ public partial class DataStore : IDisposable
     public void DeleteApiConfig(Guid id)
     {
         _lock.EnterWriteLock();
-        try { _data.ApiConfigs.RemoveAll(a => a.Id == id); SaveAndVerify(); }
+        try { using var transaction = BeginTransaction(); _data.ApiConfigs.RemoveAll(a => a.Id == id); SaveAndVerify(); }
         finally { _lock.ExitWriteLock(); }
     }
 
@@ -288,7 +309,7 @@ public partial class DataStore : IDisposable
     public void AddMcpServerConfig(McpServerConfig config)
     {
         _lock.EnterWriteLock();
-        try { _data.McpServerConfigs.Add(config); SaveAndVerify(); }
+        try { using var transaction = BeginTransaction(); _data.McpServerConfigs.Add(config); SaveAndVerify(); }
         finally { _lock.ExitWriteLock(); }
     }
 
@@ -297,6 +318,7 @@ public partial class DataStore : IDisposable
         _lock.EnterWriteLock();
         try
         {
+            using var transaction = BeginTransaction();
             var idx = _data.McpServerConfigs.FindIndex(c => c.Id == config.Id);
             if (idx >= 0) _data.McpServerConfigs[idx] = config;
             SaveAndVerify();
@@ -307,7 +329,7 @@ public partial class DataStore : IDisposable
     public void DeleteMcpServerConfig(string id)
     {
         _lock.EnterWriteLock();
-        try { _data.McpServerConfigs.RemoveAll(c => c.Id == id); SaveAndVerify(); }
+        try { using var transaction = BeginTransaction(); _data.McpServerConfigs.RemoveAll(c => c.Id == id); SaveAndVerify(); }
         finally { _lock.ExitWriteLock(); }
     }
 
@@ -323,7 +345,12 @@ public partial class DataStore : IDisposable
     public void SetSetting(string key, string value)
     {
         _lock.EnterWriteLock();
-        try { _data.AppSettings[key] = value; SaveAndVerify(); }
+        try
+        {
+            using var transaction = BeginTransaction();
+            if (_data.AppSettings.TryGetValue(key, out var current) && current == value) return;
+            _data.AppSettings[key] = value; SaveAndVerify();
+        }
         finally { _lock.ExitWriteLock(); }
     }
 
@@ -344,9 +371,14 @@ public partial class DataStore : IDisposable
         Converters = { new JsonStringEnumConverter() },
     };
 
-    private void SaveAndVerify()
+    private void SaveAndVerify(Guid? changedConversation = null)
     {
-        var json = JsonSerializer.Serialize(_data, JsonOptions);
+        if (_readOnly) throw new InvalidOperationException("数据库快照只读。");
+        var snapshot = CreateSplitSnapshot(changedConversation);
+        var json = JsonSerializer.SerializeToUtf8Bytes(snapshot, JsonOptions);
+        var hash = SHA256.HashData(json);
+        if (_savedHash != null && hash.AsSpan().SequenceEqual(_savedHash) && _savedStamp == FileStamp()) return;
+        PreserveLegacyBackup();
 
         // 1. Write to temp file with explicit flush to disk
         WriteToFileAtomic(json, _tmpPath);
@@ -361,41 +393,49 @@ public partial class DataStore : IDisposable
             else
             {
                 File.Move(_tmpPath, _filePath);
-                try { File.WriteAllText(_bakPath, json); } catch { /* ignore */ }
+                try { File.WriteAllBytes(_bakPath, json); } catch { /* ignore */ }
             }
         }
         catch (IOException)
         {
             File.Move(_tmpPath, _filePath, overwrite: true);
-            try { File.WriteAllText(_bakPath, json); } catch { /* ignore */ }
+            try { File.WriteAllBytes(_bakPath, json); } catch { /* ignore */ }
         }
 
-        // 3. Verify: read back and ensure it parses
-        var verified = TryLoadFile(_filePath, out var verifiedData);
-        if (!verified || verifiedData is null)
+        // 3. Verify exact bytes against the valid JSON produced by the serializer.
+        // A streaming hash avoids rebuilding every message/config object on every save.
+        using var verification = new FileStream(_filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, FileOptions.SequentialScan);
+        if (verification.Length != json.Length || !SHA256.HashData(verification).AsSpan().SequenceEqual(hash))
         {
             Log($"[DataStore] CRITICAL: Save verification failed for {_filePath}");
             throw new InvalidOperationException(
                 "Data was written but could not be verified on read-back. " +
                 "The storage medium may be unreliable or the file was corrupted during write.");
         }
-
-        Log($"[DataStore] Saved and verified. FileSize={new FileInfo(_filePath).Length} bytes");
+        _savedHash = hash; _savedStamp = FileStamp(); PersistenceWrites++;
+        Log($"[DataStore] Saved and verified. FileSize={json.Length} bytes");
+        CleanupConversationFiles(snapshot);
     }
 
-    private static void WriteToFileAtomic(string content, string path)
+    private (long Length, DateTime Modified)? FileStamp()
+    {
+        var file = new FileInfo(_filePath);
+        return file.Exists ? (file.Length, file.LastWriteTimeUtc) : null;
+    }
+
+    private static void WriteToFileAtomic(byte[] content, string path)
     {
         using var stream = new FileStream(
             path,
             FileMode.Create,
             FileAccess.Write,
             FileShare.None,
-            bufferSize: 4096,
-            FileOptions.WriteThrough);
+            bufferSize: 65536,
+            FileOptions.SequentialScan);
 
-        using var writer = new StreamWriter(stream);
-        writer.Write(content);
-        writer.Flush();
+        // Buffer the snapshot, then issue one durable flush. WriteThrough used to
+        // force every small encoding buffer through the disk cache separately.
+        stream.Write(content);
         stream.Flush(true);
     }
 
@@ -417,6 +457,7 @@ public partial class DataStore : IDisposable
             {
                 _data = bakData;
                 Log($"[DataStore] Loaded from backup. ApiConfigs={bakData.ApiConfigs.Count}");
+                if (_readOnly) return;
                 // Heal main file from backup
                 try
                 {
@@ -432,7 +473,9 @@ public partial class DataStore : IDisposable
             }
         }
 
-        // Complete fallback: fresh start
+        if (File.Exists(_filePath) || File.Exists(_bakPath))
+            throw new InvalidDataException("数据库及备份均无法完整读取；原文件已保留，请修复或恢复备份。");
+        // Complete fallback: fresh start only when no persisted database exists.
         Log("[DataStore] Both main and backup failed. Starting fresh.");
         _data = new StoreData();
     }
@@ -448,12 +491,13 @@ public partial class DataStore : IDisposable
                 return false;
             }
 
-            var json = File.ReadAllText(path);
+            using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 65536, FileOptions.SequentialScan);
+            using var reader = new StreamReader(input);
+            var json = reader.ReadToEnd();
             if (string.IsNullOrWhiteSpace(json))
             {
                 Log($"[DataStore] File is empty: {path}");
-                data = new StoreData();
-                return true;
+                return false;
             }
 
             var loaded = JsonSerializer.Deserialize<StoreData>(json, JsonOptions);
@@ -462,6 +506,9 @@ public partial class DataStore : IDisposable
                 Log($"[DataStore] Deserialization returned null: {path}");
                 return false;
             }
+            if (loaded.Version > StoreData.CurrentVersion) throw new InvalidDataException("Unsupported database version.");
+            if (loaded.Version < 3) _legacySource = path;
+            if (loaded.Version >= 3) LoadSplitConversations(loaded);
 
             // Version migration hook
             if (loaded.Version < StoreData.CurrentVersion)
@@ -481,6 +528,11 @@ public partial class DataStore : IDisposable
 
             Log($"[DataStore] Deserialization OK: {path}. ApiConfigs={loaded.ApiConfigs.Count}, Skills={loaded.Skills.Count}, Conversations={loaded.Conversations.Count}");
             data = loaded;
+            if (path == _filePath)
+            {
+                _savedHash = SHA256.HashData(Encoding.UTF8.GetBytes(json));
+                _savedStamp = FileStamp();
+            }
             return true;
         }
         catch (Exception ex)
@@ -505,7 +557,7 @@ public partial class DataStore : IDisposable
         _disposed = true;
         _lock.Dispose();
 
-        try { if (File.Exists(_tmpPath)) File.Delete(_tmpPath); }
+        try { using var transaction = new StorageTransaction(_filePath); if (!_readOnly && File.Exists(_tmpPath)) File.Delete(_tmpPath); }
         catch { /* ignore */ }
     }
 
@@ -514,9 +566,10 @@ public partial class DataStore : IDisposable
     // Using internal (not private) to avoid any reflection issues with JsonSerializer
     internal class StoreData
     {
-        public const int CurrentVersion = 2;
+        public const int CurrentVersion = 3;
         public int Version { get; set; } = 1;
         public List<Conversation> Conversations { get; set; } = new();
+        public List<ConversationFile> ConversationFiles { get; set; } = new();
         public List<PendingInput> PendingInputs { get; set; } = new();
         public List<Skill> Skills { get; set; } = new();
         public List<ApiConfig> ApiConfigs { get; set; } = new();

@@ -11,6 +11,7 @@ public class Message
     public string Content { get; set; } = "";
     public string? InputText { get; set; } // Human draft before host file-reference expansion.
     public bool IsInternal { get; set; } // Host continuation instructions are model history, not user-visible chat.
+    public bool IsHostActivity { get; set; } // UI-only activity (e.g. learned memory), excluded from model history.
     public string? ToolCallsJson { get; set; }
     public string? ToolCallId { get; set; }
     public string? ToolName { get; set; }

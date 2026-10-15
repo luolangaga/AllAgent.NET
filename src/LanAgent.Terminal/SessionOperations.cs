@@ -10,8 +10,21 @@ namespace LanAgent.Terminal;
 internal static class SessionOperations
 {
     internal static string SingleLineTitle(string title) => string.Join(" ", title.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-    public static IReadOnlyList<Conversation> MainSessions(DataStore store) => store.Conversations
-        .Where(c => c.ParentConversationId == null).OrderByDescending(c => c.UpdatedAt).ToArray();
+    internal static bool InWorkspace(Conversation conversation, string workspace)
+    {
+        if (string.IsNullOrWhiteSpace(conversation.WorkspaceRoot)) return true;
+        try
+        {
+            return Path.TrimEndingDirectorySeparator(Path.GetFullPath(conversation.WorkspaceRoot)).Equals(
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(workspace)), OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) { return false; }
+    }
+    public static IReadOnlyList<Conversation> MainSessions(DataStore store, string? workspace = null)
+    {
+        store.Refresh();
+        return store.Conversations.Where(c => c.ParentConversationId == null && (workspace == null || InWorkspace(c, workspace))).OrderByDescending(c => c.UpdatedAt).ToArray();
+    }
     public static Conversation Parent(DataStore store, Conversation current) => current.ParentConversationId is { } parent
         ? store.GetConversation(parent) ?? throw new ArgumentException("父会话已不存在。")
         : throw new ArgumentException("当前会话没有父会话。");
@@ -26,14 +39,15 @@ internal static class SessionOperations
         ManagementUi.Interactive(ui);
         return ManagementUi.Choose("子代理会话", children, c => c.Id.ToString()[..8] + " · " + c.AgentRole + " · " + c.Title);
     }
-    public static Conversation Get(DataStore store, string? selector)
+    public static Conversation Get(DataStore store, string? selector, string? workspace = null)
     {
-        if (selector != null) return store.Conversations.SingleOrDefault(c => c.Id.ToString().StartsWith(selector, StringComparison.OrdinalIgnoreCase)) ?? throw new ArgumentException("会话 ID 未唯一匹配。");
-        var c = new Conversation(); store.AddConversation(c); return c;
+        store.Refresh();
+        if (selector != null) return store.Conversations.SingleOrDefault(c => (workspace == null || InWorkspace(c, workspace)) && c.Id.ToString().StartsWith(selector, StringComparison.OrdinalIgnoreCase)) ?? throw new ArgumentException("当前工作区内会话 ID 未唯一匹配。");
+        var c = new Conversation { WorkspaceRoot = workspace == null ? null : Path.GetFullPath(workspace) }; store.AddConversation(c); return c;
     }
     public static void List(DataStore store, TerminalUi ui, string? search = null)
     {
-        var sessions = MainSessions(store).Where(c => string.IsNullOrEmpty(search) || c.Title.Contains(search, StringComparison.OrdinalIgnoreCase) || c.Id.ToString().StartsWith(search, StringComparison.OrdinalIgnoreCase)).Take(100).ToArray();
+        var sessions = MainSessions(store, ui.Workspace).Where(c => string.IsNullOrEmpty(search) || c.Title.Contains(search, StringComparison.OrdinalIgnoreCase) || c.Id.ToString().StartsWith(search, StringComparison.OrdinalIgnoreCase)).Take(100).ToArray();
         ManagementUi.Output(ui, sessions.Select(c => new { c.Id, c.Title, c.UpdatedAt, c.ModelId, messageCount = c.Messages.Count }), () =>
         {
             var table = new Table().AddColumn("ID").AddColumn("标题").AddColumn("模型 / 消息").AddColumn("最后更新");
@@ -44,7 +58,7 @@ internal static class SessionOperations
     public static Conversation Pick(DataStore store, TerminalUi ui)
     {
         ManagementUi.Interactive(ui);
-        var sessions = MainSessions(store);
+        var sessions = MainSessions(store, ui.Workspace);
         if (sessions.Count == 0) throw new ArgumentException("暂无主会话。");
         return ManagementUi.Choose("恢复会话", sessions, c => c.Id.ToString()[..8] + " · " + c.Title + " · " + c.UpdatedAt.ToLocalTime().ToString("MM-dd HH:mm"));
     }

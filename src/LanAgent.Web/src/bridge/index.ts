@@ -4,11 +4,13 @@ import mitt from 'mitt'
 export type BridgeEvents = {
   'agent.token': { text: string; streamId: string }
   'agent.thinking': { text: string; streamId: string }
+  'agent.iteration': { current: number; maximum: number; toolCalls: number; streamId: string }
   'agent.toolCallStarted': { id: string; name: string; args: string; parentId?: string; streamId: string }
   'agent.toolCallOutput': { id: string; line: string; isError: boolean; streamId: string }
   'agent.toolCallCompleted': { id: string; name: string; result: string; streamId: string }
   'agent.done': { reason: string; streamId: string }
   'agent.error': { message: string; streamId: string }
+  'agent.notice': { message: string; resetResponse: boolean; streamId: string }
 }
 
 export const bridgeEvents = mitt<BridgeEvents>()
@@ -73,6 +75,10 @@ function postToNative(json: string) {
   return false
 }
 
+export function isNativeHost(): boolean {
+  return Boolean((window as any).chrome?.webview || (window as any).webkit?.messageHandlers?.bridge)
+}
+
 export async function invoke<T = unknown>(method: string, params?: unknown): Promise<T> {
   return new Promise((resolve, reject) => {
     const id = crypto.randomUUID()
@@ -90,7 +96,8 @@ export async function invoke<T = unknown>(method: string, params?: unknown): Pro
       // Dev mode fallback: mock responses
       console.warn(`[Bridge] Native bridge not available, method: ${method}`, params)
       pending.delete(id)
-      resolve(getMockResponse(method, params) as T)
+      if (!import.meta.env.DEV) { reject(new Error('桌面后端未连接，请在 LanAgent 桌面应用中打开。')); return }
+      try { resolve(getMockResponse(method, params) as T) } catch (error) { reject(error) }
     }
   })
 }
@@ -102,8 +109,10 @@ function getMockResponse(method: string, _params?: unknown): unknown {
     case 'conversations.create': return { id: crypto.randomUUID(), title: 'New Conversation', modelId: '', providerId: '', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
     case 'conversations.getMessages': return []
     case 'skills.list': return []
+    case 'mcpServers.list': return []
     case 'apiConfigs.list': return []
     case 'settings.get': return { theme: 'system', language: 'zh', defaultModel: '', streamingEnabled: true, defaultProviderId: '' }
-    default: return null
+    case 'chat.startStream': throw new Error('浏览器预览无法执行 Agent，请在桌面应用中发送消息。')
+    default: throw new Error(`浏览器预览不支持 ${method}，请连接桌面后端。`)
   }
 }

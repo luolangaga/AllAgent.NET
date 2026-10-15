@@ -5,7 +5,7 @@ namespace LanAgent.Core.Services.AI;
 
 public static class ModelContext
 {
-    public static int Capacity(ApiConfig config) => Validate(config.ModelContextWindows.GetValueOrDefault(config.DefaultModel, config.ContextWindowTokens));
+    public static int Capacity(ApiConfig config) => Validate(ModelCatalog.Resolve(config)?.ContextTokens ?? (config.ModelContextWindows.TryGetValue(config.DefaultModel, out var manual) ? manual : 100000));
     public static int Validate(int value) => value is >= 1024 and <= 10000000 ? value : throw new ArgumentException("模型上下文容量范围为 1024–10000000 Token。");
     public static int Parse(string text)
     {

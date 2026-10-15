@@ -20,7 +20,7 @@ public sealed class ToolRegistry
         Func<AgentToolDescriptor, JsonElement, ToolResult?>? invocationPolicy = null,
         Func<AgentToolDescriptor, JsonElement, CancellationToken, ValueTask<ToolResult?>>? invocationAuthorization = null)
     { _approver = approver; _auditPath = auditPath; _hooks = hooks; _invocationPolicy = invocationPolicy; _invocationAuthorization = invocationAuthorization; }
-    public IReadOnlyList<AgentToolDescriptor> Definitions { get { lock (_sync) return _tools.Values.Select(t => t.Definition).OrderBy(t => t.Name, StringComparer.Ordinal).ToArray(); } }
+    public IReadOnlyList<AgentToolDescriptor> Definitions { get { lock (_sync) return _tools.Values.Select(t => t.Definition).Where(t => LanAgent.Core.Extensions.AgentExtensionScope.Current?.Allows(this, t.Name) != false).OrderBy(t => t.Name, StringComparer.Ordinal).ToArray(); } }
     public void Register(IAgentToolSet tools)
     {
         lock (_sync)
@@ -31,17 +31,18 @@ public sealed class ToolRegistry
             foreach (var definition in definitions) _tools.Add(definition.Name, (tools, definition));
         }
     }
-    public void Replace<T>(IAgentToolSet tools) where T : IAgentToolSet
+    public void Replace<T>(IAgentToolSet tools, bool preserveOtherToolSets = false) where T : IAgentToolSet
     {
         lock (_sync)
         {
             if (tools is not T) throw new ArgumentException("Replacement must have the selected tool-set type.");
             var definitions = tools.Definitions.ToArray(); var names = new HashSet<string>(StringComparer.Ordinal);
             foreach (var definition in definitions)
-                if (!names.Add(definition.Name) || _tools.TryGetValue(definition.Name, out var existing) && existing.Set is not T)
+                if (!names.Add(definition.Name) || !preserveOtherToolSets && _tools.TryGetValue(definition.Name, out var existing) && existing.Set is not T)
                     throw new InvalidOperationException($"Duplicate tool: {definition.Name}");
             foreach (var key in _tools.Where(pair => pair.Value.Set is T).Select(pair => pair.Key).ToArray()) _tools.Remove(key);
-            foreach (var definition in definitions) _tools.Add(definition.Name, (tools, definition));
+            foreach (var definition in definitions)
+                if (!_tools.ContainsKey(definition.Name)) _tools.Add(definition.Name, (tools, definition));
         }
     }
 
@@ -53,8 +54,15 @@ public sealed class ToolRegistry
         try
         {
             (IAgentToolSet Set, AgentToolDescriptor Definition) entry;
-            lock (_sync) { if (!_tools.TryGetValue(name, out entry)) return ToolResult.Failure("Unknown or disabled tool."); }
-            ToolArguments.Validate(args, entry.Definition.Parameters);
+            lock (_sync) { if (LanAgent.Core.Extensions.AgentExtensionScope.Current?.Allows(this, name) == false || !_tools.TryGetValue(name, out entry)) return ToolResult.Failure("Unknown or disabled tool."); }
+            if (entry.Set is IAgentToolArgumentPreparer preparer) args = await preparer.PrepareArgumentsAsync(name, args, ct);
+            try { ToolArguments.Validate(args, entry.Definition.Parameters); }
+            catch (ArgumentException ex)
+            {
+                var properties = entry.Definition.Parameters.TryGetProperty("properties", out var fields)
+                    ? string.Join(", ", fields.EnumerateObject().Select(field => field.Name + ":" + (field.Value.TryGetProperty("type", out var type) ? type.ToString() : "schema"))) : "see catalog";
+                throw new ArgumentException($"Invalid arguments for {name}: {ex.Message} Expected named fields: {properties}.");
+            }
             var preflight = _invocationPolicy?.Invoke(entry.Definition, args) ?? (entry.Set as IAgentToolPreflight)?.ValidateInvocation(name, args);
             if (preflight != null) result = preflight;
             else

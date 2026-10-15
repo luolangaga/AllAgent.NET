@@ -4,20 +4,21 @@ using Spectre.Console.Rendering;
 namespace LanAgent.Terminal;
 
 /// <summary>Standard Spectre prompts with consistent Escape cancellation and paste-as-data.</summary>
-internal sealed class SpectrePromptConsole(IAnsiConsole console, TerminalKeyReader? reader = null) : IAnsiConsole
+internal sealed class SpectrePromptConsole(IAnsiConsole console, TerminalKeyReader? reader = null, string? initialText = null) : IAnsiConsole
 {
     public Profile Profile => console.Profile;
     public IAnsiConsoleCursor Cursor => console.Cursor;
-    public IAnsiConsoleInput Input { get; } = new PromptInput(reader ?? new TerminalKeyReader(console.Input.IsKeyAvailable, () => console.Input.ReadKey(true) ?? default));
+    public IAnsiConsoleInput Input { get; } = new PromptInput(reader ?? new TerminalKeyReader(console.Input.IsKeyAvailable, () => console.Input.ReadKey(true) ?? default), initialText);
     public IExclusivityMode ExclusivityMode => console.ExclusivityMode;
     public RenderPipeline Pipeline => console.Pipeline;
     public void Clear(bool home) => console.Clear(home);
     public void Write(IRenderable renderable) => console.Write(renderable);
     public void WriteAnsi(Action<AnsiWriter> action) => console.WriteAnsi(action);
 
-    private sealed class PromptInput(TerminalKeyReader reader) : IAnsiConsoleInput
+    private sealed class PromptInput(TerminalKeyReader reader, string? initialText) : IAnsiConsoleInput
     {
-        private readonly Queue<ConsoleKeyInfo> _paste = new();
+        // Unicode characters are text, not virtual key codes (which must be <= 255).
+        private readonly Queue<ConsoleKeyInfo> _paste = new((initialText ?? "").Select(character => new ConsoleKeyInfo(character, ConsoleKey.A, false, false, false)));
         public bool IsKeyAvailable() => _paste.Count > 0 || reader.HasInput;
         public ConsoleKeyInfo? ReadKey(bool intercept) => ReadKeyAsync(intercept, CancellationToken.None).GetAwaiter().GetResult();
         public async Task<ConsoleKeyInfo?> ReadKeyAsync(bool intercept, CancellationToken cancellationToken)

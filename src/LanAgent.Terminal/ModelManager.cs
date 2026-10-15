@@ -21,7 +21,7 @@ internal sealed class ModelManager(DataStore store, TerminalUi ui, TerminalArgum
             var table = new Table().Title("[bold]模型提供商[/]").AddColumn("ID / 名称").AddColumn("协议 / 地址").AddColumn("模型").AddColumn("思考 / 状态");
             foreach (var c in store.ApiConfigs) table.AddRow(Markup.Escape(c.Id.ToString()[..8] + " · " + c.DisplayName), Markup.Escape(ProviderCatalog.ProtocolFor(c) + "\n" + c.BaseUrl), Markup.Escape(c.DefaultModel + $"\n列表 {c.Models.Count} 项"), Markup.Escape(c.ReasoningEffort + " · " + (c.IsEnabled ? "启用" : "禁用")));
             TerminalOutput.Write(table);
-            TerminalOutput.MarkupLine("[dim]/providers add 添加 · edit 修改 · refresh 自动获取 · models 手动列表 · /model 切换[/]");
+            TerminalOutput.MarkupLine("[dim]/login 添加 · /providers edit 修改 · refresh 自动获取 · models 手动列表 · /model 切换[/]");
         });
     }
     public static object Safe(ApiConfig c) => new { c.Id, c.DisplayName, c.ProviderId, protocol = ProviderCatalog.ProtocolFor(c), c.BaseUrl, c.DefaultModel, c.Models, c.ReasoningProtocol, c.ReasoningEffort, c.ThinkingBudget, c.Temperature, c.MaxTokens, contextWindowTokens = ModelContext.Capacity(c), c.ModelContextWindows, c.IsEnabled, c.AuthenticationProviderId, key = c.ApiKeyEnvironmentVariable is { Length: > 0 } ? "env:" + c.ApiKeyEnvironmentVariable : c.ApiKey.Length > 0 ? "已设置（隐藏）" : "未设置" };
@@ -30,13 +30,17 @@ internal sealed class ModelManager(DataStore store, TerminalUi ui, TerminalArgum
         if (value == null)
         {
             ManagementUi.Interactive(ui);
-            value = ManagementUi.Choose("模型上下文容量 · " + config.DefaultModel + " · 当前 " + ModelContext.Format(ModelContext.Capacity(config)), "100k", "200k", "400k", "1M", "自定义");
+            value = ManagementUi.Choose("模型上下文容量 · " + config.DefaultModel + " · 当前 " + ModelContext.Format(ModelContext.Capacity(config)), "auto", "自定义");
             if (value == "自定义") value = await ManagementUi.Text("上下文 Token 容量（如 131072 / 256k / 1.5M）", ModelContext.Capacity(config).ToString());
         }
-        config.ModelContextWindows[config.DefaultModel] = ModelContext.Parse(value);
+        if (value == "auto") config.ModelContextWindows.Remove(config.DefaultModel);
+        else config.ModelContextWindows[config.DefaultModel] = ModelContext.Parse(value);
         if (store.ApiConfigs.FirstOrDefault(saved => saved.Id == config.Id) is { } saved)
         {
-            var copy = ManagementUi.Clone(saved); copy.ModelContextWindows[config.DefaultModel] = ModelContext.Capacity(config); store.UpdateApiConfig(copy);
+            var copy = ManagementUi.Clone(saved);
+            if (value == "auto") copy.ModelContextWindows.Remove(config.DefaultModel);
+            else copy.ModelContextWindows[config.DefaultModel] = ModelContext.Capacity(config);
+            store.UpdateApiConfig(copy);
         }
         ui.SetModelContext(config);
         ManagementUi.Success(ui, config.DefaultModel + " 上下文容量已设为 " + ModelContext.Format(ModelContext.Capacity(config)));
@@ -51,18 +55,13 @@ internal sealed class ModelManager(DataStore store, TerminalUi ui, TerminalArgum
         var action = words.FirstOrDefault() ?? (ui.Interactive && !ui.Json ? "panel" : "list");
         if (action == "panel")
         {
-            List(); action = ManagementUi.Choose("提供商管理", "返回", "添加", "编辑", "自动获取模型", "手动模型列表", "启用", "禁用", "删除");
+            List(); action = ManagementUi.Choose("提供商管理", "返回", "编辑", "自动获取模型", "手动模型列表", "启用", "禁用", "删除");
             if (action == "返回") return;
             action = action switch { "添加" => "add", "编辑" => "edit", "自动获取模型" => "refresh", "手动模型列表" => "models", "启用" => "enable", "禁用" => "disable", _ => "remove" };
             if (action != "add") { var chosen = PickConfig(); words = new[] { action, chosen.Id.ToString() }; }
         }
         if (action == "list") { List(); return; }
-        if (action == "presets") { ManagementUi.Output(ui, ProviderCatalog.All, () => { foreach (var p in ProviderCatalog.All) TerminalOutput.Write(new Text(p.Id + " · " + p.Name + "\n")); }); return; }
-        if (action == "add")
-        {
-            var config = cli.Get("provider") is { } provider ? FromArguments(provider) : await WizardAsync(null);
-            store.AddApiConfig(config); ManagementUi.Success(ui, "提供商已添加：" + config.DisplayName); return;
-        }
+        if (action == "add") throw new ArgumentException("添加提供商请使用 /login。");
         var current = Find(ManagementUi.Require(words, 1, "提供商名称或 ID"));
         var copy = ManagementUi.Clone(current);
         switch (action)
@@ -74,6 +73,7 @@ internal sealed class ModelManager(DataStore store, TerminalUi ui, TerminalArgum
                 var models = await ManagementUi.Busy("正在获取模型列表", ct => Provider(copy).ListModelsAsync(copy, ct));
                 if (models.Count == 0) throw new InvalidOperationException("接口返回了空模型列表，已有列表未修改。");
                 copy.Models = models.Select(m => m.Id).ToList();
+                ModelCatalog.Remember(copy, models);
                 ManagementUi.Output(ui, models, () => { foreach (var m in models) TerminalOutput.Write(new Text(m.Id + "\n")); }); break;
             case "models":
                 var raw = cli.Get("models");
@@ -85,17 +85,9 @@ internal sealed class ModelManager(DataStore store, TerminalUi ui, TerminalArgum
             case "remove":
                 if (!await ManagementUi.Confirm(ui, "删除提供商配置 " + copy.DisplayName + "？")) throw new OperationCanceledException("删除已取消。");
                 store.DeleteApiConfig(copy.Id); ManagementUi.Success(ui, "提供商已删除。"); return;
-            default: throw new ArgumentException("提供商操作：list / presets / add / edit / refresh / models / show / enable / disable / remove。");
+            default: throw new ArgumentException("提供商操作：list / edit / refresh / models / show / enable / disable / remove；添加使用 /login。");
         }
         store.UpdateApiConfig(copy); ManagementUi.Success(ui, "提供商配置已保存。");
-    }
-    private ApiConfig FromArguments(string id)
-    {
-        var preset = ProviderCatalog.Find(id) ?? throw new ArgumentException("未知预设；自定义使用 --provider custom。");
-        var model = cli.Get("model") ?? throw new ArgumentException("需要 --model。");
-        var config = new ApiConfig { ProviderId = preset.Id, Protocol = cli.Get("protocol") ?? preset.Protocol, BaseUrl = cli.Get("base-url") ?? preset.BaseUrl, DisplayName = cli.Get("name") ?? preset.Name, DefaultModel = model, Models = cli.Get("models") is { } list ? ParseModels(list) : new() { model }, ApiKeyEnvironmentVariable = cli.Get("key-env"), AuthenticationProviderId = preset.Id == "codex" ? "codex" : null, ReasoningProtocol = cli.Get("reasoning-protocol") ?? preset.ReasoningProtocol, MaxTokens = cli.Number("max-tokens", 16384), ThinkingBudget = cli.Number("budget", 8000) };
-        if (cli.Get("context-window") is { } capacity) config.ModelContextWindows[model] = ModelContext.Parse(capacity);
-        Validate(config); ReasoningSettings.SetEffort(config, cli.Get("effort") ?? "default"); return config;
     }
     private static List<string> ParseModels(string raw)
     {
@@ -111,19 +103,26 @@ internal sealed class ModelManager(DataStore store, TerminalUi ui, TerminalArgum
         if (!ReasoningSettings.Protocols.Contains(config.ReasoningProtocol)) throw new ArgumentException("未知思考协议。");
         if (!config.Models.Contains(config.DefaultModel)) config.Models.Insert(0, config.DefaultModel);
     }
-    private async Task<ApiConfig> WizardAsync(ApiConfig? original)
+    public async Task AddCustomAsync(string providerId = "custom")
+    {
+        var config = await WizardAsync(null, ProviderCatalog.Find(providerId));
+        store.AddApiConfig(config);
+        ManagementUi.Success(ui, "提供商已添加：" + config.DisplayName);
+    }
+    private async Task<ApiConfig> WizardAsync(ApiConfig? original, ProviderPreset? presetOverride = null)
     {
         ManagementUi.Interactive(ui);
+        await ModelCatalog.RefreshAsync();
         ApiConfig c;
         if (original == null)
         {
-            var preset = ManagementUi.Choose("选择提供商（地址和协议均可修改）", ProviderCatalog.All, p => p.Name);
+            var preset = presetOverride ?? ManagementUi.Choose("选择提供商（地址和协议均可修改）", ProviderCatalog.All, p => p.Name);
             c = new() { ProviderId = preset.Id, DisplayName = preset.Name, Protocol = preset.Protocol, BaseUrl = preset.BaseUrl, ReasoningProtocol = preset.ReasoningProtocol, AuthenticationProviderId = preset.Id == "codex" ? "codex" : null, MaxTokens = 16384 };
         }
         else c = original;
-        c.DisplayName = await ManagementUi.Text("配置名称", c.DisplayName);
-        c.Protocol = ManagementUi.Choose("接口协议 · 当前 " + ProviderCatalog.ProtocolFor(c), [ProviderCatalog.ProtocolFor(c), .. new[] { "openai", "responses", "anthropic", "gemini" }.Concat(pluginProviders?.Invoke().Select(p => p.ProviderId) ?? []).Where(p => p != ProviderCatalog.ProtocolFor(c))]);
-        c.BaseUrl = (await ManagementUi.Text("Base URL", c.BaseUrl)).TrimEnd('/');
+        if (c.ProviderId == "custom") c.DisplayName = await ManagementUi.Text("配置名称", c.DisplayName);
+        if (c.ProviderId == "custom") c.Protocol = ManagementUi.Choose("接口协议 · 当前 " + ProviderCatalog.ProtocolFor(c), [ProviderCatalog.ProtocolFor(c), .. new[] { "openai", "responses", "anthropic", "gemini" }.Concat(pluginProviders?.Invoke().Select(p => p.ProviderId) ?? []).Where(p => p != ProviderCatalog.ProtocolFor(c))]);
+        if (c.ProviderId == "custom") c.BaseUrl = (await ManagementUi.Text("Base URL", c.BaseUrl)).TrimEnd('/');
         var accounts = (authenticationChoices?.Invoke() ?? []).Where(a =>
         {
             try { a.ValidateModelConfiguration(c); return true; } catch (InvalidOperationException) { return false; }
@@ -141,20 +140,23 @@ internal sealed class ModelManager(DataStore store, TerminalUi ui, TerminalArgum
             if (keyAction == "清空（本地服务）") { c.ApiKey = ""; c.ApiKeyEnvironmentVariable = null; }
         }
         else { c.ApiKey = ""; c.ApiKeyEnvironmentVariable = null; }
-        c.ReasoningProtocol = ManagementUi.Choose("思考参数协议 · 按服务/模型文档选择", [ProviderCatalog.ReasoningFor(c), .. ReasoningSettings.Protocols.Where(p => p != ProviderCatalog.ReasoningFor(c))]);
-        if (await ManagementUi.Confirm(ui, "现在从接口自动获取模型列表？"))
+        c.MaxTokens = 0;
+        try
         {
-            try { c.Models = (await ManagementUi.Busy("正在获取模型列表", ct => Provider(c).ListModelsAsync(c, ct))).Select(m => m.Id).ToList(); }
-            catch (Exception ex) when (ex is not OperationCanceledException) { ui.Error(ex.Message); }
+            var models = await ManagementUi.Busy("正在获取模型列表", ct => Provider(c).ListModelsAsync(c, ct));
+            c.Models = models.Select(m => m.Id).ToList();
+            ModelCatalog.Remember(c, models);
         }
-        var ids = await ManagementUi.Text("模型 ID 列表（逗号分隔，可手动补充）", c.Models.Count > 0 ? string.Join(',', c.Models) : string.IsNullOrEmpty(c.DefaultModel) ? null : c.DefaultModel);
-        c.Models = ParseModels(ids);
-        c.DefaultModel = ManagementUi.Choose("默认模型", c.Models.ToArray());
-        c.ThinkingBudget = int.Parse(await ManagementUi.Text("思考 Token 预算（预算协议使用）", c.ThinkingBudget.ToString()));
-        c.MaxTokens = int.Parse(await ManagementUi.Text("输出 Token 上限", c.MaxTokens.ToString()));
-        var contextChoice = ManagementUi.Choose("默认模型上下文容量 · 当前 " + ModelContext.Format(ModelContext.Capacity(c)), "保留当前", "100k", "200k", "400k", "1M", "自定义");
-        if (contextChoice != "保留当前") c.ModelContextWindows[c.DefaultModel] = ModelContext.Parse(contextChoice == "自定义" ? await ManagementUi.Text("上下文 Token 容量", ModelContext.Capacity(c).ToString()) : contextChoice);
-        ReasoningSettings.SetEffort(c, ManagementUi.Choose("默认思考强度（可用 /effort 调整）", ReasoningSettings.Efforts(c).ToArray()));
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            ui.Error(ex.Message);
+            var catalog = ModelCatalog.List(c);
+            c.Models = catalog.Select(m => m.Id).ToList();
+        }
+        if (c.Models.Count == 0)
+            c.Models = ParseModels(await ManagementUi.Text("模型 ID（接口未提供列表）", c.DefaultModel));
+        c.DefaultModel = ManagementUi.Choose("选择模型（自动应用上下文与输出限制）", c.Models.ToArray());
+        ReasoningSettings.RestoreForModel(c);
         Validate(c); return c;
     }
     private ApiConfig PickConfig()
@@ -164,6 +166,7 @@ internal sealed class ModelManager(DataStore store, TerminalUi ui, TerminalArgum
     }
     public async Task<ApiConfig> SelectAsync(string? selector = null, string? model = null, bool forceSelection = false)
     {
+        await ModelCatalog.RefreshAsync();
         ApiConfig c;
         if (selector != null) c = Find(selector);
         else if (!forceSelection && Environment.GetEnvironmentVariable("LANAGENT_MODEL") is { Length: > 0 } envModel)
@@ -176,9 +179,18 @@ internal sealed class ModelManager(DataStore store, TerminalUi ui, TerminalArgum
         else
         {
             var available = store.ApiConfigs.Where(c => c.IsEnabled).ToArray();
-            if (available.Length == 0) { await ExecuteAsync(new[] { "add" }); available = store.ApiConfigs.Where(c => c.IsEnabled).ToArray(); }
+            if (available.Length == 0) { await AddCustomAsync(); available = store.ApiConfigs.Where(c => c.IsEnabled).ToArray(); }
             var remembered = available.FirstOrDefault(item => item.Id.ToString() == store.GetSetting("terminal:lastConfig"));
-            if (!forceSelection && remembered != null) c = remembered;
+            if (forceSelection && ui.Interactive && !ui.Json)
+            {
+                var choices = available.SelectMany(provider => (provider.Models.Count > 0 ? provider.Models : [provider.DefaultModel])
+                    .Where(id => !string.IsNullOrWhiteSpace(id)).Select(id => (Provider: provider, Model: id))).ToArray();
+                if (choices.Length == 0) throw new ArgumentException("尚未配置模型，请先添加。");
+                var ordered = choices.OrderByDescending(choice => choice.Provider.Id == remembered?.Id && choice.Model == remembered.DefaultModel).ToArray();
+                var choice = ManagementUi.Choose("选择模型", ordered, choice => choice.Provider.DisplayName + " · " + choice.Model);
+                c = choice.Provider; model = choice.Model;
+            }
+            else if (remembered != null) c = remembered;
             else if (!ui.Interactive || ui.Json || available.Length == 1) c = available[0];
             else c = ManagementUi.Choose("选择提供商", available, c => c.DisplayName);
         }
@@ -187,6 +199,7 @@ internal sealed class ModelManager(DataStore store, TerminalUi ui, TerminalArgum
         if (model != null) c.DefaultModel = model;
         else if (ui.Interactive && !ui.Json && c.Models.Count > 1 && (forceSelection || string.IsNullOrWhiteSpace(c.DefaultModel))) c.DefaultModel = ManagementUi.Choose("选择模型", c.Models.ToArray());
         if (string.IsNullOrWhiteSpace(c.DefaultModel)) c.DefaultModel = c.Models.FirstOrDefault() ?? throw new ArgumentException("此提供商尚未配置模型。");
+        ReasoningSettings.RestoreForModel(c);
         if (cli.Get("effort") is { } effort) ReasoningSettings.SetEffort(c, effort);
         if (cli.Get("budget") is { }) c.ThinkingBudget = cli.Number("budget", c.ThinkingBudget);
         if (cli.Get("max-tokens") is { }) c.MaxTokens = cli.Number("max-tokens", c.MaxTokens);

@@ -95,7 +95,8 @@ public sealed class TerminalFollowupTests
         block.Complete(new("status", "shell_status", ToolResult.Success(task).ToJson()));
         var console = new TestConsole(); console.Profile.Width = 100; console.Write(block);
         Assert.Contains("(2 行)", console.Output); Assert.Contains("查询已有任务", console.Output);
-        Assert.Contains("任务查询", console.Output); Assert.DoesNotContain("执行步骤", console.Output);
+        Assert.Equal(1, console.Output.Split("查询已有任务").Length - 1); Assert.Contains("fixture-", console.Output);
+        Assert.DoesNotContain("执行步骤", console.Output);
         Assert.DoesNotContain("DUPLICATE-PROOF", console.Output); Assert.DoesNotContain("后台命令", console.Output);
         console.Clear(); console.Write(block.Details(0, 0)); Assert.Contains("DUPLICATE-PROOF", console.Output);
     }

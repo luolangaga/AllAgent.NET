@@ -31,6 +31,19 @@ public sealed class ThinkingLineTests
     }
 
     [Fact]
+    public void ThinkingAndCodeKeepLineCountsAndFullInspectorContent()
+    {
+        var block = new CodeExecutionBlock("thought", "first\n第二行\nlast", reasoning: true);
+        var preview = new TestConsole(); preview.Profile.Width = 100; preview.Write(block);
+        Assert.Contains("(3 行)", preview.Output); Assert.Contains("Ctrl+O", preview.Output);
+        Assert.DoesNotContain("计算与处理", preview.Output);
+        var details = new TestConsole(); details.Write(block.Details(-1, 0));
+        Assert.Contains("first", details.Output); Assert.Contains("第二行", details.Output);
+        var code = new TestConsole(); code.Profile.Width = 100; code.Write(new CodeExecutionBlock("code", "print(1)\nprint(2)"));
+        Assert.Contains("(2 行)", code.Output); Assert.Contains("Ctrl+E", code.Output);
+    }
+
+    [Fact]
     public void FailuresRenderRedWithAnExplicitFailureMarker()
     {
         var console = new TestConsole(); console.Profile.Capabilities.ColorSystem = ColorSystem.TrueColor; console.Profile.Capabilities.Ansi = true; console.EmitAnsiSequences = true;

@@ -30,15 +30,14 @@ public sealed class TerminalIntegrationTests
             object delta = first
                 ? new { tool_calls = new[] { new { index = 0, id = child ? "child-write" : "delegate", type = "function", function = new { name = "execute_code", arguments = JsonSerializer.Serialize(new { code = child
                     ? "r = call_tool('file_write', path='child-proof.txt', content='delegated proof')\nprint(r)"
-                    : "r = call_tool('start_agent', task='Write child-proof.txt')\nif r['ok']:\n    print(call_tool('wait_agent', id=r['data']['taskId'], timeoutSeconds=30))" }) } } } }
+                    : "r = call_tool('subagent', agent='modify', task='Write child-proof.txt')\nprint(r)" }) } } } }
                 : new { content = child ? "Child finished" : "Parent finished" };
             context.Response.ContentType = "text/event-stream";
             await context.Response.WriteAsync("data: " + JsonSerializer.Serialize(new { choices = new[] { new { index = 0, delta, finish_reason = first ? "tool_calls" : "stop" } } }) + "\n\ndata: [DONE]\n\n");
         });
-        var configuration = Directory.GetParent(Path.TrimEndingDirectorySeparator(AppContext.BaseDirectory))!.Name;
-        var exe = Path.GetFullPath($"../../../../../src/LanAgent.Terminal/bin/{configuration}/net8.0/lanagent.exe", AppContext.BaseDirectory);
+        var exe = Path.Combine(AppContext.BaseDirectory, "lanagent.exe");
         var arguments = new List<string> { "run", "Delegate the write", "--json", "--subagent-model", "child-test-model", "--workspace", workspace.Root, "--data-dir", Path.Combine(workspace.Root, "sessions"), "--python", workspace.Python, "--pwsh", workspace.Pwsh };
-        if (fullAccess) arguments.Add("--full-access");
+        arguments.Add(fullAccess ? "--full-access" : "--ask");
         var info = BoundedProcess.StartInfo(exe, arguments);
         info.Environment["LANAGENT_MODEL"] = "parent-test-model";
         info.Environment["LANAGENT_API_KEY"] = "local-test-key";
@@ -59,8 +58,7 @@ public sealed class TerminalIntegrationTests
         using var workspace = new TestWorkspace();
         await File.WriteAllTextAsync(Path.Combine(workspace.Root, "proof.txt"), "local proof");
         await using var server = new MockChatServer();
-        var configuration = Directory.GetParent(Path.TrimEndingDirectorySeparator(AppContext.BaseDirectory))!.Name;
-        var exe = Path.GetFullPath($"../../../../../src/LanAgent.Terminal/bin/{configuration}/net8.0/lanagent.exe", AppContext.BaseDirectory);
+        var exe = Path.Combine(AppContext.BaseDirectory, "lanagent.exe");
         var dataDirectory = Path.Combine(workspace.Root, "sessions");
         var info = BoundedProcess.StartInfo(exe, ["run", "Read proof.txt", "--json", "--workspace", workspace.Root, "--data-dir", dataDirectory, "--python", workspace.Python, "--pwsh", workspace.Pwsh]);
         info.Environment["LANAGENT_MODEL"] = "local-test-model";

@@ -16,7 +16,7 @@ public sealed class RuntimeModelSwitchTests
     {
         using var w = new TestWorkspace(); using var store = new DataStore(Path.Combine(w.Root, "data"));
         var first = new ApiConfig { ProviderId = "first", DefaultModel = "first-model" };
-        var second = new ApiConfig { ProviderId = "second", DefaultModel = "second-model", ContextWindowTokens = 20000 };
+        var second = new ApiConfig { ProviderId = "second", DefaultModel = "second-model", ModelContextWindows = new() { ["second-model"] = 20000 } };
         var parent = new Conversation(); store.AddConversation(parent);
         var child = new Conversation { ParentConversationId = parent.Id, ModelId = first.DefaultModel, ProviderId = first.ProviderId, SubAgentConfigId = first.Id }; store.AddConversation(child);
         ApiConfig current = first;

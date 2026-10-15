@@ -21,7 +21,7 @@ public sealed class ExecutionPresentationTests
     {
         using var w = new TestWorkspace();
         await w.Tools.WriteAsync("file.txt", "header\nold\nfooter");
-        var result = await w.Tools.EditAsync("file.txt", "old", "new");
+        var result = await w.Tools.EditAsync("file.txt", [new("old", "new")]);
         var diff = JsonDocument.Parse(result.ToJson()).RootElement.GetProperty("data").GetProperty("diff");
         Assert.Equal(1, diff.GetProperty("added").GetInt32());
         Assert.Equal(1, diff.GetProperty("removed").GetInt32());

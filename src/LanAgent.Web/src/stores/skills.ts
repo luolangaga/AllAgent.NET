@@ -1,5 +1,5 @@
-import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { defineStore } from '@/lib/store'
+import { ref } from '@/lib/store'
 import type { Skill } from '@/types'
 import { invoke } from '@/bridge'
 

@@ -34,12 +34,10 @@ public sealed partial class WorkspaceCheckpoints
                 if (expected.Count < target.Count) throw new InvalidOperationException("所选消息位于任务内部，尚无精确文件检查点，未撤回。");
             }
             if (range.Count == 0 || !Same(expected, target)) throw new InvalidOperationException("找不到连续且精确匹配消息的检查点，未撤回。");
-            if (range.Count > 100) throw new IOException("单次最多撤回 100 个检查点。");
             var files = new Dictionary<string, RevertFile>(StringComparer.OrdinalIgnoreCase);
             var previous = original?.Files.ToDictionary(f => f.Path, StringComparer.OrdinalIgnoreCase) ?? new();
             foreach (var checkpoint in range)
             {
-                if (checkpoint.Files.Count > 128) throw new IOException("检查点文件数无效。");
                 foreach (var file in checkpoint.Files)
                 {
                     ValidateFile(new(file.Path, file.Before, file.After));
@@ -80,7 +78,6 @@ public sealed partial class WorkspaceCheckpoints
             if (!Equal(Read(path), current)) throw new IOException("文件已被其他操作修改，未改动任何文件：" + path);
             writes.Add(write);
         }
-        if (writes.Sum(f => (long)(f.Before?.Length ?? 0) + (f.After?.Length ?? 0)) > 20_000_000) throw new IOException("撤回事务超过 20 MB 文件快照上限。");
         var ids = (before?.Checkpoints ?? []).Concat(after?.Checkpoints ?? []).Distinct().ToArray();
         var checkpoints = List(conversation.Id).ToDictionary(c => c.Id);
         var flags = ids.Select(id => new RevertFlag(id, checkpoints[id].Undone, after?.Checkpoints.Contains(id) == true)).ToArray();
@@ -105,10 +102,8 @@ public sealed partial class WorkspaceCheckpoints
         {
             if (!File.Exists(RevertJournalPath)) return false;
             if (_active != null) throw new InvalidOperationException("任务运行中不能恢复撤回事务。");
-            if (new FileInfo(RevertJournalPath).Length > 120_000_000) throw new IOException("撤回日志超出大小上限。");
             var journal = JsonSerializer.Deserialize<RevertJournal>(File.ReadAllText(RevertJournalPath)) ?? throw new IOException("撤回日志无效。");
             ValidateWorkspace(journal.Before); ValidateWorkspace(journal.After);
-            if (journal.Writes.Count > 12800 || journal.Flags.Count > 200) throw new IOException("撤回日志条目数无效。");
             foreach (var file in journal.Writes)
             {
                 ValidateFile(file); var actual = Read(file.Path);
@@ -152,7 +147,6 @@ public sealed partial class WorkspaceCheckpoints
     private void ValidateFile(RevertFile file)
     {
         _workspace.Resolve(file.Path);
-        if ((file.Before?.Length ?? 0) > 1_000_000 || (file.After?.Length ?? 0) > 1_000_000) throw new IOException("撤回文件快照超出大小上限。");
     }
     private void WriteJournal(RevertJournal journal)
     {

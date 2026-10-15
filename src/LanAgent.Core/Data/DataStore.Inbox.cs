@@ -20,6 +20,7 @@ public partial class DataStore
         _lock.EnterWriteLock();
         try
         {
+            using var transaction = BeginTransaction();
             var conversation = _data.Conversations.SingleOrDefault(c => c.Id == session) ?? throw new ArgumentException("会话不存在。");
             if (subAgentConfig != null && (conversation.ParentConversationId == null || !subAgentConfig.IsEnabled || string.IsNullOrWhiteSpace(subAgentConfig.DefaultModel)))
                 throw new ArgumentException("模型切换只允许具有有效配置的子会话。");
@@ -33,7 +34,7 @@ public partial class DataStore
                 conversation.SubAgentConfigId = subAgentConfig.Id; conversation.ModelId = subAgentConfig.DefaultModel;
                 conversation.ProviderId = subAgentConfig.ProviderId; conversation.UpdatedAt = DateTime.UtcNow;
             }
-            SaveAndVerify(); return item with { Images = item.Images.ToArray() };
+            SaveAndVerify(session); return item with { Images = item.Images.ToArray() };
         }
         finally { _lock.ExitWriteLock(); }
     }
@@ -42,6 +43,7 @@ public partial class DataStore
         ValidateDelivery(delivery); _lock.EnterWriteLock();
         try
         {
+            using var transaction = BeginTransaction();
             var index = _data.PendingInputs.FindIndex(item => item.ConversationId == session && item.Id == input);
             if (index < 0) throw new InvalidOperationException("输入已经被处理或不属于当前会话。");
             _data.PendingInputs[index] = _data.PendingInputs[index] with { Delivery = delivery }; SaveAndVerify();
@@ -53,6 +55,7 @@ public partial class DataStore
         _lock.EnterWriteLock();
         try
         {
+            using var transaction = BeginTransaction();
             var item = _data.PendingInputs.SingleOrDefault(item => item.ConversationId == session && item.Id == input)
                 ?? throw new InvalidOperationException("输入已经被处理或不属于当前会话。");
             _data.PendingInputs.Remove(item); SaveAndVerify(); return item;
@@ -66,6 +69,7 @@ public partial class DataStore
         _lock.EnterWriteLock();
         try
         {
+            using var transaction = BeginTransaction();
             var conversation = _data.Conversations.SingleOrDefault(c => c.Id == session) ?? throw new ArgumentException("会话不存在。");
             var items = _data.PendingInputs.Where(item => item.ConversationId == session && item.Delivery == "steer").ToArray();
             if (items.Length == 0 && !steersOnly) items = _data.PendingInputs.Where(item => item.ConversationId == session && item.Delivery == "queue").Take(1).ToArray();
@@ -74,7 +78,7 @@ public partial class DataStore
                 Role = "user", Content = item.Content, InputText = item.Draft, Images = item.Images.ToList(), CreatedAt = DateTime.UtcNow }).ToArray();
             foreach (var item in items) _data.PendingInputs.Remove(item);
             conversation.Messages.AddRange(messages); conversation.UpdatedAt = DateTime.UtcNow;
-            SaveAndVerify(); return messages;
+            SaveAndVerify(session); return messages;
         }
         finally { _lock.ExitWriteLock(); }
     }

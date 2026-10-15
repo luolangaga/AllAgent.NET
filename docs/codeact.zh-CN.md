@@ -2,7 +2,7 @@
 
 终端默认展示实际 Python 代码，工具调用标绿，点击或 Ctrl+E 查看运行入参和结果。权限模式和持续执行的中文用户说明见 [执行过程与权限模式](execution.zh-CN.md)。最大轮次已删除；普通模式逐次授权，显式完全访问模式不逐次审核。
 
-本实现采用微软支持的手动接法：在独立工作进程中构造 `HyperlightExecuteCodeFunction`，C# 主机使用自己的流式引擎连接各模型协议。它不是 `HyperlightCodeActProvider` 的子类，也没有把系统函数直接注册给模型。
+本实现采用微软支持的手动接法：在独立工作进程中构造 `HyperlightExecuteCodeFunction`，LanAgent 的 C# AgentEngine 驱动代理循环，直接连接现有模型协议与宿主工具。它不是 `HyperlightCodeActProvider` 的子类，模型只看到 `execute_code`。
 
 依据：[CodeAct 概述](https://learn.microsoft.com/en-us/agent-framework/agents/code-act?pivots=programming-language-csharp)、[Hyperlight 的 C# 手动接入说明](https://learn.microsoft.com/en-us/agent-framework/integrations/by-component/context-providers/hyperlight)。
 
@@ -13,11 +13,11 @@
   → AgentEngine 准备本轮 CodeAct 上下文
   → 模型：system 包含 CodeAct 指令；tools 只有 execute_code
   → execute_code({"code":"Python 源码"})
-  → 主机只解析 AST，不执行模型 Python
+  → 主机校验入参和源码长度，不进行 Python AST 白名单审核
   → Hyperlight 还原干净快照并运行代码
   → call_tool("名称", 参数=值)
   → C# ToolRegistry 校验 Schema、权限、审批、Hooks、审计
-  → C# 系统 / Skill / MCP / 插件工具
+  → C# 宿主工具 / Skill / MCP / 插件
   → Python 得到 ok/data/error/truncated 字典
   → print(...) 返回必要信息
   → 模型据结果继续或回答
@@ -32,12 +32,14 @@ SDK 的 C# 描述主要列出函数名与说明；LanAgent 在系统消息中另
 模型必须调用：
 
 ```json
-{"code":"r = call_tool('list_directory', path='.')\nif r['ok']:\n    print(r['data'])\nelse:\n    print(r['error'])"}
+{"code":"r = call_tool('ls', path='.')\nif r['ok']:\n    print(r['data']['content'])\nelse:\n    print(r['error'])"}
 ```
 
 这里 `.` 表示 C# 主机批准的 Windows 工作区。`src` 表示其子目录。空路径、`/`、`/input` 或猜测的磁盘根目录不能用来替代工作区根目录。本实现没有配置 guest 文件挂载或网络白名单。
 
-所有调用使用明确的关键字参数，如 `call_tool('file_read', path='README.md')`。模型代码禁止 `**kwargs` 解包、动态函数名、import、eval、exec、open、反射和直接文件/网络访问。这些是 LanAgent 的额外限制，不是通用 Python CodeAct 的语言规范。纯逻辑、安全内置函数、循环和条件仍可用于合并多个操作。必须 `print(...)`，单独写最后一个表达式不会自动返回值。
+调用参数遵循实际工具目录，例如 `call_tool('read', path='README.md', offset=1, limit=40)`；允许动态工具名、关键字解包、列表推导、lambda 和普通 Python 语法。模块和函数是否可用由隔离 guest 决定，不再被宿主 AST 提前拒绝。宿主文件、网络及进程操作通过 `call_tool` 完成；guest 未配置文件挂载或网络域名。必须 `print(...)`，单独写最后一个表达式不会自动返回值。
+
+源码在 guest 中以 `lanagent-code.py` 编译执行。运行时错误返回 `data.diagnostic`，包含异常类型、真实用户源码行、语法错误列号（可用时）和函数调用帧；主机不解析 Python AST，也不猜测行号。宿主工具失败仍是 `ok=false` 的返回值，程序可检查后继续。未知模块在运行时报告错误。
 
 ## 错误、历史与界面
 

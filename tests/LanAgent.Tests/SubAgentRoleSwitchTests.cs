@@ -25,7 +25,7 @@ public sealed class SubAgentRoleSwitchTests
         var engine = new AgentEngine(store, provider, runtime.CodeAct, options); var config = new ApiConfig { DefaultModel = "fixture" };
         await foreach (var evt in engine.RunAsync(child.Id, "INITIAL", config)) Assert.IsNotType<AgentError>(evt);
         Assert.False(File.Exists(Path.Combine(w.Root, "write.txt")));
-        Assert.Contains(provider.Requests[1].Messages, m => m.Role == "system" && m.Content == "You are a helpful agent.\n\nCURRENT ROLE: explore");
+        Assert.Contains(provider.Requests[1].Messages, m => m.Role == "system" && m.Content.Contains("CURRENT ROLE: explore"));
         Assert.Contains(store.GetMessages(child.Id), m => m.Role == "tool" && m.Content.Contains("read-only") && m.Content.Contains("READ-PROOF"));
         store.EnqueueInput(child.Id, "IMPLEMENT", "IMPLEMENT", [], "steer", subAgentRole: "general");
         await foreach (var evt in engine.RunAsync(child.Id, "continue", config, fromInbox: true)) Assert.IsNotType<AgentError>(evt);

@@ -120,7 +120,7 @@ try:
     print(json.dumps({"ok": True, "checks": ["real HTTP 503 retry", "real Hyperlight child file read", "child messages and live output in inspector", "one Escape closes inspector", "first Escape requests cancellation confirmation", "second Escape cancels model stream", "one child session linked to parent"], "requests": counts, "artifacts": str(output)}))
 finally:
     release.set()
-    proc.write("/exit\r") if proc.isalive() else None
+    proc.terminate(force=True) if proc.isalive() else None
     (output / "terminal.raw.txt").write_text("".join(raw), encoding="utf-8")
     (output / "requests.json").write_text(json.dumps(requests), encoding="utf-8")
     if proc.isalive(): proc.terminate(force=True)

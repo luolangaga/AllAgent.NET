@@ -16,6 +16,7 @@ export interface Message {
   content: string
   toolCallsJson?: string
   hostToolTraceJson?: string
+  isHostActivity?: boolean
   toolCallId?: string
   toolName?: string
   reasoningContent?: string

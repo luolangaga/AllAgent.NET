@@ -82,7 +82,6 @@ internal sealed class InputState(Func<string, bool>? copy = null)
         var ctrl = key.Modifiers.HasFlag(ConsoleModifiers.Control); var shift = key.Modifiers.HasFlag(ConsoleModifiers.Shift);
         Notice = null;
         if (key.Modifiers.HasFlag(ConsoleModifiers.Alt) && key.Key == ConsoleKey.Backspace) { RemoveLastImage(); return null; }
-        if (ctrl && key.Key == ConsoleKey.D && Text.Length == 0) return "/exit";
         if (ctrl && key.Key == ConsoleKey.C) { if (HasSelection) { CopySelection(); return null; } Set(""); return ""; }
         if (ctrl && key.Key == ConsoleKey.X || shift && key.Key == ConsoleKey.Delete) { CopySelection(cut: true); return null; }
         if (ctrl && key.Key == ConsoleKey.Insert) { CopySelection(); return null; }
@@ -133,7 +132,15 @@ internal sealed class InputState(Func<string, bool>? copy = null)
         {
             if (key.Modifiers != 0) { Insert("\n"); return null; }
             if (Text.EndsWith('\\') && !HasSelection) { Replace(Text.Length - 1, 1, "\n"); return null; }
-            if (Text.StartsWith('/') && hints.Count > 0 && !Text.Contains(' ') && !hints.Any(h => h.Text == Text)) return hints[Math.Clamp(Selection, 0, hints.Count - 1)].Text;
+            if (Text.StartsWith('/') && hints.Count > 0 && !Text.Contains(' '))
+            {
+                // Exact built-in commands take precedence over similarly named skills.
+                var command = hints.FirstOrDefault(h => !h.IsSkill && h.Text.Equals(Text, StringComparison.OrdinalIgnoreCase));
+                if (command != null) return command.Text;
+                var selected = hints[Math.Clamp(Selection, 0, hints.Count - 1)];
+                if (selected.IsSkill) { Complete(selected); return null; }
+                if (!hints.Any(h => h.Text.Equals(Text, StringComparison.OrdinalIgnoreCase))) return selected.Text;
+            }
             return Text;
         }
         if (ctrl && key.Key == ConsoleKey.J) { Insert("\n"); return null; }

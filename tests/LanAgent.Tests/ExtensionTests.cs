@@ -30,6 +30,10 @@ public sealed class ExtensionTests
         var installer = new NuGetPluginInstaller(data); var package = await installer.ImportAsync(path);
         await using var host = new PluginHost(data); host.Save(package); await host.LoadEnabledAsync();
         var status = Assert.Single(host.Status); Assert.Null(status.Error); Assert.Equal("lanagent.example", status.Id);
+        var turn = await host.Extensions.ConfigureTurnAsync(new(Guid.NewGuid(), w.Root, false, "task", "base", ["example_clock"], []), default);
+        Assert.Contains("example_clock", turn.SystemPrompt); Assert.Contains("example-review", turn.Skills.Keys);
+        var outgoing = await host.Extensions.ConfigureRequestAsync(new(turn.SessionId, false, 1, [new("user", "task")]), default);
+        Assert.Contains(outgoing.Messages, m => m.Content == "The example plugin is active for this request.");
         var approved = 0; var registry = new ToolRegistry((_, _) => { approved++; return ValueTask.FromResult(false); }, hooks: host.Hooks); registry.Register(host.ToolSet());
         Assert.True((await registry.CallAsync("example_clock", JsonSerializer.SerializeToElement(new { }), default)).Ok);
         Assert.False((await registry.CallAsync("example_note", JsonSerializer.SerializeToElement(new { text = "must not write" }), default)).Ok); Assert.Equal(1, approved);
@@ -40,6 +44,9 @@ public sealed class ExtensionTests
         Assert.True(File.Exists(Path.Combine(data, "plugins", package.Directory, "data", "lifecycle.jsonl")));
         host.SetHookEnabled("example.audit", false); Assert.False(Assert.Single(host.HookStatus).Enabled);
         await host.SetEnabledAsync(package.PackageId, false); registry.Replace<PluginToolSet>((PluginToolSet)host.ToolSet()); Assert.Empty(registry.Definitions); Assert.Empty(host.Providers); Assert.Empty(host.Commands);
+        var disabled = await host.Extensions.ConfigureTurnAsync(new(turn.SessionId, w.Root, false, "task", "base", [], []), default);
+        Assert.Equal("base", disabled.SystemPrompt); Assert.Empty(disabled.Skills);
+        Assert.Single((await host.Extensions.ConfigureRequestAsync(new(turn.SessionId, false, 1, [new("user", "task")]), default)).Messages);
         await host.SetEnabledAsync(package.PackageId, true); Assert.Null(Assert.Single(host.Status).Error); Assert.False(Assert.Single(host.HookStatus).Enabled);
         await host.RemoveAsync(package.PackageId); Assert.Empty(host.Installed);
     }

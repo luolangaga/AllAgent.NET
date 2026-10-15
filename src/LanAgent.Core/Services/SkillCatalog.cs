@@ -22,6 +22,18 @@ public sealed class SkillCatalog(DataStore store, string workspace, string dataD
     private void Invalidate() { lock (_catalogLock) _snapshot = null; }
     public void SeedBundled()
     {
+        // Seed newly shipped skills even for installations that already have bundled:v1.
+        // Keep user edits and per-skill enable settings intact.
+        var computerPath = System.IO.Path.Combine(UserDirectory, "computer-use", "SKILL.md");
+        if (!File.Exists(computerPath))
+        {
+            var assembly = typeof(SkillCatalog).Assembly;
+            using var resource = assembly.GetManifestResourceStream("LanAgent.Core.Skills.computer-use.SKILL.md") ?? throw new InvalidOperationException("Built-in Computer Use skill is missing.");
+            using var reader = new StreamReader(resource);
+            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(computerPath)!);
+            File.WriteAllText(computerPath, reader.ReadToEnd());
+            Invalidate();
+        }
         if (store.GetSetting("skills:bundled:v1") == "seeded") return;
         foreach (var (name, description, instructions) in new[]
         {
@@ -38,6 +50,11 @@ public sealed class SkillCatalog(DataStore store, string workspace, string dataD
     }
     public IReadOnlyList<InstructionSkill> List()
     {
+        var snapshot = ListUnfiltered();
+        return LanAgent.Core.Extensions.AgentExtensionScope.Current?.SelectSkills(this, snapshot) ?? snapshot;
+    }
+    internal IReadOnlyList<InstructionSkill> ListUnfiltered()
+    {
         lock (_catalogLock)
         {
             if (_snapshot != null && Environment.TickCount64 - _refreshed < 1000) return _snapshot;
@@ -45,7 +62,7 @@ public sealed class SkillCatalog(DataStore store, string workspace, string dataD
         }
     }
     /// <summary>Display-only snapshot; rendering must not wait for filesystem discovery.</summary>
-    public IReadOnlyList<InstructionSkill> CachedList => Volatile.Read(ref _snapshot) ?? List();
+    public IReadOnlyList<InstructionSkill> CachedList => LanAgent.Core.Extensions.AgentExtensionScope.Current?.SelectSkills(this, Volatile.Read(ref _snapshot) ?? ListUnfiltered()) ?? Volatile.Read(ref _snapshot) ?? ListUnfiltered();
     private IReadOnlyList<InstructionSkill> Discover()
     {
         var found = new Dictionary<string, InstructionSkill>(StringComparer.OrdinalIgnoreCase);
@@ -196,6 +213,8 @@ public sealed class SkillCatalog(DataStore store, string workspace, string dataD
     public string ReadReference(string name, string relative, int offset = 0)
     {
         var skill = Get(name, true);
+        if (!skill.ModelInvocable) throw new ArgumentException("此技能关闭了模型调用。");
+        if (string.IsNullOrEmpty(skill.Path)) throw new ArgumentException("此插件技能没有支持文件目录。");
         var root = System.IO.Path.GetDirectoryName(skill.Path)!;
         var path = new WorkspacePolicy(root).Resolve(relative);
         if (new FileInfo(path).Length > 1_000_000) throw new ArgumentException("支持文件超过 1 MB。");

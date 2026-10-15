@@ -188,7 +188,7 @@ try:
     saved = json.loads((output / "lanagent.json").read_text(encoding="utf-8-sig"))
     assert saved["appSettings"]["terminal:spinner"] == "Dots"
     assert "启动 Hyperlight 沙箱" in "".join(raw), "Actual Status preparation not rendered"
-    proc.write("/exit\r")
+    proc.terminate(force=True)
     print(json.dumps({"ok": True, "wheel_burst_ms": wheel_ms, "drag_burst_ms": drag_ms, "checks": ["80 wheel packets without backlog", "output arrow keys scroll", "120 drag events keep latest coordinates and right copy", "message block selection excludes sidebar and adjacent messages", "file suggestions wheel and click", "native text right paste", "right copies selected input", "registered PNG clipboard right paste", "Ctrl+V DIB image paste", "empty bracketed image paste", "three real HTTP images", "actual MultiSelectionPrompt with two answers", "actual Status during VM preparation", "spinner choice persisted"], "artifacts": str(output)}))
 finally:
     (output / "requests.json").write_text(json.dumps(requests, indent=2), encoding="utf-8")

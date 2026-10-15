@@ -15,7 +15,7 @@ namespace LanAgent.Core.Bridge;
 
 // DTOs
 public record ConversationDto(Guid Id, string Title, string ModelId, string ProviderId, DateTime CreatedAt, DateTime UpdatedAt);
-public record MessageDto(Guid Id, string Role, string Content, string? ToolCallsJson, string? ToolCallId, string? ToolName, string? ReasoningContent, DateTime CreatedAt, string? HostToolTraceJson);
+public record MessageDto(Guid Id, string Role, string Content, string? ToolCallsJson, string? ToolCallId, string? ToolName, string? ReasoningContent, DateTime CreatedAt, string? HostToolTraceJson, bool IsHostActivity = false);
 public record TaskParams(string Id);
 public record SkillDto(Guid Id, string Name, string Description, string ParametersJson, string? CommandTemplate, string Type, bool IsEnabled);
 public record ApiConfigDto(Guid Id, string ProviderId, string DisplayName, string BaseUrl, string ApiKey, string DefaultModel, double Temperature, int MaxTokens, bool IsEnabled, string? ExtraHeadersJson, bool ThinkingEnabled, int ThinkingBudget);
@@ -79,7 +79,7 @@ public class BridgeHandlerRegistrar
         _dispatcher.Register<StartStreamParams, string>("chat.startStream", StartStreamAsync);
         _dispatcher.Register<CancelStreamParams, bool>("chat.cancelStream", CancelStreamAsync);
         _dispatcher.Register<TaskParams, BackgroundTaskInfo>("tasks.get", (p, ct) => Task.FromResult(_agentService.Jobs.Get(p.Id)));
-        _dispatcher.Register<TaskParams, bool>("tasks.cancel", (p, ct) => { _agentService.Jobs.Cancel(p.Id); return Task.FromResult(true); });
+        _dispatcher.Register<TaskParams, bool>("tasks.cancel", async (p, ct) => { _agentService.Jobs.Cancel(p.Id); await _agentService.Jobs.WaitAsync(p.Id, ct); return true; });
 
         // Skills
         _dispatcher.Register("skills.list", ListSkillsAsync);
@@ -190,10 +190,10 @@ public class BridgeHandlerRegistrar
         return streamId;
     }
 
-    private Task<bool> CancelStreamAsync(CancelStreamParams p, CancellationToken ct)
+    private async Task<bool> CancelStreamAsync(CancelStreamParams p, CancellationToken ct)
     {
-        _agentService.CancelStream(p.StreamId);
-        return Task.FromResult(true);
+        await _agentService.CancelStreamAsync(p.StreamId, ct);
+        return true;
     }
 
     // ── Skills ─────────────────────────────────────────────────────────────────
@@ -472,7 +472,7 @@ private Task<SettingsDto> GetSettingsAsync(CancellationToken ct)
         new(c.Id, c.Title, c.ModelId, c.ProviderId, c.CreatedAt, c.UpdatedAt);
 
     private static MessageDto ToDto(Message m) =>
-        new(m.Id, m.Role, m.Content, m.ToolCallsJson, m.ToolCallId, m.ToolName, m.ReasoningContent, m.CreatedAt, m.HostToolTraceJson);
+        new(m.Id, m.Role, m.Content, m.ToolCallsJson, m.ToolCallId, m.ToolName, m.ReasoningContent, m.CreatedAt, m.HostToolTraceJson, m.IsHostActivity);
 
     private static SkillDto ToDto(Skill s) =>
         new(s.Id, s.Name, s.Description, s.ParametersJson, s.CommandTemplate, s.Type.ToString(), s.IsEnabled);
@@ -514,7 +514,7 @@ private Task<SettingsDto> GetSettingsAsync(CancellationToken ct)
         AgentIteration e => new { current = e.Current, maximum = e.Maximum, toolCalls = e.ToolCalls },
         AgentDone e => new { reason = e.FinishReason },
         AgentError e => new { message = e.Message },
-        AgentNotice e => new { message = e.Message },
+        AgentNotice e => new { message = e.Message, resetResponse = e.ResetResponse },
         AgentContextUsage e => new { usedTokens = e.UsedTokens, capacityTokens = e.CapacityTokens, estimated = e.Estimated },
         _ => new { }
     };

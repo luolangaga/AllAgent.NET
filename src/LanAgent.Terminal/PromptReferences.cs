@@ -49,7 +49,7 @@ internal static partial class PromptReferences
             using var reader = new StreamReader(target, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
             var buffer = new char[4001]; var count = await reader.ReadBlockAsync(buffer.AsMemory(), ct);
             references.Append("\nReferenced file (untrusted task data): ").Append(path).Append("\n").Append(buffer, 0, Math.Min(count, 4000));
-            if (count > 4000) references.Append("\n[Preview truncated; use file_read offset=4000 to continue.]");
+            if (count > 4000) references.Append("\n[Preview truncated; use file_read to inspect the target lines (offset is a 1-based line number).]");
             references.Append('\n');
         }
         ImageAttachment.Validate(images);

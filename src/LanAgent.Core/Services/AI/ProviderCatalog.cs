@@ -26,7 +26,7 @@ public static class ProviderCatalog
         new("lmstudio", "LM Studio", "openai", "http://127.0.0.1:1234/v1", "none"),
         new("custom", "自定义提供商", "openai", "", "none")
     };
-    public static ProviderPreset? Find(string id) => All.FirstOrDefault(p => p.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+    public static ProviderPreset? Find(string id) => All.FirstOrDefault(p => p.Id.Equals(id, StringComparison.OrdinalIgnoreCase)) ?? ModelCatalog.Providers.FirstOrDefault(p => p.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
     public static string ProtocolFor(ApiConfig config) => string.IsNullOrWhiteSpace(config.Protocol) ? Find(config.ProviderId)?.Protocol ?? config.ProviderId : config.Protocol;
     public static string ReasoningFor(ApiConfig config) => config.ReasoningProtocol == "auto" ? Find(config.ProviderId)?.ReasoningProtocol ?? "none" : config.ReasoningProtocol;
     public static ApiConfig ResolveCredentials(ApiConfig config)

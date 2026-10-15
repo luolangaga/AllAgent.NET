@@ -8,8 +8,9 @@ public static class ModelDiscovery
 {
     public static async Task<IReadOnlyList<ModelInfo>> ListAsync(ApiConfig original, CancellationToken ct = default)
     {
+        await ModelCatalog.RefreshAsync(ct);
         var config = ProviderCatalog.ResolveCredentials(original);
-        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
+        using var http = ModelHttpClient.Create(TimeSpan.FromSeconds(20));
         var protocol = ProviderCatalog.ProtocolFor(config);
         var root = config.BaseUrl.TrimEnd('/');
         if (!Uri.TryCreate(root, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https")) throw new ArgumentException("Base URL 必须是 HTTP(S) 地址。");
@@ -29,7 +30,9 @@ public static class ModelDiscovery
             foreach (var item in items)
             {
                 var id = protocol == "gemini" ? item?["name"]?.GetValue<string>()?.Replace("models/", "") : item?["id"]?.GetValue<string>();
-                if (!string.IsNullOrWhiteSpace(id)) models.Add(new(id, item?["display_name"]?.GetValue<string>() ?? item?["displayName"]?.GetValue<string>() ?? id));
+                if (!string.IsNullOrWhiteSpace(id)) models.Add(new(id, item?["display_name"]?.GetValue<string>() ?? item?["displayName"]?.GetValue<string>() ?? id,
+                    (int?)(item?["inputTokenLimit"] ?? item?["context_length"] ?? item?["context_window"]),
+                    (int?)(item?["outputTokenLimit"] ?? item?["top_provider"]?["max_completion_tokens"] ?? item?["max_output_tokens"])));
             }
             var token = node?["nextPageToken"]?.GetValue<string>();
             var last = node?["last_id"]?.GetValue<string>();

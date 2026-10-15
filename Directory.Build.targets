@@ -1,10 +1,37 @@
 <Project>
-  <Target Name="CopyAgentSandboxFiles" AfterTargets="Build" Condition="'$(CopyAgentSandbox)' == 'true'">
-    <PropertyGroup>
-      <AgentSandboxBuildDirectory>$(MSBuildThisFileDirectory)src/LanAgent.Sandbox/bin/$(Configuration)/net8.0/$(RuntimeIdentifier)/</AgentSandboxBuildDirectory>
-    </PropertyGroup>
+  <Target Name="CopyComputerWorkerFiles" AfterTargets="Build" Condition="'$(CopyComputerWorker)' == 'true'">
+    <MSBuild Projects="$(MSBuildThisFileDirectory)src/LanAgent.ComputerUse/LanAgent.ComputerUse.csproj" Targets="GetTargetPath" Properties="Configuration=$(Configuration);RuntimeIdentifier=$(RuntimeIdentifier)">
+      <Output TaskParameter="TargetOutputs" ItemName="ComputerWorkerTarget" />
+    </MSBuild>
+    <PropertyGroup><ComputerWorkerBuildDirectory>@(ComputerWorkerTarget->'%(RootDir)%(Directory)')</ComputerWorkerBuildDirectory></PropertyGroup>
+    <Error Condition="'$(ComputerWorkerBuildDirectory)' == '' or !Exists('$(ComputerWorkerBuildDirectory)LanAgent.ComputerUse.dll')" Text="Computer worker build output is missing; build its project before copying." />
     <ItemGroup>
-      <AgentSandboxFiles Include="$(AgentSandboxBuildDirectory)**/*" Exclude="$(AgentSandboxBuildDirectory)win-x64/**/*;$(AgentSandboxBuildDirectory)linux-x64/**/*" />
+      <!-- Old build directories may still contain the withdrawn sidecar. Never propagate it. -->
+      <ComputerWorkerFiles Include="$(ComputerWorkerBuildDirectory)**/*" Exclude="$(ComputerWorkerBuildDirectory)pi/**/*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(ComputerWorkerFiles)" DestinationFiles="@(ComputerWorkerFiles->'$(OutDir)computer/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="IncludeComputerWorkerPublishFiles" AfterTargets="ComputeFilesToPublish" Condition="'$(CopyComputerWorker)' == 'true'">
+    <PropertyGroup><ComputerWorkerPublishDirectory>$(MSBuildProjectDirectory)/obj/$(Configuration)/$(TargetFramework)/computer-publish/</ComputerWorkerPublishDirectory></PropertyGroup>
+    <MSBuild Projects="$(MSBuildThisFileDirectory)src/LanAgent.ComputerUse/LanAgent.ComputerUse.csproj" Targets="Publish" Properties="Configuration=$(Configuration);PublishDir=$(ComputerWorkerPublishDirectory);CopyComputerWorker=false;PublishSingleFile=false;SelfContained=$(SelfContained);RuntimeIdentifier=$(RuntimeIdentifier)" />
+    <ItemGroup>
+      <ComputerWorkerPublishFiles Include="$(ComputerWorkerPublishDirectory)**/*" Exclude="$(ComputerWorkerPublishDirectory)pi/**/*" />
+      <ResolvedFileToPublish Include="@(ComputerWorkerPublishFiles)">
+        <RelativePath>computer/%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+  <Target Name="CopyAgentSandboxFiles" AfterTargets="Build" Condition="'$(CopyAgentSandbox)' == 'true'">
+    <MSBuild Projects="$(MSBuildThisFileDirectory)src/LanAgent.Sandbox/LanAgent.Sandbox.csproj" Targets="GetTargetPath" Properties="Configuration=$(Configuration);RuntimeIdentifier=$(RuntimeIdentifier)">
+      <Output TaskParameter="TargetOutputs" ItemName="AgentSandboxTarget" />
+    </MSBuild>
+    <PropertyGroup>
+      <AgentSandboxBuildDirectory>@(AgentSandboxTarget->'%(RootDir)%(Directory)')</AgentSandboxBuildDirectory>
+    </PropertyGroup>
+    <Error Condition="'$(AgentSandboxBuildDirectory)' == '' or !Exists('$(AgentSandboxBuildDirectory)LanAgent.Sandbox.dll')" Text="Hyperlight worker build output is missing; build its project before copying." />
+    <ItemGroup>
+      <AgentSandboxFiles Include="$(AgentSandboxBuildDirectory)**/*" Exclude="$(AgentSandboxBuildDirectory)pi/**/*;$(AgentSandboxBuildDirectory)win-x64/**/*;$(AgentSandboxBuildDirectory)linux-x64/**/*" />
     </ItemGroup>
     <Copy SourceFiles="@(AgentSandboxFiles)" DestinationFiles="@(AgentSandboxFiles->'$(OutDir)sandbox/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
   </Target>

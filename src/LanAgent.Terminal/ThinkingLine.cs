@@ -5,13 +5,13 @@ using Spectre.Console.Rendering;
 namespace LanAgent.Terminal;
 
 /// <summary>One physical row, even for streamed multiline reasoning and wide Unicode characters.</summary>
-internal sealed class ThinkingLine(string thought, long elapsedMilliseconds, string prefix = "思考 › ") : IRenderable
+internal sealed class ThinkingLine(string thought, long elapsedMilliseconds, string prefix = "思考 › ", string hint = "") : IRenderable
 {
     public Measurement Measure(RenderOptions options, int maxWidth) => new(maxWidth, maxWidth);
     public IEnumerable<Segment> Render(RenderOptions options, int maxWidth)
     {
         var lines = TerminalSafeText.Clean(thought).Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
-        var suffix = $" ({lines.Length} 行)";
+        var suffix = $" ({lines.Length} 行)" + (maxWidth >= 50 ? hint : "");
         var suffixWidth = new Segment(suffix).CellCount();
         var prefixWidth = new Segment(prefix).CellCount();
         var width = maxWidth - prefixWidth - suffixWidth;

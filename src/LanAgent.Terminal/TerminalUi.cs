@@ -18,12 +18,12 @@ internal sealed class ToolsApproval(TerminalUi ui)
     public async ValueTask<bool> ApproveAsync(ToolApprovalRequest request, CancellationToken ct)
     {
         if (PlanMode && request.Risk != ToolRisk.Read) return false;
-        if (PlanMode && request.Name == "external_directory" && request.Arguments.GetProperty("operation").GetString() is not ("file_read" or "list_directory")) return false;
+        if (PlanMode && request.Name == "external_directory" && request.Arguments.GetProperty("operation").GetString() is not ("file_read" or "file_search" or "file_glob" or "list_directory")) return false;
         if (FullAccess && !request.RequiresExplicitApproval) { Checkpoints?.MarkExternalAction(); return true; }
         if (request.Preapproved && !request.RequiresExplicitApproval) return true;
         if (!ui.Interactive || ui.Json) return false;
         var allowed = await ui.RequestApprovalAsync(request, ct);
-        if (allowed && request.Name.StartsWith("mcp_", StringComparison.Ordinal)) Checkpoints?.MarkExternalAction();
+        if (allowed && (request.Name.StartsWith("mcp_", StringComparison.Ordinal) || request.Name.StartsWith("computer_", StringComparison.Ordinal))) Checkpoints?.MarkExternalAction();
         return allowed;
     }
 }
@@ -198,7 +198,7 @@ internal sealed class TerminalUi(bool json, bool verbose)
                         {
                             if (_cancelConfirmation.Read(key)) cancelled.Cancel();
                         }
-                        else if (key.Modifiers.HasFlag(ConsoleModifiers.Control) && key.Key == ConsoleKey.O) Verbose = !Verbose;
+                        else if (key.Modifiers.HasFlag(ConsoleModifiers.Control) && key.Key == ConsoleKey.O) { if (_thought.Length > 0 && ShowThinking) FullScreenTerminal.Current?.InspectThought(_thought.ToString()); else FullScreenTerminal.Current?.InspectLatestThought(); }
                         else if (key.Modifiers.HasFlag(ConsoleModifiers.Control) && key.Key == ConsoleKey.C) cancelled.Cancel();
                         else
                         {
@@ -306,10 +306,10 @@ internal sealed class TerminalUi(bool json, bool verbose)
         if (_answer.Length > 0) rows.Add(new Text("● " + _answer));
         if (ShowThinking && _thought.Length > 0)
         {
-            rows.Add(new ThinkingLine(_thought.ToString(), _elapsed.ElapsedMilliseconds));
+            rows.Add(new ThinkingLine(_thought.ToString(), _elapsed.ElapsedMilliseconds, hint: " [Ctrl+O 展开]"));
         }
         rows.Add(new Markup($"[#7dcfff]{glyph} {Markup.Escape(_stage)}…[/] [dim]({(int)_elapsed.Elapsed.TotalSeconds}s · {_toolCalls} 个工具)[/]"));
-        rows.Add(new Text(_cancelConfirmation.Armed ? "  再次按 Esc 确认停止当前任务" : "  双击 Esc / Ctrl+C 停止 · Ctrl+E 执行详情 · 输入下一条任务并回车可排队", new Style(Color.Grey)));
+        rows.Add(new Text(_cancelConfirmation.Armed ? "  再次按 Esc 确认停止当前任务" : "  双击 Esc / Ctrl+C 停止 · Ctrl+O 思考详情 · Ctrl+E 执行详情 · 输入下一条任务并回车可排队", new Style(Color.Grey)));
         if (Inbox?.Label is { Length: > 0 } inboxLabel) rows.Add(new Text("  " + inboxLabel + " · /steer 内容更新当前任务", new Style(Color.Cyan1)));
         if (_queued.Text.Length > 0) rows.Add(new Text("  下一条 › " + _queued.Text, new Style(Color.Cyan1)));
         return new Rows(rows);
@@ -328,6 +328,7 @@ internal sealed class TerminalUi(bool json, bool verbose)
             switch (evt)
             {
                 case TokenDelta token:
+                    FlushThinking();
                     _stage = "回答中";
                     if (_live) _answer.Append(token.Text); else { TerminalOutput.Write(new Text(token.Text)); _plainStreaming = true; } break;
                 case ThinkingDelta thought:
@@ -335,10 +336,10 @@ internal sealed class TerminalUi(bool json, bool verbose)
                     _thought.Append(thought.Text);
                     break;
                 case AgentIteration iteration:
-                    _toolCalls = iteration.ToolCalls; _stage = "思考中"; _thought.Clear();
+                    FlushThinking(); _toolCalls = iteration.ToolCalls; _stage = "思考中";
                     if (!_live) { EndText(); TerminalOutput.MarkupLine("[#7dcfff]" + Markup.Escape(LoadingIndicator.Frame(_elapsed.ElapsedMilliseconds)) + " 正在思考[/]"); } break;
                 case ToolCallStarted started:
-                    FlushAnswer(); EndText(); _stage = "执行工具";
+                    FlushThinking(); FlushAnswer(); EndText(); _stage = "执行工具";
                     if (started.ToolName == "execute_code")
                     {
                         using var args = JsonDocument.Parse(started.ArgsJson);
@@ -372,12 +373,12 @@ internal sealed class TerminalUi(bool json, bool verbose)
                         if (!ok) { var error = root.TryGetProperty("error", out var message) ? message.GetString() : "操作失败"; TerminalOutput.Write(ToolFailure(error ?? "操作失败")); }
                         else if (completed.ToolName != "execute_code" || Verbose)
                         {
-                            var summary = ResultSummary(root, Verbose);
+                            var summary = ResultSummary(root, Verbose, completed.ToolName);
                             TerminalOutput.Write(new Text("  ⎿ " + summary + "\n", new Style(Color.Grey)));
                         }
                     }
                     _stage = "思考中"; break;
-                case AgentError error: FlushAnswer(); EndText(); Error(error.Message); break;
+                case AgentError error: FlushThinking(); FlushAnswer(); EndText(); Error(error.Message); break;
                 case AgentInputAdmitted input:
                     FlushAnswer(); EndText();
                     if (FullScreenTerminal.Current is { } inputScreen) inputScreen.UserMessage(SessionTimeline.Text(input.Message));
@@ -390,7 +391,7 @@ internal sealed class TerminalUi(bool json, bool verbose)
                 case AgentContextUsage usage:
                     ContextUsedTokens = usage.UsedTokens; ContextCapacityTokens = usage.CapacityTokens; ContextEstimated = usage.Estimated; break;
                 case AgentDone done:
-                    FlushAnswer(); EndText(); LastReason = done.FinishReason; _thought.Clear();
+                    FlushThinking(); FlushAnswer(); EndText(); LastReason = done.FinishReason;
                     var label = done.FinishReason switch { "stop" or "STOP" => "完成", "cancelled" => "已取消", "timeout" => "运行超时", "tool_limit" => "已到工具上限", "context_limit" => "已到上下文上限", "protocol_error" => "调用协议错误 · 已停止", _ => done.FinishReason };
                     TerminalOutput.Write(new Text($"\n  {label}" + (_live ? $" · {_elapsed.Elapsed.TotalSeconds:F1}s" : "") + "\n", new Style(Color.Grey))); break;
             }
@@ -399,11 +400,13 @@ internal sealed class TerminalUi(bool json, bool verbose)
     }
     internal static string ToolLabel(string name, string argsJson)
     {
+        if (name.StartsWith("computer_", StringComparison.Ordinal)) return ComputerUsePresentation.Title(name, argsJson);
         using var doc = JsonDocument.Parse(argsJson); var args = doc.RootElement;
         string Get(string key) => args.TryGetProperty(key, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() ?? "" : "";
         return name switch
         {
-            "file_read" => "读取 " + Get("path"), "file_write" => "写入 " + Get("path"), "file_edit" => "修改 " + Get("path"), "list_directory" => "查看目录 " + Get("path"),
+            "memory_update" => "学习本轮经验", "author_profile_update" => "维护作者档案",
+            "file_search" => "搜索 " + Get("pattern") + " in " + Get("path"), "file_read" => "读取 " + Get("path"), "file_write" => "写入 " + Get("path"), "file_edit" => "修改 " + Get("path"), "list_directory" => "查看目录 " + Get("path"),
             "run_shell" => (args.TryGetProperty("background", out var background) && background.ValueKind == JsonValueKind.True ? "后台命令 " : "运行命令 ") + Get("exe") + (args.TryGetProperty("args", out var argv) ? " " + ToolResult.Clip(string.Join(' ', argv.EnumerateArray().Select(a => a.GetString())), 160) : ""),
             "start_agent" => "启动子代理", "agent_status" => "子代理进度", "wait_agent" => "等待子代理", "cancel_agent" => "停止子代理",
             "shell_status" => "后台命令进度", "cancel_shell" => "停止后台命令",
@@ -411,11 +414,16 @@ internal sealed class TerminalUi(bool json, bool verbose)
         };
     }
     internal static Text ToolFailure(string message) => new("  ✕ " + message + "\n", new Style(Color.Red));
-    internal static string ResultSummary(JsonElement result, bool details)
+    internal static string ResultSummary(JsonElement result, bool details, string? toolName = null)
     {
+        if (toolName?.StartsWith("computer_", StringComparison.Ordinal) == true) return ComputerUsePresentation.Summary(toolName, result);
         if (!result.TryGetProperty("data", out var data)) return "完成";
         if (data.ValueKind == JsonValueKind.Object)
         {
+            if (toolName is "memory_update" or "author_profile_update")
+                return (data.TryGetProperty("summary", out var summary) ? summary.GetString() : "完成") +
+                    (data.TryGetProperty("learned", out var learned) && learned.GetArrayLength() > 0 ? "\n" + string.Join("\n", learned.EnumerateArray().Select(line => "    " + line.GetString())) : "");
+            if (data.TryGetProperty("matches", out var matches)) return "找到 " + matches.GetArrayLength() + " 行匹配";
             if (data.TryGetProperty("characters", out var size)) return "已写入 " + size + " 字符";
             if (data.TryGetProperty("stdout", out var stdout) && stdout.ValueKind == JsonValueKind.String) return ToolResult.Clip(stdout.GetString(), details ? ToolResult.MaxOutputCharacters : 250).Trim();
             if (data.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.String) return details ? ToolResult.Clip(content.GetString()) : "已读取 " + content.GetString()!.Length + " 字符";
@@ -426,6 +434,18 @@ internal sealed class TerminalUi(bool json, bool verbose)
     public void Error(string text)
     {
         if (Json) Console.Error.WriteLine(JsonSerializer.Serialize(new { error = text })); else TerminalOutput.Write(new Text("! " + text + "\n", new Style(Color.Red)));
+    }
+    private void FlushThinking()
+    {
+        if (_thought.Length == 0) return;
+        if (ShowThinking)
+        {
+            var block = new CodeExecutionBlock("thought-" + Guid.NewGuid().ToString("N"), _thought.ToString(), reasoning: true);
+            FullScreenTerminal.Current?.RegisterExecution(block);
+            TerminalOutput.Write(block);
+            if (FullScreenTerminal.Current == null) TerminalOutput.WriteLine();
+        }
+        _thought.Clear();
     }
     private void FlushAnswer() { if (_answer.Length == 0) return; TerminalOutput.Write(TerminalMarkdown.Message("LanAgent", _answer.ToString(), false)); TerminalOutput.WriteLine(); _answer.Clear(); }
     private void EndText() { if (_plainStreaming) { TerminalOutput.WriteLine(); _plainStreaming = false; } }

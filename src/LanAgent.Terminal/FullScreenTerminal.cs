@@ -9,7 +9,7 @@ using Spectre.Console.Rendering;
 
 namespace LanAgent.Terminal;
 
-/// <summary>Spectre.Console Layout and Live host; standard Spectre prompts share one output owner.</summary>
+/// <summary>Spectre.Console layout with row-diff output; standard prompts share one output owner.</summary>
 internal sealed class FullScreenTerminal : IDisposable
 {
     public static FullScreenTerminal? Current { get; private set; }
@@ -77,7 +77,7 @@ internal sealed class FullScreenTerminal : IDisposable
     public FullScreenTerminal(DataStore store, SkillCatalog skills, McpToolService mcp, TerminalUi ui, IAnsiConsole? console = null)
     {
         _store = store; _skills = skills; _mcp = mcp; _ui = ui; _native = console ?? AnsiConsole.Console;
-        _display = new(_native);
+        _display = new(_native, fullScreen: true);
         Theme = TerminalTheme.Get(store.GetSetting("terminal:theme"));
         _cancelHandler = (_, e) => { e.Cancel = true; _promptCancellation?.Cancel(); };
     }
@@ -109,8 +109,21 @@ internal sealed class FullScreenTerminal : IDisposable
             }
             if (!message.IsInternal && message.Images.Count > 0)
                 _transcript.Add(ImageAttachmentsView.Render(message.Images));
+            if (!message.IsInternal && _ui.ShowThinking && message.ReasoningContent is { Length: > 0 } thought)
+            {
+                var thinking = new CodeExecutionBlock("thought-" + message.Id, thought, reasoning: true);
+                RegisterExecution(thinking); _transcript.Add(thinking);
+            }
             try
             {
+                if (message.IsHostActivity && message.HostToolTraceJson != null)
+                    foreach (var trace in JsonSerializer.Deserialize<HostToolTrace[]>(message.HostToolTraceJson, LanAgent.Core.Tools.ToolResult.JsonOptions) ?? [])
+                    {
+                        using var result = JsonDocument.Parse(trace.ResultJson);
+                        var ok = result.RootElement.TryGetProperty("ok", out var success) && success.GetBoolean();
+                        var summary = ok ? TerminalUi.ResultSummary(result.RootElement, false, trace.ToolName) : result.RootElement.GetProperty("error").GetString() ?? "更新失败";
+                        _transcript.Add(new Panel(new Text(TerminalSafeText.Clean(summary))).Header(TerminalUi.ToolLabel(trace.ToolName, trace.ArgsJson)));
+                    }
                 if (message.Role == "assistant" && message.ToolCallsJson != null)
                 {
                     using var calls = JsonDocument.Parse(message.ToolCallsJson);
@@ -150,9 +163,15 @@ internal sealed class FullScreenTerminal : IDisposable
     }
     internal bool InspectLatest()
     {
-        if (_executions.Values.LastOrDefault() is not { } block) return false;
+        if (_executions.Values.LastOrDefault(b => !b.IsReasoning) is not { } block) return false;
         OpenInspector(block, -1); return true;
     }
+    internal bool InspectLatestThought()
+    {
+        if (_executions.Values.LastOrDefault(b => b.IsReasoning) is not { } block) return false;
+        OpenInspector(block, -1); return true;
+    }
+    internal void InspectThought(string text) => OpenInspector(new CodeExecutionBlock("live-thought", text, reasoning: true), -1);
     private void OpenInspector(CodeExecutionBlock block, int span) { _inspector = (block, span); _inspectorScroll = _inspectorSelection = 0; }
     private void CloseInspector() { _inspector = null; _inspectorScroll = _inspectorSelection = 0; }
     internal bool InspectorInput(TerminalInput input)
@@ -381,14 +400,18 @@ internal sealed class FullScreenTerminal : IDisposable
         var now = Environment.TickCount64;
         if (_cachedSidebar != null && now - _sidebarTime < 1000) return _cachedSidebar;
         _sidebarTime = now;
-        var sessions = SessionOperations.MainSessions(_store).Take(5).ToArray();
+        var sessions = SessionOperations.MainSessions(_store, _ui.Workspace).Take(5).ToArray();
         var c = _store.GetConversation(SessionId);
         var messages = _store.GetMessages(SessionId); var characters = messages.Sum(m => m.Content.Length + (m.ToolCallsJson?.Length ?? 0));
         var cacheRate = c is { CacheUsageRequests: > 0, CacheInputTokens: > 0 }
             ? $"{Math.Min(c.CachedInputTokens, c.CacheInputTokens) * 100.0 / c.CacheInputTokens:F1}%"
             : "暂无数据";
         var rows = new List<IRenderable> { new Markup("[bold]会话信息[/]"), new Text(Model, new Style(Accent)).Fold(), new Text("模型缓存命中率 · " + cacheRate, new Style(Color.Grey)), new Text($"{messages.Count} 条消息 · {characters:N0} 字符\n上下文为字符估算", new Style(Color.Grey)), new Rule().RuleStyle("grey"), new Markup("[bold]最近会话 [dim]F3[/][/]") };
-        foreach (var session in sessions) rows.Add(new Text((session.Id == SessionId ? "› " : "  ") + SessionOperations.SingleLineTitle(session.Title), new Style(session.Id == SessionId ? Accent : Color.Grey)).Crop());
+        for (var index = 0; index < sessions.Length; index++)
+        {
+            var session = sessions[index];
+            rows.Add(new SingleLineText((session.Id == SessionId ? "› " : "  ") + (index + 1) + ". " + SessionOperations.SingleLineTitle(session.Title), new Style(session.Id == SessionId ? Accent : Color.Grey)));
+        }
         rows.Add(new Rule().RuleStyle("grey")); rows.Add(new Markup("[bold]扩展[/]"));
         if (DateTime.UtcNow - _skillsChecked > TimeSpan.FromSeconds(1)) { _enabledSkills = _skills.CachedList.Count(s => s.Enabled); _skillsChecked = DateTime.UtcNow; }
         rows.Add(new Text($"Skills · {_enabledSkills} 个启用  [F4]", new Style(Color.Grey)));
@@ -431,7 +454,7 @@ internal sealed class FullScreenTerminal : IDisposable
             var segments = RenderFrame(width, height);
             if (_lastWidth == width && _lastHeight == height && _lastSegments?.Length == segments.Length && segments.Zip(_lastSegments).All(s => s.First.Text == s.Second.Text && s.First.Style.Equals(s.Second.Style))) return;
             _lastSegments = segments; _lastWidth = width; _lastHeight = height;
-            _display.Update(new SegmentFrame(segments, width));
+            _display.Update(segments, width, height);
         }
     }
     internal Segment[] RenderFrame(int width, int height)
@@ -500,10 +523,7 @@ internal sealed class FullScreenTerminal : IDisposable
     }
     public async Task<T> BusyAsync<T>(string title, Func<CancellationToken, Task<T>> action, CancellationToken ct = default, Func<string>? titleProvider = null, bool allowEscape = false)
     {
-        // Environment installation can itself ask for permission; keep that flow in the shared live host.
-        if (!allowEscape && !title.Contains("环境", StringComparison.Ordinal))
-            return await WithPromptAsync(token => _native.Status().Spinner(LoadingIndicator.Current).SpinnerStyle(new Style(Accent))
-                .StartAsync(Markup.Escape(title + " · Ctrl+C 取消"), async _ => await action(token)), ct);
+        // Actions may open prompts; use our display owner instead of nesting Spectre Status/Live scopes.
         using var cancelled = CancellationTokenSource.CreateLinkedTokenSource(ct);
         ConsoleCancelEventHandler handler = (_, e) => { e.Cancel = true; cancelled.Cancel(); };
         Console.CancelKeyPress += handler;
@@ -541,10 +561,16 @@ internal sealed class FullScreenTerminal : IDisposable
             while (!cancel.IsCancellationRequested)
             {
                 SetInput(state, editor.Hints(state), status); Draw();
+                var nextIdleRefresh = Environment.TickCount64 + 100;
                 while (!input.HasInput && !cancel.IsCancellationRequested)
                 {
                     if (editor.WakeRequested?.Invoke() == true) { _ui.Draft = state.Text; editor.InterruptedDraft = state.Text; return ""; }
-                    await Task.Delay(8, cancel.Token); SetInput(state, editor.Hints(state), status); Draw();
+                    await Task.Delay(8, cancel.Token);
+                    if (Environment.TickCount64 >= nextIdleRefresh)
+                    {
+                        SetInput(state, editor.Hints(state), status); Draw();
+                        nextIdleRefresh = Environment.TickCount64 + 100;
+                    }
                 }
                 var key = await ReadKeyAsync(input, cancel.Token);
                 var queueChord = key.Paste == null ? queueShortcut.Read(key.Key, state.HasSelection, timeline: true) : 0;
@@ -566,6 +592,7 @@ internal sealed class FullScreenTerminal : IDisposable
                     continue;
                 }
                 if (InspectorInput(key)) continue;
+                if (key.Key.Key == ConsoleKey.O && key.Key.Modifiers.HasFlag(ConsoleModifiers.Control) && InspectLatestThought()) continue;
                 if (key.Key.Key == ConsoleKey.E && key.Key.Modifiers.HasFlag(ConsoleModifiers.Control) && InspectLatest()) continue;
                 if (key.Paste != null) { await editor.PasteAsync(state, key.Paste, cancel.Token); continue; }
                 if (await ContextClickAsync(key, state, text => editor.PasteAsync(state, text, cancel.Token))) continue;
@@ -576,7 +603,7 @@ internal sealed class FullScreenTerminal : IDisposable
                 string? shortcut = null;
                 try
                 {
-                    shortcut = key.Key.Key switch { ConsoleKey.F1 => await MenuAsync(cancel.Token), ConsoleKey.F2 => "/model", ConsoleKey.F3 => "/resume", ConsoleKey.F4 => "/skills", ConsoleKey.F5 => "/mcp", ConsoleKey.F6 => "/effort", _ => null };
+                    shortcut = key.Key.Key switch { ConsoleKey.F1 => await MenuAsync(cancel.Token), ConsoleKey.F2 => "/model", ConsoleKey.F3 => "/session", ConsoleKey.F4 => "/skills", ConsoleKey.F5 => "/mcp", ConsoleKey.F6 => "/effort", _ => null };
                     if (key.Key.Key == ConsoleKey.P && key.Key.Modifiers.HasFlag(ConsoleModifiers.Control)) shortcut = await PaletteAsync(editor, cancel.Token);
                     if (key.Key.Key == ConsoleKey.T && key.Key.Modifiers.HasFlag(ConsoleModifiers.Control)) shortcut = "/effort next";
                 }
@@ -592,7 +619,7 @@ internal sealed class FullScreenTerminal : IDisposable
     }
     private async Task<string?> MenuAsync(CancellationToken ct)
     {
-        var entries = new[] { ("继续聊天", ""), ("开始新任务", "/new"), ("恢复历史会话", "/resume"), ("选择 / 配置模型", "/model"), ("账号登录", "/login"), ("子代理与后台任务", "/tasks"), ("撤销上一轮任务", "/undo"), ("权限模式", "/permissions"), ("显示与主题设置", "/settings"), ("全部操作与快捷键", "/help all"), ("退出并保留会话", "/exit") };
+        var entries = new[] { ("继续聊天", ""), ("开始新任务", "/new"), ("恢复历史会话", "/session"), ("选择 / 配置模型", "/model"), ("账号登录", "/login"), ("子代理与后台任务", "/tasks"), ("撤销上一轮任务", "/undo"), ("权限模式", "/permissions"), ("显示与主题设置", "/settings"), ("全部操作与快捷键", "/help all") };
         var selected = await ChooseAsync("操作菜单", entries, e => e.Item1, ct); return selected.Item2.Length > 0 ? selected.Item2 : null;
     }
     private async Task<string?> PaletteAsync(InputEditor editor, CancellationToken ct)
@@ -747,8 +774,8 @@ internal sealed class FullScreenTerminal : IDisposable
             if (empty) prompt.AllowEmpty();
             else prompt.Validate(value => !string.IsNullOrWhiteSpace(value), "[yellow]此项不能为空。[/]");
             if (secret) prompt.Secret('•').HideDefaultValue();
-            else if (defaultValue != null) prompt.DefaultValue(defaultValue).EditableDefaultValue(true);
-            return await new SpectrePromptConsole(_native, _entered ? _keys : null).PromptAsync(prompt, token);
+            else if (defaultValue != null) prompt.DefaultValue(defaultValue);
+            return await new SpectrePromptConsole(_native, _entered ? _keys : null, secret ? null : defaultValue).PromptAsync(prompt, token);
         }, ct);
     }
     public async Task<bool> ConfirmAsync(string title, CancellationToken ct = default) => await ChooseAsync(title, new[] { "返回 / 拒绝", "确认" }, c => c, ct) == "确认";
@@ -798,7 +825,7 @@ internal sealed class SegmentFrame(IReadOnlyList<Segment> segments, int width) :
         void Flush() { if (text.Length == 0) return; result.Add(new(text.ToString(), style!.Value)); text.Clear(); }
         foreach (var segment in source)
         {
-            if (segment.Text.Contains('\n') || segment.Text.Contains('\r')) { Flush(); result.Add(segment); style = null; continue; }
+            if (segment.IsControlCode || segment.Text.Contains('\n') || segment.Text.Contains('\r')) { Flush(); result.Add(segment); style = null; continue; }
             if (style == null || !style.Equals(segment.Style)) { Flush(); style = segment.Style; }
             text.Append(segment.Text);
         }

@@ -65,7 +65,7 @@ try:
     content = export.read_text(encoding="utf-8")
     assert "PARENT-NAVIGATION-PROOF" in content and "CHILD-NAVIGATION-PROOF" not in content
     (output / "parent-screen.txt").write_text(screen_text(), encoding="utf-8")
-    send("/exit")
+    proc.terminate(force=True)
     print(json.dumps({"ok": True, "checks": ["child navigation", "parent navigation", "Markdown export"], "artifacts": str(output)}))
 finally:
     (output / "terminal.raw.txt").write_text("".join(raw), encoding="utf-8")

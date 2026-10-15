@@ -15,7 +15,7 @@ internal sealed class TaskManager(BackgroundTasks tasks, TerminalUi ui, DataStor
             TerminalOutput.Write(table); TerminalOutput.Write(new Text("直接聊天让 AI 派发子代理 · /background 任务 · /tasks show ID · approve ID · answer ID · cancel ID · /resume 会话ID\n"));
         });
     }
-    private static string State(BackgroundTaskState state) => state switch { BackgroundTaskState.Queued => "排队", BackgroundTaskState.Running => "运行中", BackgroundTaskState.AwaitingApproval => "[yellow]等待授权[/]", BackgroundTaskState.AwaitingAnswer => "[yellow]等待回答[/]", BackgroundTaskState.Completed => "[green]完成[/]", BackgroundTaskState.Cancelled => "已取消", BackgroundTaskState.Interrupted => "退出中断", _ => "[red]失败[/]" };
+    private static string State(BackgroundTaskState state) => state switch { BackgroundTaskState.Queued => "排队", BackgroundTaskState.Running => "运行中", BackgroundTaskState.Cancelling => "正在停止", BackgroundTaskState.AwaitingApproval => "[yellow]等待授权[/]", BackgroundTaskState.AwaitingAnswer => "[yellow]等待回答[/]", BackgroundTaskState.Completed => "[green]完成[/]", BackgroundTaskState.Cancelled => "已取消", BackgroundTaskState.Interrupted => "退出中断", _ => "[red]失败[/]" };
     public async Task ExecuteAsync(IReadOnlyList<string> words)
     {
         var action = words.FirstOrDefault() ?? (ui.Interactive && !ui.Json ? "panel" : "list");
@@ -37,7 +37,10 @@ internal sealed class TaskManager(BackgroundTasks tasks, TerminalUi ui, DataStor
                     ? new TaskTranscriptView(store, tasks, id, () => ui.ShowThinking)
                     : new Panel(new Text(info.Output + (info.Error == null ? "" : "\n错误：" + info.Error))).Header(Markup.Escape(info.Id[..8] + " · " + info.State))));
                 break;
-            case "cancel": tasks.Cancel(id); ManagementUi.Success(ui, "已请求取消任务 " + id); break;
+            case "cancel":
+                tasks.Cancel(id);
+                await ManagementUi.Busy("停止任务并等待执行器退出", ct => tasks.WaitAsync(id, ct));
+                ManagementUi.Success(ui, "任务已停止 " + id); break;
             case "wait":
                 var result = await ManagementUi.Busy("等待后台任务 · Ctrl+C 返回面板", async ct =>
                 {

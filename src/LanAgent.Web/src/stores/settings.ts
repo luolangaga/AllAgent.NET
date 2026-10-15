@@ -1,5 +1,5 @@
-import { defineStore } from 'pinia'
-import { ref, watch } from 'vue'
+import { defineStore } from '@/lib/store'
+import { ref } from '@/lib/store'
 import type { AppSettings } from '@/types'
 import { invoke } from '@/bridge'
 
@@ -34,9 +34,10 @@ export const useSettingsStore = defineStore('settings', () => {
       ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
       : t
     document.documentElement.setAttribute('data-theme', resolved)
+    document.documentElement.classList.toggle('dark', resolved === 'dark')
   }
 
-  watch(theme, applyTheme, { immediate: true })
+  applyTheme(theme.value)
 
   // Listen for system theme changes
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {

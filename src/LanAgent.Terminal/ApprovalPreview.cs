@@ -31,13 +31,23 @@ internal sealed record ApprovalPreview(string Title, string Target, IReadOnlyLis
             case "cancel_agent": title = "取消子 Agent"; target = String("id"); summary = "停止任务和沙箱执行；已有外部效果不会自动回滚。"; break;
             case "file_write":
                 title = "写入文件"; var content = String("content"); string? original = null;
-                try { var policy = new WorkspacePolicy(workspace); var safe = request.ExternalPathApproved ? policy.ResolveForApproval(path) : policy.Resolve(path); if (File.Exists(safe) && new FileInfo(safe).Length <= 1_000_000) original = File.ReadAllText(safe); }
+                try { var policy = new WorkspacePolicy(workspace); var safe = request.ExternalPathApproved ? policy.ResolveForApproval(path) : policy.Resolve(path); if (File.Exists(safe)) original = File.ReadAllText(safe); }
                 catch (Exception ex) when (ex is IOException or ArgumentException or UnauthorizedAccessException) { summary = "路径检查：" + ex.Message; }
                 if (original == null) { rows.AddRange(LinesOf(content).Select(line => ("+ " + line, Color.Green))); summary = (summary.Length > 0 ? summary + "\n" : "") + $"创建文件 · {LinesOf(content).Count} 行 · {content.Length:N0} 字符"; }
                 else { rows.AddRange(Diff(original, content)); summary = $"覆盖已有文件 · {LinesOf(original).Count} → {LinesOf(content).Count} 行 · {content.Length:N0} 字符"; }
                 break;
             case "file_edit":
-                title = "修改文件"; rows.AddRange(LinesOf(String("old_string")).Select(line => ("- " + line, Color.Red))); rows.AddRange(LinesOf(String("new_string")).Select(line => ("+ " + line, Color.Green))); summary = "替换一个精确匹配片段；匹配不存在或不唯一时拒绝修改"; break;
+                title = "修改文件";
+                if (args.TryGetProperty("edits", out var edits) && edits.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var (edit, index) in edits.EnumerateArray().Select((e, i) => (e, i)))
+                    {
+                        rows.Add(($"替换 {index + 1}", Color.Grey));
+                        rows.AddRange(LinesOf(edit.GetProperty("old_string").GetString() ?? "").Select(line => ("- " + line, Color.Red)));
+                        rows.AddRange(LinesOf(edit.GetProperty("new_string").GetString() ?? "").Select(line => ("+ " + line, Color.Green)));
+                    }
+                }
+                summary = "基于同一原文件匹配；歧义、重叠或任一替换失败时不写入；兼容换行及有限空白/Unicode 差异"; break;
             case "run_shell":
                 title = "运行受控 Shell"; target = String("exe");
                 rows.Add(("实际程序：" + (request.ResolvedTarget ?? target), Color.White)); rows.Add(("工作目录：" + (String("working_directory") is { Length: > 0 } cwd ? cwd : "."), Color.Grey));

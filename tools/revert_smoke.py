@@ -78,7 +78,7 @@ class Terminal:
         self.proc.write("\x1b[200~" + command + "\x1b[201~\r")
     def close(self):
         self.proc.write("\x01")
-        self.send("/exit")
+        self.proc.terminate(force=True)
         end = time.monotonic() + 10
         while self.proc.isalive() and time.monotonic() < end:
             time.sleep(0.1)

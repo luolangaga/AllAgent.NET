@@ -12,6 +12,68 @@ namespace LanAgent.Tests;
 
 public sealed class TerminalInteractionTests
 {
+    [Fact]
+    public void ToolRowsRenderPathsWithMarkupCharactersAndFoldLongResults()
+    {
+        var block = new CodeExecutionBlock("code", "call_tool('file_glob')");
+        block.Start(new ToolCallStarted("glob", "file_glob", "{\"pattern\":\"**/*.ts\",\"path\":\"src/[demo]\"}"));
+        block.Complete(new ToolCallCompleted("glob", "file_glob", ToolResult.Success(new { paths = new[] { "a.ts", "b.ts", "c.ts", "d.ts" }, totalMatches = 4 }).ToJson()));
+        var console = new TestConsole(); console.Profile.Width = 100;
+        console.Write(block);
+        Assert.Contains("GLOB", console.Output);
+        Assert.Contains("src/[demo]", console.Output);
+        Assert.Contains("Found 4 files", console.Output);
+        Assert.Contains("+2 lines", console.Output);
+        Assert.DoesNotContain("╭", console.Output);
+    }
+    [Theory]
+    [InlineData("自定义提供商")]
+    [InlineData("提供商😀")]
+    [InlineData("https://localhost:8000/v1")]
+    public async Task UnicodeDefaultTextCanBeEditedAndSubmitted(string initial)
+    {
+        var console = new TestConsole(); console.Profile.Capabilities.Interactive = true;
+        console.Input.PushKey(ConsoleKey.Backspace);
+        console.Input.PushKey(new ConsoleKeyInfo('新', ConsoleKey.A, false, false, false));
+        console.Input.PushKey(ConsoleKey.Enter);
+        var prompt = new TextPrompt<string>("名称");
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var answer = await new SpectrePromptConsole(console, initialText: initial).PromptAsync(prompt, cancellation.Token);
+        Assert.Equal(initial[..^1] + "新", answer);
+    }
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task EnterOnEmptyOtherOpensAnswerInput(bool multiple)
+    {
+        var console = new TestConsole(); console.Profile.Capabilities.Interactive = true;
+        if (multiple) console.Input.PushKey(ConsoleKey.Spacebar);
+        console.Input.PushKey(ConsoleKey.DownArrow);
+        console.Input.PushKey(ConsoleKey.Enter);
+        console.Input.PushText("purple"); console.Input.PushKey(ConsoleKey.Enter);
+        var reader = new TerminalKeyReader(console.Input.IsKeyAvailable, () => console.Input.ReadKey(true) ?? default);
+        var answer = await TerminalQuestionPrompt.AskAsync(console, reader, new("选择颜色", ["红色"], multiple), default);
+        if (multiple) Assert.Equal(new[] { "红色", "purple" }, System.Text.Json.JsonSerializer.Deserialize<string[]>(answer!));
+        else Assert.Equal("purple", answer);
+        Assert.Contains("其他回答", console.Output);
+    }
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OtherAcceptsTextInTheSelectionWithoutASecondPrompt(bool multiple)
+    {
+        var console = new TestConsole(); console.Profile.Width = 100; console.Profile.Height = 30; console.Profile.Capabilities.Interactive = true;
+        if (multiple) console.Input.PushKey(ConsoleKey.Spacebar);
+        console.Input.PushKey(ConsoleKey.DownArrow);
+        console.Input.PushText("custom answerx");
+        console.Input.PushKey(ConsoleKey.Backspace);
+        console.Input.PushKey(ConsoleKey.Enter);
+        var reader = new TerminalKeyReader(console.Input.IsKeyAvailable, () => console.Input.ReadKey(true) ?? default);
+        var answer = await TerminalQuestionPrompt.AskAsync(console, reader, new("选择？", ["A"], multiple), default);
+        if (multiple) Assert.Equal(new[] { "A", "custom answer" }, System.Text.Json.JsonSerializer.Deserialize<string[]>(answer!));
+        else Assert.Equal("custom answer", answer);
+        Assert.DoesNotContain("其他回答 ›", console.Output);
+    }
     private static TerminalKeyReader Reader(string bytes, Func<string?>? clipboard = null)
     {
         var keys = new Queue<ConsoleKeyInfo>(bytes.Select(c => new ConsoleKeyInfo(c, c == '\u001b' ? ConsoleKey.Escape : ConsoleKey.A, false, false, false)));

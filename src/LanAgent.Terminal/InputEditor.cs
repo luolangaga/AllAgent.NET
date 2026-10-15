@@ -1,4 +1,5 @@
 using System.Text.Json;
+using LanAgent.Core.Data;
 using Spectre.Console;
 using Spectre.Console.Rendering;
 
@@ -8,10 +9,14 @@ internal sealed class InputEditor(string historyPath, string workspace, Func<IEn
 {
     private readonly List<string> _history = Load(historyPath);
     private readonly Dictionary<string, (long Started, Task<string[]> Files, string[] Previous)> _directories = new(StringComparer.OrdinalIgnoreCase);
+    private CommandHint[]? _commandSnapshot;
+    private string? _hintText;
+    private bool _hintSelection;
+    private IReadOnlyList<CommandHint> _commandHints = [];
     public IReadOnlyList<string> History => _history;
     public Func<bool>? WakeRequested { get; set; }
     public string? InterruptedDraft { get; set; }
-    public IEnumerable<CommandHint> Commands() => commands();
+    public IEnumerable<CommandHint> Commands() => _commandSnapshot ??= commands().ToArray();
     public async Task PasteAsync(InputState state, string text, CancellationToken ct = default)
     {
         var prepared = await PastedImages.PrepareAsync(text, workspace, ct);
@@ -43,7 +48,15 @@ internal sealed class InputEditor(string historyPath, string workspace, Func<IEn
     }
     internal IReadOnlyList<CommandHint> Hints(InputState state)
     {
-        if (state.Text.StartsWith('/')) return state.Suggestions(commands());
+        if (state.Text.StartsWith('/'))
+        {
+            if (_hintText != state.Text || _hintSelection != state.HasSelection)
+            {
+                _commandHints = state.Suggestions(Commands());
+                _hintText = state.Text; _hintSelection = state.HasSelection;
+            }
+            return _commandHints;
+        }
         var prefix = state.Text[..state.Cursor]; var start = prefix.LastIndexOf('@');
         if (start < 0 || start > 0 && !char.IsWhiteSpace(prefix[start - 1])) return [];
         var token = prefix[(start + 1)..];
@@ -74,6 +87,8 @@ internal sealed class InputEditor(string historyPath, string workspace, Func<IEn
     public async Task<string> ReadAsync(string status, CancellationToken ct = default, string initial = "")
     {
         InterruptedDraft = null;
+        // Refresh between prompts, never discover skills on a wheel event or idle tick.
+        _commandSnapshot = null; _hintText = null;
         if (FullScreenTerminal.Current is { } screen)
         {
             var submitted = await screen.ReadInputAsync(this, status, initial, ct);
@@ -113,28 +128,25 @@ internal sealed class InputEditor(string historyPath, string workspace, Func<IEn
         if (result.Length > 0)
         {
             AnsiConsole.Write(new Text("你 › " + result + "\n", new Style(Color.Cyan1)));
-            if (_history.LastOrDefault() != result) _history.Add(result);
-            try
-            {
-                Directory.CreateDirectory(Path.GetDirectoryName(historyPath)!);
-                var temp = historyPath + ".tmp";
-                await File.WriteAllTextAsync(temp, JsonSerializer.Serialize(_history.TakeLast(500)), ct);
-                File.Move(temp, historyPath, true);
-            }
-            catch (IOException) { /* History is optional; input must remain usable. */ }
+            await RememberAsync(result, ct);
         }
         return result;
     }
-    private async Task RememberAsync(string text, CancellationToken ct)
+    private Task RememberAsync(string text, CancellationToken ct)
     {
-        if (_history.LastOrDefault() != text) _history.Add(text);
+        ct.ThrowIfCancellationRequested();
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(historyPath)!);
-            await File.WriteAllTextAsync(historyPath + ".tmp", JsonSerializer.Serialize(_history.TakeLast(500)), ct);
+            using var transaction = new StorageTransaction(historyPath);
+            var latest = Load(historyPath);
+            if (latest.LastOrDefault() != text) latest.Add(text);
+            _history.Clear(); _history.AddRange(latest.TakeLast(500));
+            File.WriteAllText(historyPath + ".tmp", JsonSerializer.Serialize(_history));
             File.Move(historyPath + ".tmp", historyPath, true);
         }
-        catch (IOException) { }
+        catch (IOException) { if (_history.LastOrDefault() != text) _history.Add(text); }
+        return Task.CompletedTask;
     }
 }
 

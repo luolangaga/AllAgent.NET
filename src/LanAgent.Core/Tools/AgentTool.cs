@@ -22,6 +22,10 @@ public interface IAgentToolSet
     IReadOnlyList<AgentToolDescriptor> Definitions { get; }
     ValueTask<ToolResult> InvokeAsync(string name, JsonElement arguments, CancellationToken ct);
 }
+public interface IAgentToolArgumentPreparer
+{
+    ValueTask<JsonElement> PrepareArgumentsAsync(string name, JsonElement arguments, CancellationToken ct);
+}
 
 /// <summary>Reject invalid host operations before asking users to approve them.</summary>
 public interface IAgentToolPreflight
@@ -45,7 +49,12 @@ public interface IAgentToolApprovalPolicy
 
 public sealed record ToolResult(bool Ok, object? Data = null, string? Error = null, bool Truncated = false)
 {
-    public static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    [System.Text.Json.Serialization.JsonIgnore]
+    public IReadOnlyList<LanAgent.Core.Models.ImageAttachment> Images { get; init; } = [];
+    public static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.Create(System.Text.Unicode.UnicodeRanges.All)
+    };
     public const int MaxOutputCharacters = 20_000;
     public static ToolResult Success(object? data, bool truncated = false) => new(true, data, Truncated: truncated);
     public static ToolResult Failure(string error) => new(false, Error: Clip(error));

@@ -112,7 +112,8 @@ public sealed class TerminalProductTests
     public void SkillsProjectOverrideAndBundledRemovalPersist()
     {
         using var w = new TestWorkspace(); using var store = new DataStore(Path.Combine(w.Root, "data")); var catalog = new SkillCatalog(store, w.Root, Path.Combine(w.Root, "data"), w.Root);
-        catalog.SeedBundled(); Assert.Equal(5, catalog.List().Count(s => s.Scope == "user")); catalog.Remove("review"); catalog.SeedBundled(); Assert.DoesNotContain(catalog.List(), s => s.Name == "review");
+        catalog.SeedBundled(); Assert.Equal(6, catalog.List().Count(s => s.Scope == "user")); Assert.Contains(catalog.List(), s => s.Name == "computer-use");
+        catalog.Remove("review"); catalog.SeedBundled(); Assert.DoesNotContain(catalog.List(), s => s.Name == "review");
         catalog.Create("sample", "Global", "Global instructions", "user"); catalog.Create("sample", "Project", "Project instructions");
         Assert.Equal("project", catalog.Get("sample").Scope); Assert.Equal("Project", catalog.Get("sample").Description);
         Assert.Throws<ArgumentException>(() => catalog.Create("../escape", "bad", "bad"));

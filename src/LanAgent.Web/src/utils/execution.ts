@@ -9,6 +9,12 @@ export function restoreMessages(messages: Message[]): Message[] {
   const result: Message[] = []
   const calls = new Map<string, ToolCall>()
   for (const message of messages) {
+    if (message.isHostActivity) {
+      const trace = parseObject(message.hostToolTraceJson)
+      message.toolCalls = Array.isArray(trace) ? trace.map(item => ({ id: item.id, name: item.toolName, args: item.argsJson, output: item.resultJson, status: parseObject(item.resultJson).ok === false ? 'error' as const : 'done' as const })) : []
+      result.push(message)
+      continue
+    }
     if (message.role === 'tool') {
       const call = calls.get(message.toolCallId ?? '')
       if (call) {

@@ -62,7 +62,7 @@ try:
     wait_for(lambda text: "继续聊天" in text)
     proc.write("\x1b")
     wait_for(lambda text: "继续聊天" not in text)
-    proc.write("/exit\r")
+    proc.terminate(force=True)
     print(json.dumps({"ok": True, "checks": ["image path paste", "draft metadata", "Alt+Backspace removal", "Ctrl+Z undo", "paste without submit", "arrow editing", "F1 menu and Esc"], "artifacts": str(output)}))
 finally:
     (output / "terminal.raw.txt").write_text("".join(raw), encoding="utf-8")

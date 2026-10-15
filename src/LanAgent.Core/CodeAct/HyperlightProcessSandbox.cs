@@ -79,7 +79,13 @@ public sealed class HyperlightProcessSandbox(AgentOptions options) : ICodeSandbo
                         await WriteAsync(new { kind = "tool_result", result }, deadline.Token);
                         break;
                     case "result":
-                        return root.GetProperty("result").Deserialize<ToolResult>(ToolResult.JsonOptions) ?? ToolResult.Failure("Invalid sandbox result.");
+                        var execution = root.GetProperty("result").Deserialize<ToolResult>(ToolResult.JsonOptions) ?? ToolResult.Failure("Invalid sandbox result.");
+                        if (!execution.Ok && IsNativeRuntimeFailure(execution))
+                        {
+                            StopWorker();
+                            execution = execution with { Error = execution.Error + " The native worker was discarded; the next call will start a fresh microVM. This execution was not retried; earlier host tool side effects may remain." };
+                        }
+                        return execution;
                     case "error":
                         throw new InvalidOperationException(root.GetProperty("error").GetString());
                     default: throw new InvalidOperationException("Unexpected sandbox protocol message.");
@@ -100,6 +106,18 @@ public sealed class HyperlightProcessSandbox(AgentOptions options) : ICodeSandbo
         finally { _gate.Release(); }
     }
 
+    private static bool IsNativeRuntimeFailure(ToolResult result)
+    {
+        // A Python exception merely quoting these words is an ordinary guest failure.
+        var data = JsonSerializer.SerializeToElement(result.Data, ToolResult.JsonOptions);
+        if (data.ValueKind == JsonValueKind.Object && data.TryGetProperty("diagnostic", out var diagnostic) && diagnostic.ValueKind == JsonValueKind.Object) return false;
+        var error = result.Error;
+        return error != null && (error.Contains("no reactor running", StringComparison.OrdinalIgnoreCase) ||
+            error.Contains("poisoned lock", StringComparison.OrdinalIgnoreCase) ||
+            error.Contains("Error locking host_funcs", StringComparison.OrdinalIgnoreCase) ||
+            error.Contains("restore failed", StringComparison.OrdinalIgnoreCase));
+    }
+
     private async Task WriteAsync(object value, CancellationToken ct)
     {
         await _worker!.StandardInput.WriteLineAsync(JsonSerializer.Serialize(value, ToolResult.JsonOptions).AsMemory(), ct);
@@ -108,15 +126,10 @@ public sealed class HyperlightProcessSandbox(AgentOptions options) : ICodeSandbo
 
     private async Task<JsonDocument> ReadAsync(CancellationToken ct)
     {
-        // ReadLineAsync would allocate arbitrarily large messages before enforcing a limit.
-        var buffer = new char[1];
-        var line = new StringBuilder();
-        while (await _worker!.StandardOutput.ReadAsync(buffer.AsMemory(), ct) > 0)
-        {
-            if (buffer[0] == '\n') return JsonDocument.Parse(line.ToString());
-            line.Append(buffer[0]);
-            if (line.Length > 256000) throw new InvalidOperationException("Sandbox protocol output exceeds limit.");
-        }
+        // Call frames carry tool inputs, including complete file contents. Output
+        // preview budgets must not become an input-size restriction on this channel.
+        var line = await _worker!.StandardOutput.ReadLineAsync(ct);
+        if (line != null) return JsonDocument.Parse(line);
         var details = _stderr == null ? "" : (await _stderr).Text;
         throw new IOException("Sandbox worker exited. " + ToolResult.Clip(details));
     }
@@ -125,6 +138,9 @@ public sealed class HyperlightProcessSandbox(AgentOptions options) : ICodeSandbo
     {
         if (_worker == null) return;
         BoundedProcess.Kill(_worker);
+        // Kill is asynchronous on Windows. Join termination before releasing the
+        // worker or starting its replacement so native/file handles are gone.
+        _worker.WaitForExit();
         _worker.Dispose();
         _worker = null;
         _context = null;

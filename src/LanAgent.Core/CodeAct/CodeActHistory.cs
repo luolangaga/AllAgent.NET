@@ -39,9 +39,12 @@ internal static class CodeActHistory
                 }
                 catch (Exception ex) when (ex is JsonException or InvalidOperationException) { rejected.Add("malformed historical call"); }
             }
-            var state = ValidateNativeState(message.ProviderStateJson, calls);
+            // Empty Responses snapshots from older clients are missing replay data,
+            // not a forbidden tool protocol. Fall back without altering valid history.
+            var missingState = IsEmptyResponsesState(message.ProviderStateJson);
+            var state = ValidateNativeState(missingState ? null : message.ProviderStateJson, calls);
             var content = message.Content;
-            if (rejected.Count > 0 || (message.ProviderStateJson != null && state == null))
+            if (rejected.Count > 0 || (!missingState && message.ProviderStateJson != null && state == null))
             {
                 content += "\nHistorical tool protocol was incompatible with exclusive CodeAct and has been removed. " +
                     "These operations must never be emitted as direct model tool calls. Use execute_code and Python call_tool instead.";
@@ -50,6 +53,17 @@ internal static class CodeActHistory
             }
             yield return message with { Content = content, ToolCallsJson = calls.Count == 0 ? null : calls.ToJsonString(), ProviderStateJson = state };
         }
+    }
+
+    private static bool IsEmptyResponsesState(string? state)
+    {
+        if (state == null) return false;
+        try
+        {
+            var root = JsonNode.Parse(state);
+            return root?["protocol"]?.GetValue<string>() == "responses" && root["output"] is JsonArray { Count: 0 };
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException) { return false; }
     }
 
     private static bool IsObject(string? json)

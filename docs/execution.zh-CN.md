@@ -45,7 +45,7 @@ lanagent chat --full-access
 lanagent run '检查项目并修复构建' --full-access --json
 ```
 
-完全访问下，缺少 Python 或 PowerShell 7.6 时不再弹出安装审核；通过 winget 安装并校验后才启动 Agent。Python AST 限制和实际 Hyperlight microVM 仍有效；完整访问权限由 C# 主机工具提供。撤销覆盖工作区内可快照的文件工具修改；外部路径、Shell/MCP 操作标记为外部行为，不承诺自动撤销。
+完全访问下，缺少 PowerShell 7.6 时明确提示通过 winget 安装，成功后停止初始化并提示重启 LanAgent。宿主 Python 供共享 pip 库环境使用，检查可执行性和 3.10–3.14 版本范围；缺少或版本不符时提示通过 winget 安装 Python 3.13，安装成功后提示重启。执行 Python 始终使用实际 Hyperlight microVM，并校验内置 guest 能力；宿主 AST 白名单已停止使用。完整访问权限由宿主工具提供。撤销覆盖工作区内可快照的文件工具修改；外部路径、Shell/MCP 和非只读子代理操作标记为外部行为，不承诺自动撤销。
 
 ## Shell 与 npm
 
@@ -71,7 +71,7 @@ Agent 指令以 Microsoft CodeAct 的单一 `execute_code` / 沙箱内 `call_too
 
 最大轮次功能和 `--max-iterations` 已删除，界面不显示轮次。默认没有总任务时长或固定工具次数限制；Agent 持续执行到模型完成、用户停止或实际错误。
 
-**Esc / Ctrl+C** 停止任务。需要主动限制时，显式设置 `--timeout 秒` 或 `--max-tools 次数`。`--code-timeout 秒` 仍控制单次 Python 的预算，Shell 单次超时仍为 1–120 秒。
+**Esc / Ctrl+C** 停止任务。需要主动限制时，显式设置 `--timeout 秒` 或 `--max-tools 次数`。`--code-timeout 秒` 仍控制单次 Python 的预算，Shell 默认不设单次超时；timeout_seconds=0 表示不限，任意正数表示调用方主动设置的超时，没有人为最大值。
 
 - 模型返回 `length`、`max_tokens`、`MAX_TOKENS` 或 `max_output_tokens` 时，显示“自动继续”并续接任务；截断响应中的所有代码调用均不执行，让模型重新生成较小的完整程序。
 - 限流、服务暂不可用、连接提前结束和请求超时自动重试，最多 5 次，等待 2、4、8、16、30 秒；可随时取消。重试仅作用于尚未执行工具的模型请求，不重放已完成的 C# 操作。认证失败等永久错误直接说明原因。

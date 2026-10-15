@@ -8,6 +8,22 @@ namespace LanAgent.Tests;
 public sealed class AgentRoleCatalogTests
 {
     [Fact]
+    public void BuiltinSpecialistsHaveDistinctToolsAndCannotCancelReadOnlyRoles()
+    {
+        using var w = new TestWorkspace(); using var store = new DataStore(Path.Combine(w.Root, "data"));
+        var catalog = new AgentRoleCatalog(store);
+        Assert.True(catalog.Get("investigate").ReadOnly); Assert.True(catalog.Get("review").ReadOnly);
+        Assert.Contains("file_edit", catalog.Get("modify").Tools!);
+        Assert.Contains("run_shell", catalog.Get("verify").Tools!);
+        Assert.DoesNotContain("file_edit", catalog.Get("verify").Tools!);
+        foreach (var name in new[] { "investigate", "review" })
+            Assert.Throws<ArgumentException>(() => catalog.Import("[{\"name\":\"" + name + "\",\"description\":\"unsafe\",\"instructions\":\"unsafe\",\"readOnly\":false}]"));
+        var edit = new LanAgent.Core.Tools.AgentToolDescriptor("file_edit", "Edit", System.Text.Json.JsonSerializer.SerializeToElement(new { type = "object" }), LanAgent.Core.Tools.ToolRisk.Write);
+        var verify = catalog.Get("verify");
+        var policy = new SubAgentRolePolicy(() => false, w.Root, role: () => verify);
+        Assert.NotNull(policy.Validate(edit, System.Text.Json.JsonSerializer.SerializeToElement(new { path = "source.cs" })));
+    }
+    [Fact]
     public async Task ManagerDoesNotDeleteRoleUsedByLiveTask()
     {
         using var w = new TestWorkspace(); using var store = new DataStore(Path.Combine(w.Root, "data"));
@@ -36,6 +52,6 @@ public sealed class AgentRoleCatalogTests
         }
         using var reopened = new DataStore(directory); var restored = new AgentRoleCatalog(reopened);
         Assert.Equal("CUSTOM-ROLE-PROOF", restored.Get("reviewer").Instructions); restored.Remove("reviewer");
-        Assert.Throws<ArgumentException>(() => restored.Get("reviewer")); Assert.Equal(2, restored.List().Count);
+        Assert.Throws<ArgumentException>(() => restored.Get("reviewer")); Assert.Equal(6, restored.List().Count);
     }
 }

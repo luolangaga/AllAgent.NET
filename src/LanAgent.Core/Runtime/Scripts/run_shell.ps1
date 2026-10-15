@@ -1,4 +1,7 @@
 $ErrorActionPreference = 'Stop'
+$PSStyle.OutputRendering = 'PlainText'
+$env:NO_COLOR = '1'
+$env:TERM = 'dumb'
 $request = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($args[0])) | ConvertFrom-Json
 $literalArguments = @($request.args | ForEach-Object { [string]$_ })
 & ([string]$request.exe) @literalArguments

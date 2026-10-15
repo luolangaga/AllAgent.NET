@@ -88,7 +88,7 @@ try:
     assert next(m for m in original["messages"] if m["id"] == target)["images"][0]["base64"] == png
     (output / "fork-screen.txt").write_text(screen_text(), encoding="utf-8")
     proc.write("\x01")
-    send("/exit")
+    proc.terminate(force=True)
     print(json.dumps({"ok": True, "checks": ["message jump", "Ctrl+X,G timeline search and jump action", "existing unsent draft preserved", "image draft restoration", "fork before selected user", "unsent fork draft", "original history intact"], "artifacts": str(output)}))
 finally:
     (output / "terminal.raw.txt").write_text("".join(raw), encoding="utf-8")

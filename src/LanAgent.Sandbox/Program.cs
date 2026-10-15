@@ -5,12 +5,14 @@ using LanAgent.Core.Tools;
 using Microsoft.Agents.AI.Hyperlight;
 using Microsoft.Extensions.AI;
 
+// The native runtime owns thread-local state. Keep initialization, Run, Restore
+// and disposal on this dedicated main thread, including between IPC requests.
 // stdout is exclusively a line-delimited IPC channel; no model code runs on this host.
 Console.InputEncoding = System.Text.Encoding.UTF8;
 Console.OutputEncoding = new System.Text.UTF8Encoding(false);
 try
 {
-    using var init = JsonDocument.Parse(await Console.In.ReadLineAsync() ?? throw new IOException("Missing init."));
+    using var init = JsonDocument.Parse(Console.In.ReadLine() ?? throw new IOException("Missing init."));
     var root = init.RootElement;
     if (root.GetProperty("kind").GetString() != "init") throw new InvalidOperationException("Invalid init.");
     var guest = root.TryGetProperty("guestPath", out var value) && value.ValueKind == JsonValueKind.String
@@ -28,13 +30,14 @@ try
     // The actual function adds private transport callbacks that must never appear in that guidance.
     using var guidance = new HyperlightExecuteCodeFunction(options);
     options.Tools = visibleTools
-        .Concat([new TransportFunction("_lan_stdout", transport), new TransportFunction("_lan_chunk", transport)]);
+        .Concat([new TransportFunction("_lan_stdout", transport), new TransportFunction("_lan_chunk", transport),
+            new TransportFunction("_lan_upload", transport), new TransportFunction("_lan_diagnostic", transport), new DispatchFunction(tools, transport)]);
     // No host input mounts and no outbound domains. Microsoft's function manages warm snapshot/restore.
     using var execute = new HyperlightExecuteCodeFunction(options);
     // The SDK initializes the native VM lazily on its first invocation. Do not tell the
     // parent we are ready until the guest and its clean snapshot actually exist: cold
     // startup belongs to SandboxStartupTimeout, never the model's execution budget.
-    var warmOutput = await execute.InvokeAsync(new AIFunctionArguments { ["code"] = "print('lanagent-sandbox-ready')" });
+    var warmOutput = execute.InvokeAsync(new AIFunctionArguments { ["code"] = GuestPythonLibraries.Prelude + "import base64\nassert base64.b64decode(base64.b64encode('中文 😀'.encode('utf-16-le'))).decode('utf-16-le') == '中文 😀'\nprint('lanagent-sandbox-ready')" }).AsTask().GetAwaiter().GetResult();
     using (var warmResult = JsonDocument.Parse(warmOutput?.ToString() ?? "{}"))
     {
         var warm = warmResult.RootElement;
@@ -43,20 +46,23 @@ try
     }
     Send(new { kind = "ready", instructions = guidance.BuildInstructions(toolsVisibleToModel: false), description = guidance.Description });
     string? line;
-    while ((line = await Console.In.ReadLineAsync()) != null)
+    while ((line = Console.In.ReadLine()) != null)
     {
         using var request = JsonDocument.Parse(line);
         if (request.RootElement.GetProperty("kind").GetString() != "execute") throw new InvalidOperationException("Invalid execute request.");
         var code = request.RootElement.GetProperty("code").GetString()!;
         transport.Reset();
-        // A trusted prelude bounds native guest stdout before it crosses IPC. Names are inaccessible to model code.
-        var guarded = """
+        // A trusted prelude bounds native guest stdout before it crosses IPC.
+        var guarded = GuestPythonLibraries.Prelude + """
             import json as _lan_json
             _lan_host_call_tool = call_tool
             def call_tool(tool_name, **parameters):
                 if tool_name.startswith('_lan_'):
                     raise ValueError('Reserved transport function')
-                _lan_reply = _lan_host_call_tool(tool_name, **parameters)
+                _lan_payload = _lan_json.dumps(parameters)
+                for _lan_index in range(0, len(_lan_payload), 1024):
+                    _lan_host_call_tool('_lan_upload', text=_lan_payload[_lan_index:_lan_index + 1024])
+                _lan_reply = _lan_host_call_tool('_lan_dispatch', name=tool_name)
                 if '_lan_parts' in _lan_reply:
                     _lan_fragments = []
                     for _lan_index in range(_lan_reply['_lan_parts']):
@@ -72,15 +78,39 @@ try
                 for _lan_index in range(0, len(_lan_text), 1024):
                     _lan_host_call_tool('_lan_stdout', text=_lan_text[_lan_index:_lan_index + 1024])
                 _lan_remaining -= len(_lan_text)
-            """ + "\n" + code;
-        var output = await execute.InvokeAsync(new AIFunctionArguments { ["code"] = guarded });
+            """ + "\n_lan_source = _lan_json.loads(" + JsonSerializer.Serialize(JsonSerializer.Serialize(code, ToolResult.JsonOptions), ToolResult.JsonOptions) + ")\n" + """
+            try:
+                exec(compile(_lan_source, 'lanagent-code.py', 'exec'))
+            except Exception as _lan_error:
+                _lan_line = None
+                _lan_column = None
+                _lan_frames = []
+                if isinstance(_lan_error, SyntaxError):
+                    _lan_line = _lan_error.lineno
+                    _lan_column = _lan_error.offset
+                _lan_tb = _lan_error.__traceback__
+                while _lan_tb is not None:
+                    if _lan_tb.tb_frame.f_code.co_filename == 'lanagent-code.py':
+                        _lan_line = _lan_tb.tb_lineno
+                        _lan_frames.append({'line': _lan_line, 'function': _lan_tb.tb_frame.f_code.co_name})
+                    _lan_tb = _lan_tb.tb_next
+                _lan_lines = _lan_source.splitlines()
+                _lan_diagnostic = {'source': 'lanagent-code.py', 'line': _lan_line, 'column': _lan_column,
+                    'type': type(_lan_error).__name__, 'message': str(_lan_error)[:500], 'frames': _lan_frames[-16:],
+                    'sourceLine': _lan_lines[_lan_line - 1][:200] if _lan_line and _lan_line <= len(_lan_lines) else None}
+                _lan_host_call_tool('_lan_diagnostic', text=_lan_json.dumps(_lan_diagnostic))
+                raise
+            """;
+        var output = execute.InvokeAsync(new AIFunctionArguments { ["code"] = guarded }).AsTask().GetAwaiter().GetResult();
         using var result = JsonDocument.Parse(output?.ToString() ?? "{}");
         var data = result.RootElement;
         var stdout = transport.Stdout;
         var stderr = data.GetProperty("stderr").GetString() ?? "";
         var success = data.GetProperty("success").GetBoolean();
+        if (!success && transport.Diagnostic is { } diagnostic && diagnostic.TryGetProperty("line", out var sourceLine) && sourceLine.ValueKind == JsonValueKind.Number)
+            stderr = "lanagent-code.py:" + sourceLine.GetInt32() + ": " + stderr;
         Send(new { kind = "result", result = new ToolResult(success,
-            new { stdout = ToolResult.Clip(stdout), stderr = ToolResult.Clip(stderr), exitCode = data.GetProperty("exit_code").GetInt32() },
+            new { stdout = ToolResult.Clip(stdout), stderr = ToolResult.Clip(stderr), exitCode = data.GetProperty("exit_code").GetInt32(), diagnostic = transport.Diagnostic },
             success ? null : "Python execution failed: " + ToolResult.Clip(stderr.Trim(), 1500), stdout.Length >= ToolResult.MaxOutputCharacters || stderr.Length > ToolResult.MaxOutputCharacters) });
     }
 }
@@ -123,8 +153,33 @@ sealed class GuestTransport
     private const int FragmentCharacters = 1024;
     private readonly StringBuilder _stdout = new();
     private string _result = "";
+    private readonly StringBuilder _arguments = new();
     public string Stdout => _stdout.ToString();
-    public void Reset() { _stdout.Clear(); _result = ""; }
+    public JsonElement? Diagnostic { get; private set; }
+    public void Reset() { _stdout.Clear(); _arguments.Clear(); _result = ""; Diagnostic = null; }
+    public object ReportDiagnostic(string text)
+    {
+        if (text.Length > 12000) throw new InvalidDataException("Guest diagnostic exceeds the transport budget.");
+        using var document = JsonDocument.Parse(text);
+        if (document.RootElement.ValueKind != JsonValueKind.Object) throw new InvalidDataException("Invalid guest diagnostic.");
+        Diagnostic = document.RootElement.Clone();
+        return new { received = true };
+    }
+    public object Upload(string text)
+    {
+        if (text.Length > FragmentCharacters)
+            throw new InvalidDataException("Tool argument fragment exceeds the transport frame size.");
+        _arguments.Append(text);
+        return new { uploaded = true };
+    }
+    public JsonElement TakeArguments()
+    {
+        var text = _arguments.ToString();
+        _arguments.Clear();
+        using var document = JsonDocument.Parse(text);
+        if (document.RootElement.ValueKind != JsonValueKind.Object) throw new InvalidDataException("Tool arguments must be an object.");
+        return document.RootElement.Clone();
+    }
     public object Wrap(JsonElement result)
     {
         _result = result.GetRawText();
@@ -151,14 +206,40 @@ sealed class TransportFunction(string name, GuestTransport transport) : AIFuncti
 {
     public override string Name => name;
     public override string Description => "Private trusted transport; never invoke from model code.";
-    public override JsonElement JsonSchema => JsonSerializer.SerializeToElement(name == "_lan_stdout"
+    public override JsonElement JsonSchema => JsonSerializer.SerializeToElement(name is "_lan_stdout" or "_lan_upload" or "_lan_diagnostic"
         ? (object)new { type = "object", properties = new { text = new { type = "string" } }, required = new[] { "text" } }
         : new { type = "object", properties = new { index = new { type = "integer" } }, required = new[] { "index" } });
     protected override ValueTask<object?> InvokeCoreAsync(AIFunctionArguments arguments, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if (name == "_lan_upload") return new(transport.Upload(JsonSerializer.SerializeToElement(arguments["text"]).GetString() ?? ""));
+        if (name == "_lan_diagnostic") return new(transport.ReportDiagnostic(JsonSerializer.SerializeToElement(arguments["text"]).GetString() ?? ""));
         return new(name == "_lan_stdout"
             ? transport.Write(JsonSerializer.SerializeToElement(arguments["text"]).GetString() ?? "")
             : transport.Receive(JsonSerializer.SerializeToElement(arguments["index"]).GetInt32()));
+    }
+}
+
+sealed class DispatchFunction(AgentToolDescriptor[] tools, GuestTransport transport) : AIFunction
+{
+    public override string Name => "_lan_dispatch";
+    public override string Description => "Private trusted argument transport.";
+    public override JsonElement JsonSchema => JsonSerializer.SerializeToElement(new { type = "object", properties = new { name = new { type = "string" } }, required = new[] { "name" } });
+    protected override ValueTask<object?> InvokeCoreAsync(AIFunctionArguments arguments, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var name = JsonSerializer.SerializeToElement(arguments["name"]).GetString();
+        var payload = transport.TakeArguments();
+        if (!tools.Any(tool => tool.Name == name)) throw new InvalidDataException("Unknown host tool.");
+        SendCall();
+        using var response = JsonDocument.Parse(Console.In.ReadLine() ?? throw new IOException("Host channel closed."));
+        if (response.RootElement.GetProperty("kind").GetString() != "tool_result") throw new IOException("Invalid host response.");
+        return new(transport.Wrap(response.RootElement.GetProperty("result")));
+
+        void SendCall()
+        {
+            Console.Out.WriteLine(JsonSerializer.Serialize(new { kind = "call", name, arguments = payload }, ToolResult.JsonOptions));
+            Console.Out.Flush();
+        }
     }
 }

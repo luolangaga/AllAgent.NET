@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <PackageId>LanAgent.CommandCode</PackageId><Version>1.1.0</Version>
+    <PackageTags>LanAgent;CommandCode;Authentication</PackageTags>
+    <Description>CommandCode reverse proxy and account model provider.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/LanAgent.Core/LanAgent.Core.csproj" PrivateAssets="all" />
+    <None Include="Upstream/LICENSE" Pack="true" PackagePath="lanagent/CommandCode-LICENSE" />
+    <None Include="lanagent-plugin.json" Pack="true" PackagePath="lanagent/" />
+    <None Include="README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+</Project>

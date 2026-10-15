@@ -6,7 +6,7 @@ namespace LanAgent.Core.Services.AI;
 public static class ReasoningSettings
 {
     public static IReadOnlyList<string> Protocols { get; } = new[] { "none", "openai", "deepseek", "qwen", "openrouter", "anthropic-adaptive", "anthropic-budget", "gemini-level", "gemini-budget" };
-    public static IReadOnlyList<string> Efforts(ApiConfig config) => ProviderCatalog.ReasoningFor(config) switch
+    public static IReadOnlyList<string> Efforts(ApiConfig config) => ModelCatalog.SupportsReasoning(config) == false ? new[] { "default" } : ProviderCatalog.ReasoningFor(config) switch
     {
         "openai" => new[] { "default", "none", "minimal", "low", "medium", "high", "xhigh" },
         "deepseek" => new[] { "default", "none", "low", "high", "max" },
@@ -20,7 +20,13 @@ public static class ReasoningSettings
     {
         if (!Efforts(config).Contains(effort)) throw new ArgumentException($"{ProviderCatalog.ReasoningFor(config)} 不支持 {effort}；可选：{string.Join(", ", Efforts(config))}。具体模型还可能限制这些级别。");
         config.ReasoningEffort = effort;
+        config.ModelReasoningEfforts[config.DefaultModel] = effort;
         config.ThinkingEnabled = effort is not ("default" or "none");
+    }
+    public static void RestoreForModel(ApiConfig config)
+    {
+        var effort = config.ModelReasoningEfforts.GetValueOrDefault(config.DefaultModel, "default");
+        SetEffort(config, Efforts(config).Contains(effort) ? effort : "default");
     }
     public static void Apply(JsonObject body, ApiConfig config)
     {
@@ -37,7 +43,7 @@ public static class ReasoningSettings
             case "openai":
                 if (effort != "default") body["reasoning_effort"] = effort;
                 body.Remove("temperature");
-                body["max_completion_tokens"] = config.MaxTokens; body.Remove("max_tokens"); break;
+                body["max_completion_tokens"] = ModelCatalog.OutputLimit(config); body.Remove("max_tokens"); break;
             case "deepseek":
                 body["thinking"] = new JsonObject { ["type"] = effort == "none" ? "disabled" : "enabled" };
                 if (effort is not ("default" or "none")) body["reasoning_effort"] = effort;
@@ -54,7 +60,7 @@ public static class ReasoningSettings
                 body.Remove("temperature"); break;
             case "anthropic-budget":
                 body["thinking"] = effort == "none" ? new JsonObject { ["type"] = "disabled" } : new JsonObject { ["type"] = "enabled", ["budget_tokens"] = budget };
-                if (effort != "none" && config.MaxTokens <= budget) throw new ArgumentException("Anthropic 输出上限必须大于思考预算。");
+                if (effort != "none" && ModelCatalog.OutputLimit(config) <= budget) throw new ArgumentException("Anthropic 输出上限必须大于思考预算。");
                 body.Remove("temperature"); break;
             case "gemini-level":
             case "gemini-budget":

@@ -59,10 +59,14 @@ public sealed class PluginContext(string dataDirectory, IReadOnlyDictionary<Type
     internal List<IAiProvider> Providers { get; } = [];
     internal List<PluginCommand> Commands { get; } = [];
     internal List<AgentHook> Hooks { get; } = [];
+    internal List<AgentTurnExtension> TurnExtensions { get; } = [];
+    internal List<AgentRequestExtension> RequestExtensions { get; } = [];
     internal List<IAuthenticationProvider> Authentication { get; } = [];
     public void AddTools(IAgentToolSet tools) => Tools.Add(tools);
     public void AddProvider(IAiProvider provider) => Providers.Add(provider);
     public void AddCommand(PluginCommand command) => Commands.Add(command);
     public void AddHook(AgentHook hook) => Hooks.Add(hook);
+    public void AddTurnExtension(AgentTurnExtension extension) => TurnExtensions.Add(extension);
+    public void AddRequestExtension(AgentRequestExtension extension) => RequestExtensions.Add(extension);
     public void AddAuthentication(IAuthenticationProvider authentication) => Authentication.Add(authentication);
 }

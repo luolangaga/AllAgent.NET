@@ -29,6 +29,9 @@ public record StreamChunk(
 
 public record ChatMessage(string Role, string Content, string? ToolCallsJson = null, string? ToolCallId = null, string? ToolName = null, string? ReasoningContent = null, string? ProviderStateJson = null)
 {
+    public string? ProviderContextKey { get; init; }
+    /// <summary>Learned memory/profile tail, excluded from stable prompt cache breakpoints.</summary>
+    public bool IsVolatileContext { get; init; }
     public IReadOnlyList<ImageAttachment> Images { get; init; } = [];
 }
 
@@ -41,12 +44,14 @@ public record ChatRequest(
 )
 {
     public Guid? ConversationId { get; init; }
+    public Guid? RoutingTurnId { get; init; }
 }
 
-public record ModelInfo(string Id, string DisplayName);
+public record ModelInfo(string Id, string DisplayName, int? ContextTokens = null, int? OutputTokens = null);
 
 public interface IAiProvider
 {
+    void EndRoutingTurn(Guid turnId) { }
     string ProviderId { get; }
     IAsyncEnumerable<StreamChunk> StreamChatAsync(ChatRequest request, CancellationToken ct = default);
     Task<IReadOnlyList<ModelInfo>> ListModelsAsync(ApiConfig config, CancellationToken ct = default);

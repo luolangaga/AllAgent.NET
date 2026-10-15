@@ -11,6 +11,10 @@ public sealed class GeneratorTests
     [Theory]
     [InlineData("DateTime when", true)]
     [InlineData("string path", false)]
+    [InlineData("FileEdit[] edits", false)]
+    [InlineData("string[] items", false)]
+    [InlineData("int[] items", false)]
+    [InlineData("DateTime[] items", true)]
     public void ToolContractIsCheckedAtCompileTime(string parameter, bool invalid)
     {
         var source = """

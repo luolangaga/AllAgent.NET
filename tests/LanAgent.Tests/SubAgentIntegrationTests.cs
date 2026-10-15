@@ -14,13 +14,14 @@ namespace LanAgent.Tests;
 public sealed class SubAgentIntegrationTests
 {
     [Fact]
-    public async Task DesktopAgentServiceDelegatesWithModelOverrideAndPreservesChildApproval()
+    public async Task DesktopDelegationUsesConfiguredModelAndReturnsPermissionBlockerWithoutAskingHuman()
     {
         using var w = new TestWorkspace(); using var store = new DataStore(Path.Combine(w.Root, "data"));
         var parent = new Conversation(); store.AddConversation(parent);
         var config = new ApiConfig { ProviderId = "desktop-fixture", DefaultModel = "parent-model" };
+        store.SetSetting("subagents:model", "child-model");
         var provider = new DesktopProvider(); var approvals = 0;
-        var service = new AgentService(store, new AiProviderFactory([provider]), w.Options with
+        await using var service = new AgentService(store, new AiProviderFactory([provider]), w.Options with
         {
             CodeTimeout = TimeSpan.FromSeconds(60),
             Approver = (_, _) => { Interlocked.Increment(ref approvals); return ValueTask.FromResult(false); }
@@ -33,7 +34,8 @@ public sealed class SubAgentIntegrationTests
         });
         Assert.Equal("stop", (await done.Task.WaitAsync(TimeSpan.FromSeconds(90))).FinishReason);
         Assert.DoesNotContain(events, evt => evt is AgentError);
-        Assert.Equal(1, approvals); Assert.False(File.Exists(Path.Combine(w.Root, "desktop-child.txt")));
+        Assert.Equal(0, approvals); Assert.False(File.Exists(Path.Combine(w.Root, "desktop-child.txt")));
+        Assert.DoesNotContain(service.Jobs.List, job => job.State is BackgroundTaskState.AwaitingAnswer or BackgroundTaskState.AwaitingApproval);
         Assert.Equal("parent-model", config.DefaultModel);
         var child = Assert.Single(store.Conversations, c => c.Id != parent.Id);
         Assert.Equal("child-model", child.ModelId);
@@ -46,13 +48,14 @@ public sealed class SubAgentIntegrationTests
     {
         using var w = new TestWorkspace(); using var store = new DataStore(Path.Combine(w.Root, "data"));
         var parent = new Conversation(); store.AddConversation(parent);
+        store.SetSetting("subagents:model", "child-model");
         var provider = new DesktopProvider(blockChild: true);
-        var service = new AgentService(store, new AiProviderFactory([provider]), w.Options with { CodeTimeout = TimeSpan.FromSeconds(60) });
+        await using var service = new AgentService(store, new AiProviderFactory([provider]), w.Options with { CodeTimeout = TimeSpan.FromSeconds(60) });
         var done = new TaskCompletionSource<AgentDone>(TaskCreationOptions.RunContinuationsAsynchronously);
         var stream = service.StartStream(parent.Id, "delegate proof", new ApiConfig { ProviderId = provider.ProviderId, DefaultModel = "parent-model" },
             (_, evt) => { if (evt is AgentDone completed) done.TrySetResult(completed); return Task.CompletedTask; });
         await provider.ChildStarted.Task.WaitAsync(TimeSpan.FromSeconds(60));
-        service.CancelStream(stream);
+        await service.CancelStreamAsync(stream).WaitAsync(TimeSpan.FromSeconds(30));
         Assert.Equal("cancelled", (await done.Task.WaitAsync(TimeSpan.FromSeconds(30))).FinishReason);
         await provider.ChildCancelled.Task.WaitAsync(TimeSpan.FromSeconds(30));
     }
@@ -76,7 +79,7 @@ public sealed class SubAgentIntegrationTests
             {
                 var code = child
                     ? "print(call_tool(\"file_write\", path=\"desktop-child.txt\", content=\"blocked\"))"
-                    : "job = call_tool(\"start_agent\", task=\"child proof\", model=\"child-model\")\nprint(call_tool(\"wait_agent\", id=job['data']['taskId'], timeoutSeconds=30))";
+                    : "print(call_tool(\"subagent\", agent=\"modify\", task=\"child proof\"))";
                 yield return new(ChunkType.ToolCallComplete, ToolCall: new("code", "execute_code", JsonSerializer.Serialize(new { code })));
                 yield return new(ChunkType.Done, FinishReason: "tool_calls");
             }

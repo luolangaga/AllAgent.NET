@@ -6,32 +6,83 @@ namespace LanAgent.Terminal;
 
 internal static class TerminalQuestionPrompt
 {
-    private sealed record Choice(string Text, bool Other = false);
     public static async Task<string?> AskAsync(IAnsiConsole console, TerminalKeyReader reader, AgentQuestion question, CancellationToken ct)
     {
         var host = new SpectrePromptConsole(console, reader);
-        var choices = question.Choices.Select(text => new Choice(text)).Append(new Choice("输入其他回答", true)).ToArray();
-        string Label(Choice choice) => Markup.Escape(TerminalSafeText.Clean(choice.Text));
-        List<Choice> selected;
-        if (question.Multiple)
+        if (question.Choices.Count == 0)
         {
-            var prompt = new MultiSelectionPrompt<Choice>().Title(Markup.Escape(TerminalSafeText.Clean(question.Question)))
-                .PageSize(Math.Clamp(console.Profile.Height - 8, 3, 14)).Required().UseConverter(Label)
-                .InstructionsText("[dim]↑↓ 移动 · 空格 勾选 · Enter 提交 · Esc 跳过[/]").AddChoices(choices);
-            selected = await host.PromptAsync(prompt, ct);
+            var answer = await host.PromptAsync(new TextPrompt<string>(Markup.Escape(TerminalSafeText.Clean(question.Question)) + " › ").AllowEmpty(), ct);
+            return string.IsNullOrWhiteSpace(answer) ? null : question.Multiple ? JsonSerializer.Serialize(new[] { answer }) : answer;
         }
-        else
+        var focus = 0;
+        var selected = new HashSet<int>();
+        var typed = new System.Text.StringBuilder();
+        string? result = null;
+        var requestOther = false;
+        string? notice = null;
+        Markup Render()
         {
-            var prompt = new SelectionPrompt<Choice>().Title(Markup.Escape(TerminalSafeText.Clean(question.Question)))
-                .PageSize(Math.Clamp(console.Profile.Height - 8, 3, 14)).UseConverter(Label).AddChoices(choices);
-            selected = [await host.PromptAsync(prompt, ct)];
+            var rows = new List<string> { Markup.Escape(TerminalSafeText.Clean(question.Question)) };
+            for (var i = 0; i <= question.Choices.Count; i++)
+            {
+                var label = i == question.Choices.Count ? "其他 › " + typed : question.Choices[i];
+                var marker = question.Multiple ? (selected.Contains(i) ? "[x] " : "[ ] ") : "";
+                var row = Markup.Escape(marker + TerminalSafeText.Clean(label));
+                rows.Add(i == focus ? "[bold yellow]› " + row + "[/]" : "  " + row);
+            }
+            rows.Add("[dim]↑↓ 选择 · 多选空格勾选 · 其他行直接输入/粘贴 · Enter 提交 · Esc 跳过[/]");
+            if (notice != null) rows.Add("[yellow]" + Markup.Escape(notice) + "[/]");
+            return new Markup(string.Join("\n", rows));
         }
-        var answers = selected.Where(choice => !choice.Other).Select(choice => choice.Text).ToList();
-        if (selected.Any(choice => choice.Other))
+        await console.Live(Render()).AutoClear(true).StartAsync(async context =>
         {
-            var typed = await host.PromptAsync(new TextPrompt<string>("其他回答 › ").AllowEmpty(), ct);
-            if (!string.IsNullOrWhiteSpace(typed)) answers.Add(typed);
+            while (true)
+            {
+                var key = await host.Input.ReadKeyAsync(true, ct) ?? default;
+                if (key.Key == ConsoleKey.UpArrow) focus = Math.Max(0, focus - 1);
+                else if (key.Key is ConsoleKey.DownArrow or ConsoleKey.Tab) focus = (focus + 1) % (question.Choices.Count + 1);
+                else if (key.Key == ConsoleKey.Enter)
+                {
+                    if (focus == question.Choices.Count && string.IsNullOrWhiteSpace(typed.ToString()))
+                    { requestOther = true; break; }
+                    var answers = new List<string>();
+                    if (question.Multiple)
+                    {
+                        answers.AddRange(selected.Order().Where(i => i < question.Choices.Count).Select(i => question.Choices[i]));
+                        if (selected.Contains(question.Choices.Count) && typed.ToString().Trim().Length > 0) answers.Add(typed.ToString());
+                    }
+                    else if (focus < question.Choices.Count) answers.Add(question.Choices[focus]);
+                    else if (typed.ToString().Trim().Length > 0) answers.Add(typed.ToString());
+                    if (answers.Count == 0)
+                    {
+                        notice = "请先按空格勾选答案，再按 Enter 提交。";
+                        context.UpdateTarget(Render()); continue;
+                    }
+                    result = question.Multiple ? JsonSerializer.Serialize(answers) : answers[0];
+                    break;
+                }
+                else if (focus == question.Choices.Count)
+                {
+                    if (key.Key == ConsoleKey.Backspace && typed.Length > 0) typed.Length--;
+                    else if (!char.IsControl(key.KeyChar) && typed.Length < 20000) typed.Append(key.KeyChar);
+                    if (typed.Length > 0) selected.Add(focus); else selected.Remove(focus);
+                }
+                else if (question.Multiple && key.Key == ConsoleKey.Spacebar)
+                {
+                    if (!selected.Add(focus)) selected.Remove(focus);
+                }
+                context.UpdateTarget(Render());
+            }
+        });
+        if (requestOther)
+        {
+            // Close the Live scope before opening a text prompt; never nest dynamic displays.
+            var other = await host.PromptAsync(new TextPrompt<string>("其他回答 › ")
+                .Validate(value => !string.IsNullOrWhiteSpace(value), "请输入其他回答，再按 Enter 提交。"), ct);
+            if (!question.Multiple) return other;
+            var answers = selected.Order().Where(i => i < question.Choices.Count).Select(i => question.Choices[i]).Append(other);
+            return JsonSerializer.Serialize(answers);
         }
-        return answers.Count == 0 ? null : question.Multiple ? JsonSerializer.Serialize(answers) : answers[0];
+        return result;
     }
 }

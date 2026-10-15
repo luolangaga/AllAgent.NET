@@ -1,5 +1,5 @@
-import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { defineStore } from '@/lib/store'
+import { ref, computed } from '@/lib/store'
 import type { Conversation, Message } from '@/types'
 import { invoke, bridgeEvents, type BridgeEvents } from '@/bridge'
 import { restoreMessages, parseObject } from '@/utils/execution'
@@ -11,6 +11,9 @@ export const useConversationsStore = defineStore('conversations', () => {
   const streamingMessageId = ref<string | null>(null)
   const activeStreamId = ref<string | null>(null)
   const isLoading = ref(false)
+  let selectionVersion = 0
+  let streamCleanup: (() => void) | undefined
+  let starting = false
 
   const active = computed(() => conversations.value.find(c => c.id === activeId.value) ?? null)
 
@@ -23,18 +26,24 @@ export const useConversationsStore = defineStore('conversations', () => {
   }
 
   async function selectConversation(id: string) {
+    if (starting || streamingMessageId.value) throw new Error('请先停止当前生成')
+    const selection = ++selectionVersion
     activeId.value = id
     messages.value = []
     isLoading.value = true
     try {
-      messages.value = restoreMessages(await invoke<Message[]>('conversations.getMessages', { conversationId: id }))
+      const loaded = restoreMessages(await invoke<Message[]>('conversations.getMessages', { conversationId: id }))
+      if (selection === selectionVersion) messages.value = loaded
     } finally {
-      isLoading.value = false
+      if (selection === selectionVersion) isLoading.value = false
     }
   }
 
   async function createConversation() {
+    if (streamingMessageId.value) throw new Error('请先停止当前生成')
     const conv = await invoke<Conversation>('conversations.create', { title: 'New Conversation' })
+    selectionVersion++
+    isLoading.value = false
     conversations.value.unshift(conv)
     activeId.value = conv.id
     messages.value = []
@@ -48,6 +57,8 @@ export const useConversationsStore = defineStore('conversations', () => {
   }
 
   async function deleteConversation(id: string) {
+    if (starting || streamingMessageId.value) throw new Error('请先停止当前生成')
+    selectionVersion++
     await invoke('conversations.delete', { id })
     conversations.value = conversations.value.filter(c => c.id !== id)
     if (activeId.value === id) {
@@ -59,6 +70,9 @@ export const useConversationsStore = defineStore('conversations', () => {
   }
 
   async function sendMessage(content: string, apiConfigId: string, thinkingEnabled = false, thinkingBudget = 8000) {
+    if (starting || streamingMessageId.value) throw new Error('已有对话正在生成')
+    starting = true
+    try {
     if (!activeId.value) await createConversation()
 
     const userMsg: Message = {
@@ -100,6 +114,14 @@ export const useConversationsStore = defineStore('conversations', () => {
     } finally { bridgeEvents.off('*', bufferEarlyEvent) }
     activeStreamId.value = streamId
 
+    let completedText = ''
+    let completedThinking = ''
+    const onIteration = (data: { streamId: string }) => {
+      if (data.streamId !== streamId) return
+      const msg = findMessage(assistantId)
+      if (msg) { completedText = msg.content; completedThinking = msg.reasoningContent ?? '' }
+    }
+
     const onToken = (data: { text: string; streamId: string }) => {
       if (data.streamId !== streamId) return
       const msg = findMessage(assistantId)
@@ -110,6 +132,12 @@ export const useConversationsStore = defineStore('conversations', () => {
       if (data.streamId !== streamId) return
       const msg = findMessage(assistantId)
       if (msg) msg.reasoningContent = (msg.reasoningContent ?? '') + data.text
+    }
+
+    const onNotice = (data: { resetResponse: boolean; streamId: string }) => {
+      if (data.streamId !== streamId || !data.resetResponse) return
+      const msg = findMessage(assistantId)
+      if (msg) { msg.content = completedText; msg.reasoningContent = completedThinking }
     }
 
     const onToolCallStarted = (data: { id: string; name: string; args: string; parentId?: string; streamId: string }) => {
@@ -177,26 +205,34 @@ export const useConversationsStore = defineStore('conversations', () => {
     function cleanup() {
       bridgeEvents.off('agent.token', onToken)
       bridgeEvents.off('agent.thinking', onThinking)
+      bridgeEvents.off('agent.iteration', onIteration)
       bridgeEvents.off('agent.toolCallStarted', onToolCallStarted)
       bridgeEvents.off('agent.toolCallOutput', onToolCallOutput)
       bridgeEvents.off('agent.toolCallCompleted', onToolCallCompleted)
       bridgeEvents.off('agent.done', onDone)
       bridgeEvents.off('agent.error', onError)
+      bridgeEvents.off('agent.notice', onNotice)
     }
 
     bridgeEvents.on('agent.token', onToken)
     bridgeEvents.on('agent.thinking', onThinking)
+    bridgeEvents.on('agent.iteration', onIteration)
     bridgeEvents.on('agent.toolCallStarted', onToolCallStarted)
     bridgeEvents.on('agent.toolCallOutput', onToolCallOutput)
     bridgeEvents.on('agent.toolCallCompleted', onToolCallCompleted)
     bridgeEvents.on('agent.done', onDone)
     bridgeEvents.on('agent.error', onError)
+    bridgeEvents.on('agent.notice', onNotice)
     for (const event of earlyEvents) bridgeEvents.emit(event.type, event.data)
+    if (activeStreamId.value) streamCleanup = cleanup
+    } finally { starting = false }
   }
 
   async function cancelStream() {
     if (activeStreamId.value) {
       await invoke('chat.cancelStream', { streamId: activeStreamId.value })
+      streamCleanup?.()
+      streamCleanup = undefined
       const msg = findMessage(streamingMessageId.value ?? '')
       if (msg) msg.status = 'done'
       streamingMessageId.value = null

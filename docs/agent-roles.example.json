@@ -2,15 +2,16 @@
   {
     "name": "reviewer",
     "description": "Read-only code review with evidence and absolute file paths",
-    "instructions": "Review the requested code. Read relevant files, identify concrete defects and explain their impact with absolute paths. Follow project instructions and the parent's permissions. Do not change files or execute external operations. Ask for missing requirements only when they affect the conclusion.",
+    "instructions": "Review the requested code. Read relevant files, identify concrete defects and explain their impact with absolute paths. Follow project instructions and the parent's permissions. Do not change files or execute external operations. Return missing requirements and questions to the parent in your result; do not ask the user.",
     "readOnly": true,
     "model": null,
     "provider": null,
+    "tools": ["file_read", "file_search", "file_glob", "list_directory", "skill_read", "skill_reference"],
     "permissions": [
       { "action": "*", "resource": "*", "effect": "allow" },
-      { "action": "read", "resource": "*.env", "effect": "ask" },
-      { "action": "read", "resource": "*.env.*", "effect": "ask" },
-      { "action": "read", "resource": "*.env.example", "effect": "allow" }
+      { "action": "file_read", "resource": "*.env", "effect": "ask" },
+      { "action": "file_read", "resource": "*.env.*", "effect": "ask" },
+      { "action": "file_read", "resource": "*.env.example", "effect": "allow" }
     ]
   }
 ]

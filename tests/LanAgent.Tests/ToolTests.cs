@@ -8,11 +8,36 @@ namespace LanAgent.Tests;
 public sealed class ToolTests
 {
     [Fact]
+    public async Task ShellErrorsIdentifyTheFieldAndDoNotRunTheExecutable()
+    {
+        using var w = new TestWorkspace();
+        var timeout = w.Tools.ValidateInvocation("run_shell", JsonSerializer.SerializeToElement(new { exe = "probe", args = Array.Empty<string>(), timeout_seconds = -1 }));
+        Assert.Contains("timeout_seconds", timeout!.Error);
+        var index = w.Tools.ValidateInvocation("run_shell", JsonSerializer.SerializeToElement(new { exe = "probe", args = new[] { "normal", "invalid\0argument" } }));
+        Assert.Contains("args[1]", index!.Error);
+        var registry = new ToolRegistry(); registry.Register(w.Tools);
+        var invalid = await registry.CallAsync("run_shell", JsonSerializer.SerializeToElement(new { command = "must not execute" }), default);
+        Assert.False(invalid.Ok); Assert.Contains("run_shell", invalid.Error); Assert.Contains("exe:string", invalid.Error); Assert.Contains("args:array", invalid.Error);
+    }
+    [Fact]
+    public async Task AmbiguousEditReportsLinesWithoutWriting()
+    {
+        using var workspace = new TestWorkspace();
+        var content = "same\nother\nsame\n";
+        var path = Path.Combine(workspace.Root, "ambiguous.txt");
+        await File.WriteAllTextAsync(path, content);
+        var result = await workspace.Tools.EditAsync("ambiguous.txt", [new("same", "changed")]);
+        Assert.False(result.Ok);
+        Assert.Contains("found 2", result.Error);
+        Assert.Contains("1, 3", result.Error);
+        Assert.Equal(content, await File.ReadAllTextAsync(path));
+    }
+    [Fact]
     public void GeneratorEmitsStrongContracts()
     {
         using var workspace = new TestWorkspace();
         var contracts = workspace.Tools.Definitions;
-        Assert.Equal(7, contracts.Count);
+        Assert.Equal(9, contracts.Count);
         var shell = contracts.Single(t => t.Name == "run_shell");
         Assert.Equal(ToolRisk.Execute, shell.Risk);
         Assert.Equal("array", shell.Parameters.GetProperty("properties").GetProperty("args").GetProperty("type").GetString());
@@ -65,8 +90,34 @@ public sealed class ToolTests
         Assert.True(result.Ok); Assert.True(result.Truncated);
         var data = JsonSerializer.SerializeToElement(result.Data);
         Assert.Equal(ToolResult.MaxOutputCharacters, data.GetProperty("content").GetString()!.Length);
-        var second = await workspace.Tools.ReadAsync("large.txt", 25000);
+        Assert.Equal(1, data.GetProperty("totalLines").GetInt32());
+        Assert.Equal(20000, data.GetProperty("nextColumnOffset").GetInt32());
+        var second = await workspace.Tools.ReadAsync("large.txt", column_offset: 25000);
         Assert.Equal("END", JsonSerializer.SerializeToElement(second.Data).GetProperty("content").GetString());
+    }
+
+    [Fact]
+    public async Task DirectoryFilteringIsOptionalAndPaginationIsStable()
+    {
+        using var workspace = new TestWorkspace();
+        foreach (var name in new[] { "bin", "obj", ".git", "node_modules", "src" }) Directory.CreateDirectory(Path.Combine(workspace.Root, name));
+        var result = await workspace.Tools.ListAsync();
+        var entries = JsonSerializer.SerializeToElement(result.Data).GetProperty("entries");
+        Assert.Single(entries.EnumerateArray()); Assert.Equal("src", entries[0].GetProperty("name").GetString());
+        result = await workspace.Tools.ListAsync(include_ignored: true);
+        Assert.Equal(5, JsonSerializer.SerializeToElement(result.Data).GetProperty("entries").GetArrayLength());
+    }
+
+    [Fact]
+    public async Task ShellAnsiFilteringHandlesSplitSequencesBeforeApplyingBudget()
+    {
+        var text = new string('x', 2047) + "\u001b[32mName\u001b[0m\u001b]0;title\a!";
+        using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(text));
+        using var reader = new StreamReader(stream);
+        var live = new System.Text.StringBuilder();
+        var result = await BoundedProcess.DrainAsync(reader, 2052, default, s => live.Append(s), stripAnsi: true);
+        Assert.Equal(new string('x', 2047) + "Name!", result.Text);
+        Assert.Equal(result.Text, live.ToString()); Assert.False(result.Truncated);
     }
 
     [Fact]
@@ -91,9 +142,9 @@ public sealed class ToolTests
         using var workspace = new TestWorkspace();
         Assert.True((await workspace.Tools.WriteAsync("file.txt", "old old")).Ok);
         Assert.False((await workspace.Tools.WriteAsync("file.txt", "new")).Ok);
-        Assert.False((await workspace.Tools.EditAsync("file.txt", "old", "new")).Ok);
+        Assert.False((await workspace.Tools.EditAsync("file.txt", [new("old", "new")])).Ok);
         Assert.True((await workspace.Tools.WriteAsync("file.txt", "unique old", true)).Ok);
-        Assert.True((await workspace.Tools.EditAsync("file.txt", "old", "new")).Ok);
+        Assert.True((await workspace.Tools.EditAsync("file.txt", [new("old", "new")])).Ok);
         Assert.Equal("unique new", await File.ReadAllTextAsync(Path.Combine(workspace.Root, "file.txt")));
     }
 
@@ -128,6 +179,7 @@ public sealed class ToolTests
     public async Task ShellTimeoutKillsProcessTree()
     {
         using var workspace = new TestWorkspace();
-        await Assert.ThrowsAsync<TimeoutException>(() => workspace.Tools.RunShellAsync("probe", ["wait"], timeout_seconds: 1));
+        var result = await workspace.Tools.RunShellAsync("probe", ["wait"], timeout_seconds: 1);
+        Assert.False(result.Ok); Assert.True(JsonSerializer.SerializeToElement(result.Data).GetProperty("timedOut").GetBoolean());
     }
 }

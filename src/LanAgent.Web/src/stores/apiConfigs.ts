@@ -1,5 +1,5 @@
-import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { defineStore } from '@/lib/store'
+import { ref } from '@/lib/store'
 import type { ApiConfig } from '@/types'
 import { invoke } from '@/bridge'
 
@@ -29,6 +29,11 @@ export const useApiConfigsStore = defineStore('apiConfigs', () => {
   }
 
   async function save(config: Partial<ApiConfig> & { providerId: string; displayName: string; baseUrl: string; defaultModel: string }) {
+    const url = new URL(config.baseUrl)
+    if (!['http:', 'https:'].includes(url.protocol)) throw new Error('API 地址必须使用 HTTP 或 HTTPS')
+    if (!Number.isFinite(config.temperature ?? 0.7) || (config.temperature ?? 0.7) < 0 || (config.temperature ?? 0.7) > 2) throw new Error('Temperature 必须在 0–2 之间')
+    if (!Number.isInteger(config.maxTokens ?? 4096) || (config.maxTokens ?? 4096) <= 0) throw new Error('最大输出 Tokens 必须是正整数')
+    if (config.extraHeadersJson?.trim()) { const headers = JSON.parse(config.extraHeadersJson); if (!headers || Array.isArray(headers) || typeof headers !== 'object') throw new Error('额外请求头必须是 JSON 对象') }
     const saved = await invoke<ApiConfig>('apiConfigs.save', {
       id: config.id ?? null,
       providerId: config.providerId,

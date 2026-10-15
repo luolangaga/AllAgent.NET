@@ -16,6 +16,9 @@ public sealed class PluginHost : IAsyncDisposable
     private readonly Dictionary<string, string> _errors = new(StringComparer.OrdinalIgnoreCase);
     private readonly string _root;
     private readonly object _sync = new();
+    private IReadOnlyList<InstalledPlugin>? _installedSnapshot;
+    private (long Length, DateTime Modified)? _manifestStamp;
+    private long _manifestChecked;
     private readonly HashSet<string> _disabledHooks = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _reservedAuthenticationIds = new(StringComparer.OrdinalIgnoreCase);
     public void ReserveAuthenticationIds(params string[] ids) { lock (_sync) { if (_loaded.Count > 0) throw new InvalidOperationException("必须在加载插件前保留登录 ID。"); foreach (var id in ids) _reservedAuthenticationIds.Add(id); } }
@@ -23,8 +26,30 @@ public sealed class PluginHost : IAsyncDisposable
     public void ProvideService<T>(T service) where T : class => _services[typeof(T)] = service;
     public PluginHost(string dataDirectory) { _root = Path.Combine(Path.GetFullPath(dataDirectory), "plugins"); Directory.CreateDirectory(_root); if (File.Exists(Path.Combine(_root, "disabled-hooks.json"))) foreach (var name in JsonSerializer.Deserialize<string[]>(File.ReadAllText(Path.Combine(_root, "disabled-hooks.json"))) ?? []) _disabledHooks.Add(name); Hooks = new(() => HookSnapshot()); }
     public HookPipeline Hooks { get; }
+    public AgentExtensionPipeline Extensions => new(
+        () => { lock (_sync) return _loaded.SelectMany(l => l.Context.TurnExtensions).ToArray(); },
+        () => { lock (_sync) return _loaded.SelectMany(l => l.Context.RequestExtensions).ToArray(); });
     private string ManifestPath => Path.Combine(_root, "installed.json");
-    public IReadOnlyList<InstalledPlugin> Installed => File.Exists(ManifestPath) ? JsonSerializer.Deserialize<InstalledPlugin[]>(File.ReadAllText(ManifestPath)) ?? [] : [];
+    public IReadOnlyList<InstalledPlugin> Installed
+    {
+        get
+        {
+            lock (_sync)
+            {
+                var now = Environment.TickCount64;
+                if (_installedSnapshot != null && now - _manifestChecked < 1000) return _installedSnapshot;
+                var file = new FileInfo(ManifestPath);
+                (long Length, DateTime Modified)? stamp = file.Exists ? (file.Length, file.LastWriteTimeUtc) : null;
+                if (_installedSnapshot == null || stamp != _manifestStamp)
+                {
+                    _installedSnapshot = file.Exists ? JsonSerializer.Deserialize<InstalledPlugin[]>(File.ReadAllText(ManifestPath)) ?? [] : [];
+                    _manifestStamp = stamp;
+                }
+                _manifestChecked = now;
+                return _installedSnapshot;
+            }
+        }
+    }
     public IReadOnlyList<PluginStatus> Status => Installed.Select(p => { lock (_sync) { var loaded = _loaded.FirstOrDefault(l => l.Package.PackageId.Equals(p.PackageId, StringComparison.OrdinalIgnoreCase)); return new PluginStatus(loaded?.Plugin.Id ?? p.PackageId, loaded?.Plugin.Name ?? p.PackageId, p.PackageId, p.Version, p.Enabled, _errors.GetValueOrDefault(p.PackageId)); } }).ToArray();
     public IReadOnlyList<IAiProvider> Providers { get { lock (_sync) return _loaded.SelectMany(l => l.Context.Providers).ToArray(); } }
     public IReadOnlyList<PluginCommand> Commands { get { lock (_sync) return _loaded.SelectMany(l => l.Context.Commands).ToArray(); } }
@@ -38,6 +63,7 @@ public sealed class PluginHost : IAsyncDisposable
     {
         var items = Installed.Where(p => !p.PackageId.Equals(package.PackageId, StringComparison.OrdinalIgnoreCase)).Append(package).ToArray();
         var temp = ManifestPath + ".tmp"; File.WriteAllText(temp, JsonSerializer.Serialize(items, new JsonSerializerOptions { WriteIndented = true })); File.Move(temp, ManifestPath, true);
+        lock (_sync) _installedSnapshot = null;
     }
     public async Task LoadEnabledAsync(CancellationToken ct = default)
     {
@@ -76,6 +102,8 @@ public sealed class PluginHost : IAsyncDisposable
                 ValidateIds(_loaded.SelectMany(l => l.Context.Authentication).Select(c => c.Id).Concat(context.Authentication.Select(c => c.Id)));
                 if (context.Authentication.Any(a => _reservedAuthenticationIds.Contains(a.Id))) throw new InvalidOperationException("认证插件与内置登录 ID 冲突；请使用独立的插件 ID。");
                 ValidateIds(_loaded.SelectMany(l => l.Context.Hooks).Select(c => c.Name).Concat(context.Hooks.Select(c => c.Name)));
+                ValidateIds(_loaded.SelectMany(l => l.Context.TurnExtensions).Select(c => c.Name).Concat(context.TurnExtensions.Select(c => c.Name)));
+                ValidateIds(_loaded.SelectMany(l => l.Context.RequestExtensions).Select(c => c.Name).Concat(context.RequestExtensions.Select(c => c.Name)));
                 _loaded.Add(new(plugin, context, loader, package));
             }
         }
@@ -97,6 +125,7 @@ public sealed class PluginHost : IAsyncDisposable
         await SetEnabledAsync(packageId, false);
         // Keep files recoverable; removing the manifest entry makes the package unavailable to the host.
         File.WriteAllText(ManifestPath + ".tmp", JsonSerializer.Serialize(Installed.Where(p => !p.PackageId.Equals(packageId, StringComparison.OrdinalIgnoreCase)))); File.Move(ManifestPath + ".tmp", ManifestPath, true);
+        lock (_sync) _installedSnapshot = null;
     }
     public async ValueTask DisposeAsync()
     { foreach (var loaded in _loaded) { try { await loaded.Plugin.DisposeAsync(); } finally { loaded.Loader.Unload(); } } _loaded.Clear(); }

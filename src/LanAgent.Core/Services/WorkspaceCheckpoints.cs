@@ -60,7 +60,7 @@ public sealed partial class WorkspaceCheckpoints
             checkpoint.AfterMessages = CloneMessages(messages ?? []); Save(checkpoint);
         }
     }
-    public void MarkExternalAction() { lock (_gate) { if (_active != null) { _active.ExternalActions = true; Save(_active); } } }
+    public void MarkExternalAction() { lock (_gate) { if (_active is { ExternalActions: false }) { _active.ExternalActions = true; Save(_active); } } }
     public void BeforeWrite(string path)
     {
         lock (_gate)
@@ -68,10 +68,7 @@ public sealed partial class WorkspaceCheckpoints
             if (_active == null) return;
             var relative = Path.GetRelativePath(_workspace.Root, _workspace.Resolve(path));
             if (_active.Files.Any(f => string.Equals(f.Path, relative, StringComparison.OrdinalIgnoreCase))) return;
-            if (_active.Files.Count >= 128) throw new InvalidOperationException("Checkpoint limit: 128 modified files per turn.");
             var before = Read(relative);
-            if (_active.Files.Sum(f => (long)(f.Before?.Length ?? 0) + (f.After?.Length ?? 0)) + (before?.Length ?? 0) > 20_000_000)
-                throw new InvalidOperationException("Checkpoint exceeds the 20 MB turn limit.");
             _active.Files.Add(new FileCheckpoint { Path = relative, Before = before }); Save(_active);
         }
     }
@@ -92,7 +89,6 @@ public sealed partial class WorkspaceCheckpoints
             return Directory.EnumerateFiles(_storage.Root, "*.json").Where(file => file != RevertJournalPath).Select(file =>
             {
                 _storage.Resolve(file);
-                if (new FileInfo(file).Length > 40_000_000) throw new IOException("Checkpoint storage exceeds its size limit.");
                 return JsonSerializer.Deserialize<WorkspaceCheckpoint>(File.ReadAllText(file)) ?? throw new IOException("Invalid checkpoint.");
             }).Where(c => c.SessionId == sessionId).OrderByDescending(c => c.CreatedAt).ToArray();
         }
@@ -105,15 +101,13 @@ public sealed partial class WorkspaceCheckpoints
             EnsureNoRevertJournal();
             var checkpoint = List(sessionId).Single(c => c.Id == checkpointId);
             if (checkpoint.Undone != redo) throw new InvalidOperationException(redo ? "Checkpoint was not undone." : "Checkpoint already undone.");
-            if (checkpoint.Files.Count > 128) throw new IOException("Invalid checkpoint file count.");
             var files = checkpoint.Files.Where(f => f.Completed).ToArray();
             foreach (var file in checkpoint.Files.Where(f => !f.Completed))
                 if (!Equal(Read(file.Path), file.Before)) throw new IOException("检查点写入曾中断，无法安全确认文件状态：" + file.Path);
             // Validate every target and expected content before touching any file.
             foreach (var file in files)
             {
-                var expected = redo ? file.Before : file.After; var replacement = redo ? file.After : file.Before;
-                if ((replacement?.Length ?? 0) > 1_000_000) throw new IOException("Invalid checkpoint file size.");
+                var expected = redo ? file.Before : file.After;
                 if (!Equal(Read(file.Path), expected)) throw new IOException("文件已被其他操作修改，未还原任何文件：" + file.Path);
             }
             foreach (var file in files)
@@ -135,7 +129,6 @@ public sealed partial class WorkspaceCheckpoints
         var target = _workspace.Resolve(path);
         if (Directory.Exists(target)) throw new IOException("Checkpoint target is a directory: " + path);
         if (!File.Exists(target)) return null;
-        if (new FileInfo(target).Length > 1_000_000) throw new IOException("Checkpoint file exceeds 1 MB: " + path);
         return File.ReadAllBytes(target);
     }
     private static bool Equal(byte[]? left, byte[]? right) => left == null || right == null ? left == right : left.AsSpan().SequenceEqual(right);

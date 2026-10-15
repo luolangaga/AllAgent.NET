@@ -19,7 +19,7 @@ internal sealed class TerminalArguments
         valued.Add("subagent-model");
         valued.Add("subagent-provider");
         valued.Add("background-concurrency");
-        var flagged = new HashSet<string> { "help", "json", "verbose", "install", "inline", "trust-plugin", "full-access" };
+        var flagged = new HashSet<string> { "help", "json", "verbose", "install", "inline", "trust-plugin", "full-access", "ask", "no-initialize" };
         var index = 0;
         if (args.Length > 0 && !args[0].StartsWith("--")) { result.Command = args[0]; index++; }
         for (; index < args.Length; index++)
@@ -46,6 +46,9 @@ internal sealed class TerminalArguments
     }
 
     public string? Get(string name) => Values.GetValueOrDefault(name);
+    public string Workspace => Path.GetFullPath(Get("workspace") ?? Environment.CurrentDirectory);
+    public string DataDirectory => Path.GetFullPath(Get("data-dir") ?? Path.Combine(Workspace, ".lanagent", "data"));
+    public string SharedDirectory => Path.GetFullPath(Get("data-dir") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "LanAgent"));
     public int BackgroundConcurrency => Get("background-concurrency") is { } value
         ? int.TryParse(value, out var parsed) && parsed >= 0 ? parsed : throw new ArgumentException("--background-concurrency requires a nonnegative integer; 0 means unlimited.")
         : 0;
@@ -59,10 +62,10 @@ internal sealed class TerminalArguments
             WorkspaceRoot = workspace, PythonPath = Get("python"), PowerShellPath = Get("pwsh"),
             SandboxWorkerPath = Get("worker") ?? Path.Combine(AppContext.BaseDirectory, "sandbox", "LanAgent.Sandbox.exe"),
             PythonGuestPath = Get("guest") ?? Environment.GetEnvironmentVariable("HYPERLIGHT_PYTHON_GUEST_PATH"),
-            FullAccess = Flags.Contains("full-access"), MaxToolCalls = Number("max-tools", int.MaxValue),
-            RunTimeout = Get("timeout") == null ? Timeout.InfiniteTimeSpan : TimeSpan.FromSeconds(Number("timeout", 600)), CodeTimeout = TimeSpan.FromSeconds(Number("code-timeout", 60)),
+            FullAccess = !Flags.Contains("ask"), MaxToolCalls = Number("max-tools", int.MaxValue),
+            RunTimeout = Get("timeout") == null ? Timeout.InfiniteTimeSpan : TimeSpan.FromSeconds(Number("timeout", 600)), CodeTimeout = TimeSpan.FromSeconds(Number("code-timeout", !Flags.Contains("ask") ? 600 : 60)),
             ShellAllowlist = Shell, Approver = approval.ApproveAsync,
-            AuditPath = Path.Combine(Get("data-dir") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "LanAgent"), "audit.jsonl")
+            AuditPath = Path.Combine(DataDirectory, "audit.jsonl")
         };
     }
 

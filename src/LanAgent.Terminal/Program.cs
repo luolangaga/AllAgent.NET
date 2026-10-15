@@ -1,3 +1,3 @@
 using LanAgent.Terminal;
 
-return await TerminalApp.RunAsync(args);
+return await TerminalSession.RunAsync(args);

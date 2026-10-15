@@ -20,7 +20,7 @@ public class AnthropicProvider : IAiProvider
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         request = request with { Config = ProviderCatalog.ResolveCredentials(request.Config) };
-        using var http = new HttpClient();
+        using var http = ModelHttpClient.Create();
         http.DefaultRequestHeaders.Add("x-api-key", request.Config.ApiKey);
         http.DefaultRequestHeaders.Add("anthropic-version", "2023-06-01");
 
@@ -178,11 +178,14 @@ public class AnthropicProvider : IAiProvider
         var body = JsonSerializer.SerializeToNode(BuildBody(request))!.AsObject();
         // Cache the reusable system prefix separately from the growing conversation.
         // Anthropic silently ignores breakpoints below the model's minimum cache size.
-        if (body["system"] is JsonArray system && system.LastOrDefault() is JsonObject lastSystem)
+        if (body["system"] is JsonArray system && system.Count > 0)
         {
             // The first block is LanAgent's reusable contract; later blocks contain project/session policy.
             if (system[0] is JsonObject firstSystem) firstSystem["cache_control"] = new JsonObject { ["type"] = "ephemeral" };
-            lastSystem["cache_control"] = new JsonObject { ["type"] = "ephemeral" };
+            // Changing learned context must not evict the breakpoint after stable project/session instructions.
+            var stableCount = request.Messages.Where(m => m.Role == "system" && !string.IsNullOrEmpty(m.Content)).TakeWhile(m => !m.IsVolatileContext).Count();
+            if (stableCount > 0 && system[stableCount - 1] is JsonObject stableSystem)
+                stableSystem["cache_control"] = new JsonObject { ["type"] = "ephemeral" };
         }
         else if (body["tools"] is JsonArray tools && tools.LastOrDefault() is JsonObject lastTool)
             lastTool["cache_control"] = new JsonObject { ["type"] = "ephemeral" };
@@ -274,7 +277,7 @@ public class AnthropicProvider : IAiProvider
                 messages,
                 tools,
                 stream = true,
-                max_tokens = request.Config.MaxTokens
+                max_tokens = ModelCatalog.OutputLimit(request.Config)
             };
         }
 
@@ -284,7 +287,7 @@ public class AnthropicProvider : IAiProvider
             system = systemPrompt,
             messages,
             stream = true,
-            max_tokens = request.Config.MaxTokens
+            max_tokens = ModelCatalog.OutputLimit(request.Config)
         };
     }
 }

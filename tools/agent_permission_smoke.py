@@ -107,7 +107,7 @@ try:
     assert all([tool["function"]["name"] for tool in request["tools"]] == ["execute_code"] for request in requests)
     assert not errors, errors
     wait_for(lambda text: "完成" in text)
-    proc.write("/exit\r")
+    proc.terminate(force=True)
     print(json.dumps({"ok": True, "checks": ["actual resumed child microVM", "full-access does not skip role ask", "Y allows read", "N refuses read", "deny does not prompt", "denied contents excluded from model", "only execute_code exposed"], "artifacts": str(output)}))
 finally:
     (output / "requests.json").write_text(json.dumps(requests, indent=2), encoding="utf-8")

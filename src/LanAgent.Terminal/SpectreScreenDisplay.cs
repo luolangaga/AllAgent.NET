@@ -1,23 +1,27 @@
-using System.Threading.Channels;
 using Spectre.Console;
 using Spectre.Console.Rendering;
+using System.Threading.Channels;
 
 namespace LanAgent.Terminal;
 
-/// <summary>Every refresh executes inside Spectre's Live scope; prompts wait for that owner to stop.</summary>
-internal sealed class SpectreScreenDisplay(IAnsiConsole console) : IDisposable
+/// <summary>Single screen owner. Only changed rows are written; prompts take ownership after Stop.</summary>
+internal sealed class SpectreScreenDisplay(IAnsiConsole console, bool fullScreen = false) : IDisposable
 {
     private sealed record UpdateRequest(IRenderable Frame, TaskCompletionSource Completed);
     private Channel<UpdateRequest>? _updates;
     private Task? _running;
+    private bool _started;
+    private IReadOnlyList<List<Segment>>? _rows;
+    private int _width, _height;
 
     public void Start(IRenderable frame)
     {
-        if (_running != null) return;
-        var updates = Channel.CreateUnbounded<UpdateRequest>(new() { SingleReader = true, SingleWriter = true });
-        _updates = updates;
-        _running = console.Live(frame).AutoClear(true).Overflow(VerticalOverflow.Crop)
-            .StartAsync(async context =>
+        if (!fullScreen)
+        {
+            if (_running != null) return;
+            var updates = Channel.CreateUnbounded<UpdateRequest>(new() { SingleReader = true, SingleWriter = true });
+            _updates = updates;
+            _running = console.Live(frame).AutoClear(true).Overflow(VerticalOverflow.Crop).StartAsync(async context =>
             {
                 context.Refresh();
                 await foreach (var request in updates.Reader.ReadAllAsync().ConfigureAwait(false))
@@ -26,7 +30,13 @@ internal sealed class SpectreScreenDisplay(IAnsiConsole console) : IDisposable
                     catch (Exception error) { request.Completed.TrySetException(error); throw; }
                 }
             });
-        if (_running.IsCompleted) _running.GetAwaiter().GetResult();
+            if (_running.IsCompleted) _running.GetAwaiter().GetResult();
+            return;
+        }
+        if (_started) return;
+        _started = true;
+        _rows = null;
+        console.Cursor.Hide();
     }
 
     public void Update(IRenderable frame)
@@ -38,12 +48,47 @@ internal sealed class SpectreScreenDisplay(IAnsiConsole console) : IDisposable
         completed.Task.GetAwaiter().GetResult();
     }
 
+    public void Update(Segment[] segments, int width, int height)
+    {
+        if (!_started) return;
+        var rows = Segment.SplitLines(segments, width, height);
+        var delta = ChangedRows(rows, _width == width && _height == height ? _rows : null);
+        if (delta.Count > 0) console.Write(new SegmentFrame(delta, width));
+        _rows = rows; _width = width; _height = height;
+    }
+
+    internal static List<Segment> ChangedRows(IReadOnlyList<List<Segment>> rows, IReadOnlyList<List<Segment>>? previous)
+    {
+        var delta = new List<Segment>();
+        for (var y = 0; y < rows.Count; y++)
+        {
+            if (previous != null && y < previous.Count && Equal(rows[y], previous[y])) continue;
+            // Absolute addressing avoids newlines, auto-wrap and whole-screen erase/repaint.
+            delta.Add(Segment.Control($"\u001b[{y + 1};1H"));
+            delta.AddRange(rows[y]);
+        }
+        return delta;
+    }
+
+    private static bool Equal(List<Segment> left, List<Segment> right)
+    {
+        if (left.Count != right.Count) return false;
+        for (var i = 0; i < left.Count; i++)
+            if (left[i].Text != right[i].Text || !left[i].Style.Equals(right[i].Style) || left[i].Link != right[i].Link) return false;
+        return true;
+    }
+
     public void Stop()
     {
-        if (_running == null) return;
-        _updates!.Writer.TryComplete();
-        try { _running.GetAwaiter().GetResult(); }
-        finally { _running = null; _updates = null; }
+        if (_running != null)
+        {
+            _updates!.Writer.TryComplete();
+            try { _running.GetAwaiter().GetResult(); }
+            finally { _running = null; _updates = null; }
+        }
+        if (!_started) return;
+        _started = false; _rows = null;
+        console.Cursor.Show();
     }
 
     public void Dispose() => Stop();

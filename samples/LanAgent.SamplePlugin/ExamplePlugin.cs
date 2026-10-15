@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using LanAgent.Core.Extensions;
 using LanAgent.Core.Models;
+using LanAgent.Core.Services;
 using LanAgent.Core.Services.AI;
 using LanAgent.Core.Tools;
 
@@ -16,6 +17,21 @@ public sealed class ExamplePlugin : ILanAgentPlugin
     public void Register(PluginContext context)
     {
         context.AddTools(new ExampleTools(context.DataDirectory));
+        context.AddTurnExtension(new("example.turn", (turn, ct) =>
+        {
+            ct.ThrowIfCancellationRequested();
+            turn.SystemPrompt += "\nThe example plugin provides example_clock for the current UTC time.";
+            turn.Skills["example-review"] = new InstructionSkill("example-review", "示例插件提供的审查指引",
+                "Read the relevant code and report concrete defects with file references. Respect host tool permissions.",
+                "", "plugin", true, false, true);
+            return ValueTask.CompletedTask;
+        }));
+        context.AddRequestExtension(new("example.request", (request, ct) =>
+        {
+            ct.ThrowIfCancellationRequested();
+            request.Messages.Insert(1, new ChatMessage("system", "The example plugin is active for this request."));
+            return ValueTask.CompletedTask;
+        }));
         context.AddProvider(new ExampleProvider());
         context.AddCommand(new("hello", "示例插件：显示问候", (args, ct) => { ct.ThrowIfCancellationRequested(); return Task.FromResult("你好，" + (args.Length > 0 ? string.Join(' ', args) : "LanAgent 用户") + "！通用 DLL 插件正在工作。"); }));
         context.AddHook(new("example.audit", async (evt, ct) =>

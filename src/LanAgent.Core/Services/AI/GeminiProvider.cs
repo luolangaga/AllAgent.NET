@@ -20,7 +20,7 @@ public class GeminiProvider : IAiProvider
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         request = request with { Config = ProviderCatalog.ResolveCredentials(request.Config) };
-        using var http = new HttpClient();
+        using var http = ModelHttpClient.Create();
         var model = request.Config.DefaultModel;
         var apiKey = request.Config.ApiKey;
         var baseUrl = request.Config.BaseUrl.TrimEnd('/');
@@ -180,7 +180,7 @@ public class GeminiProvider : IAiProvider
                 system_instruction = systemInstructions.Count > 0 ? new { parts = systemInstructions.Select(text => new { text }).ToArray() } : null,
                 contents,
                 tools = new[] { new { functionDeclarations = fnDecls } },
-                generationConfig = new { temperature = request.Config.Temperature, maxOutputTokens = request.Config.MaxTokens }
+                generationConfig = new { temperature = request.Config.Temperature, maxOutputTokens = ModelCatalog.OutputLimit(request.Config) }
             };
         }
 
@@ -188,7 +188,7 @@ public class GeminiProvider : IAiProvider
         {
             system_instruction = systemInstructions.Count > 0 ? new { parts = systemInstructions.Select(text => new { text }).ToArray() } : null,
             contents,
-            generationConfig = new { temperature = request.Config.Temperature, maxOutputTokens = request.Config.MaxTokens }
+            generationConfig = new { temperature = request.Config.Temperature, maxOutputTokens = ModelCatalog.OutputLimit(request.Config) }
         };
     }
 }

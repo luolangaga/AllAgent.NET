@@ -27,6 +27,7 @@ public partial class DataStore
         _lock.EnterWriteLock();
         try
         {
+            using var transaction = BeginTransaction();
             var conversation = _data.Conversations.Single(c => c.Id == id);
             if (conversation.Revert is not { } revert) return;
             if (!string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(workspace)), revert.Workspace, StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("请返回撤回操作所在的工作区再继续任务。");
@@ -36,7 +37,7 @@ public partial class DataStore
             conversation.InvalidatedCheckpoints = conversation.InvalidatedCheckpoints.Concat(revert.Checkpoints).Distinct().ToList();
             if (conversation.ContextSummaryThroughId is { } through && !conversation.Messages.Any(m => m.Id == through))
             { conversation.ContextSummary = null; conversation.ContextSummaryThroughId = null; }
-            conversation.ContextUsedTokens = null; conversation.UpdatedAt = DateTime.UtcNow; SaveAndVerify();
+            conversation.ContextUsedTokens = null; conversation.UpdatedAt = DateTime.UtcNow; SaveAndVerify(id);
         }
         finally { _lock.ExitWriteLock(); }
     }

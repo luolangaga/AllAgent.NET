@@ -119,7 +119,7 @@ try:
     wait_for(lambda text: "完成" in text)
     (output / "steer-screen.txt").write_text(screen_text(), encoding="utf-8")
     (output / "requests.json").write_text(json.dumps(requests, indent=2), encoding="utf-8")
-    send("/exit")
+    proc.terminate(force=True)
     print(json.dumps({"ok": True, "checks": ["durable queue", "queue list", "delete", "Ctrl+X,Q queue dialog and Ctrl+U restore into existing draft", "dialog Enter steer during active response", "snapshot image after original deletion", "queue management excluded from model requests"], "artifacts": str(output)}))
 finally:
     release.set()

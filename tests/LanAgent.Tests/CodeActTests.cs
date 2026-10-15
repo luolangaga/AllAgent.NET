@@ -10,6 +10,37 @@ namespace LanAgent.Tests;
 public sealed class CodeActTests
 {
     [Fact]
+    public async Task DefensiveExceptionHandlingAndStringBatchOperationsRunInGuest()
+    {
+        using var workspace = new TestWorkspace();
+        await using var runtime = await AgentRuntime.CreateAsync(workspace.Options);
+        var result = await Execute(runtime, "try:\n    value = int('invalid')\nexcept ValueError as error:\n    print('caught')\nfinally:\n    print('done')\nfor name in ['one', 'two']:\n    print(name.replace('o', 'O'))");
+        Assert.True(result.Ok, result.ToJson());
+        Assert.Contains("caught", Stdout(result)); Assert.Contains("done", Stdout(result)); Assert.Contains("One", Stdout(result));
+    }
+
+    [Theory]
+    [InlineData("try:\n    pass\nexcept Exception as call_tool:\n    pass")]
+    [InlineData("try:\n    pass\nexcept Exception as _lan_reply:\n    pass")]
+    [InlineData("try:\n    pass\nexcept print('bad'):\n    pass")]
+    public async Task ExceptionHandlersCannotShadowReservedNamesOrEvaluateTypes(string code)
+    {
+        using var workspace = new TestWorkspace();
+        Assert.NotNull(await new PythonCodeValidator(workspace.Python).ValidateAsync(code));
+    }
+    [Fact]
+    public async Task LargeToolArgumentsCrossGuestBufferWithoutSplittingFiles()
+    {
+        using var workspace = new TestWorkspace();
+        await using var runtime = await AgentRuntime.CreateAsync(workspace.Options with { FullAccess = true });
+        var content = new string('中', 9000) + new string('x', 18000);
+        var code = "r = call_tool('file_write', path='large.cs', content=" + JsonSerializer.Serialize(content, new JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }) + ")\nprint(r['ok'])";
+        var result = await Execute(runtime, code);
+        Assert.True(result.Ok, result.ToJson());
+        Assert.Contains("True", Stdout(result));
+        Assert.Equal(content, await File.ReadAllTextAsync(Path.Combine(workspace.Root, "large.cs")));
+    }
+    [Fact]
     public async Task HyperlightCallbackPreservesExternalDirectoryConversationGrant()
     {
         using var workspace = new TestWorkspace(); using var outside = new TestWorkspace();
@@ -95,30 +126,81 @@ public sealed class CodeActTests
         Assert.Equal("other\nobject\nother\nother\nother\nfixture\nTrue\n", Stdout(result));
     }
 
-    [Fact]
-    public async Task SourceRejectionExplainsRecoveryAndNeverInvokesHostOrSandbox()
+    [Theory]
+    [InlineData("value = 1\nprint(value / 0)", 2, "ZeroDivisionError")]
+    [InlineData("value = 1\nif value\n    pass", 2, "SyntaxError")]
+    [InlineData("def fail():\n    return 1 / 0\nfail()", 2, "ZeroDivisionError")]
+    public async Task GuestRuntimeTracebackReportsTheUserSourceLine(string code, int line, string type)
     {
         using var workspace = new TestWorkspace();
-        var sandbox = new MustNotExecuteSandbox();
-        await using var provider = new CodeActProvider(new ToolRegistry(), new PythonCodeValidator(workspace.Python), sandbox);
-        var result = await provider.ExecuteAsync("execute_code", JsonSerializer.SerializeToElement(new
-        {
-            code = "call_tool('start_agent', task='must not launch')\nprint(getattr({}, 'get'))"
-        }), (_, _, _) => throw new InvalidOperationException("Host must not be called"), default);
+        await using var runtime = await AgentRuntime.CreateAsync(workspace.Options);
+        var result = await Execute(runtime, code);
         Assert.False(result.Ok);
-        Assert.Contains("Forbidden function: getattr", result.Error);
-        Assert.Contains("before execution; no host tools", result.Error);
-        Assert.Contains("isinstance", result.Error);
-        Assert.Contains("isinstance", Assert.Single(provider.ModelTools).Description);
-        Assert.Contains("taskId", provider.Instructions);
-        Assert.DoesNotContain("or define custom functions", provider.Instructions);
+        Assert.True(result.ToJson().Contains("lanagent-code.py"), result.ToJson());
+        var diagnostic = JsonSerializer.SerializeToElement(result.Data).GetProperty("diagnostic");
+        Assert.Equal(line, diagnostic.GetProperty("line").GetInt32());
+        Assert.Equal(type, diagnostic.GetProperty("type").GetString());
+        Assert.Contains("lanagent-code.py:" + line, result.Error);
+        Assert.DoesNotContain("Code rejected", result.ToJson());
     }
 
-    private sealed class MustNotExecuteSandbox : ICodeSandbox
+    [Fact]
+    public async Task GuestDiagnosticWrapperPreservesUnicodeAndLiteralEscapes()
     {
+        using var workspace = new TestWorkspace();
+        await using var runtime = await AgentRuntime.CreateAsync(workspace.Options);
+        var result = await Execute(runtime, "print('emoji 😀 中文')\nprint(r'\\u1234\\n')");
+        Assert.True(result.Ok, result.ToJson());
+        Assert.Equal("emoji 😀 中文\n\\u1234\\n\n", Stdout(result));
+    }
+
+    [Fact]
+    public async Task SourceIsPassedToSandboxAndRuntimeErrorIsReturnedWithoutWhitelistGuidance()
+    {
+        var sandbox = new RuntimeErrorSandbox();
+        await using var provider = new CodeActProvider(new ToolRegistry(), new PythonCodeValidator("missing-validator-python"), sandbox);
+        const string code = "reader = call_tool\nreader('file_read', **{'path':'x'})";
+        var result = await provider.ExecuteAsync("execute_code", JsonSerializer.SerializeToElement(new { code }), (_, _, _) => throw new InvalidOperationException(), default);
+        Assert.Equal(code, sandbox.Source);
+        Assert.False(result.Ok);
+        Assert.Equal("fixture runtime error", result.Error);
+        Assert.DoesNotContain("source validation", provider.Instructions);
+        Assert.DoesNotContain("Source policy", provider.Instructions);
+        Assert.DoesNotContain("unpacking", Assert.Single(provider.ModelTools).Description);
+    }
+
+    private sealed class RuntimeErrorSandbox : ICodeSandbox
+    {
+        public string? Source { get; private set; }
         public Task<ToolResult> ExecuteAsync(string code, IReadOnlyList<AgentToolDescriptor> tools, HostToolCallback callback, CancellationToken ct)
-            => throw new InvalidOperationException("Rejected source must not enter the sandbox");
+        { Source = code; return Task.FromResult(ToolResult.Failure("fixture runtime error")); }
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    [Fact]
+    public async Task ActualGuestExecutesDynamicCallsAndReportsRuntimeErrors()
+    {
+        using var workspace = new TestWorkspace();
+        await File.WriteAllTextAsync(Path.Combine(workspace.Root, "sample.txt"), "runtime boundary");
+        await using var runtime = await AgentRuntime.CreateAsync(workspace.Options);
+        var result = await Execute(runtime, "reader = call_tool\nargs = {'path':'sample.txt'}\nr = reader(str('file_read'), **args)\nprint(r['data']['content'])");
+        Assert.True(result.Ok, result.ToJson());
+        Assert.Contains("runtime boundary", Stdout(result));
+        var failed = await Execute(runtime, "unknown_function()");
+        Assert.False(failed.Ok);
+        Assert.DoesNotContain("Code rejected", failed.ToJson());
+        Assert.Contains("unknown_function", failed.ToJson());
+        Assert.True((await Execute(runtime, "print(42)")).Ok);
+    }
+
+    [Fact]
+    public async Task ActualGuestSupportsImportsComprehensionsTupleUnpackingAndLambda()
+    {
+        using var workspace = new TestWorkspace();
+        await using var runtime = await AgentRuntime.CreateAsync(workspace.Options);
+        var result = await Execute(runtime, "import json\nvalues = [('b', 2), ('a', 1)]\nprint(json.dumps([name.strip() for name, number in sorted(values, key=lambda pair: pair[1])]))");
+        Assert.True(result.Ok, result.ToJson());
+        Assert.Equal("[\"a\", \"b\"]\n", Stdout(result));
     }
 
     [Fact]

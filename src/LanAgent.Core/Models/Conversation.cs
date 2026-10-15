@@ -5,6 +5,7 @@ namespace LanAgent.Core.Models;
 
 public class Conversation
 {
+    public string? WorkspaceRoot { get; set; }
     public Guid? ParentConversationId { get; set; }
     public string? AgentRole { get; set; }
     public Guid? SubAgentConfigId { get; set; }

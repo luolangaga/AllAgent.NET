@@ -12,7 +12,7 @@ namespace LanAgent.ToolGenerator;
 public sealed class AgentToolGenerator : IIncrementalGenerator
 {
     private static readonly DiagnosticDescriptor InvalidTool = new("LA001", "Unsupported AgentTool contract",
-        "AgentTool '{0}' must be a public instance method on a non-generic partial class, return Task<ToolResult>, and use string, int, bool, string[] or CancellationToken parameters with descriptions", "LanAgent", DiagnosticSeverity.Error, true);
+        "AgentTool '{0}' must be a public instance method on a non-generic partial class, return Task<ToolResult>, and use string, int, bool, described primitive records, arrays of these types or CancellationToken parameters with descriptions", "LanAgent", DiagnosticSeverity.Error, true);
 
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
@@ -45,7 +45,7 @@ public sealed class AgentToolGenerator : IIncrementalGenerator
                     var name = (string)attr.ConstructorArguments[0].Value!;
                     var risk = attr.NamedArguments.FirstOrDefault(a => a.Key == "Risk").Value.Value ?? 0;
                     var ps = m.Parameters.Where(p => p.Type.ToDisplayString() != "System.Threading.CancellationToken").ToList();
-                    var props = ps.Select(p => QuoteJson(p.Name) + ":{\"type\":" + QuoteJson(JsonType(p.Type)!) + ",\"description\":" + QuoteJson(Description(p)!) + (JsonType(p.Type) == "array" ? ",\"items\":{\"type\":\"string\"}" : "") + "}");
+                    var props = ps.Select(p => QuoteJson(p.Name) + ":" + Schema(p.Type, Description(p)!));
                     var schema = "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{" + string.Join(",", props) + "},\"required\":[" + string.Join(",", ps.Where(p => !p.HasExplicitDefaultValue).Select(p => QuoteJson(p.Name))) + "]}";
                     code.Append("new(").Append(Literal(name)).Append(", ").Append(Literal(Description(m)!)).Append(", global::System.Text.Json.JsonSerializer.Deserialize<global::System.Text.Json.JsonElement>(").Append(Literal(schema)).Append("), (global::LanAgent.Core.Tools.ToolRisk)").Append(risk).Append("),\n");
                 }
@@ -68,8 +68,24 @@ public sealed class AgentToolGenerator : IIncrementalGenerator
     private static string? JsonType(ITypeSymbol type) => type.SpecialType switch
     {
         SpecialType.System_String => "string", SpecialType.System_Int32 => "integer", SpecialType.System_Boolean => "boolean",
-        _ => type is IArrayTypeSymbol array && array.ElementType.SpecialType == SpecialType.System_String ? "array" : null
+        _ => type is IArrayTypeSymbol array && JsonType(array.ElementType) != null ? "array" :
+            type is INamedTypeSymbol named && named.TypeKind == TypeKind.Class && named.IsRecord &&
+            Properties(named).Any() && Properties(named).All(p => Description(p) != null && p.Type.SpecialType is SpecialType.System_String or SpecialType.System_Int32 or SpecialType.System_Boolean) ? "object" : null
     };
+    private static IEnumerable<IPropertySymbol> Properties(INamedTypeSymbol type) => type.GetMembers().OfType<IPropertySymbol>()
+        .Where(p => !p.IsStatic && !p.IsIndexer && p.DeclaredAccessibility == Accessibility.Public && p.GetMethod != null && p.SetMethod != null);
+    private static string Schema(ITypeSymbol type, string description)
+    {
+        var result = "{\"type\":" + QuoteJson(JsonType(type)!) + ",\"description\":" + QuoteJson(description);
+        if (type is IArrayTypeSymbol array) result += ",\"items\":" + Schema(array.ElementType, "Array entry");
+        else if (JsonType(type) == "object")
+        {
+            var properties = Properties((INamedTypeSymbol)type).ToArray();
+            result += ",\"additionalProperties\":false,\"properties\":{" + string.Join(",", properties.Select(p => QuoteJson(p.Name) + ":" + Schema(p.Type, Description(p)!))) +
+                "},\"required\":[" + string.Join(",", properties.Select(p => QuoteJson(p.Name))) + "]";
+        }
+        return result + "}";
+    }
     private static string Literal(string value) => SymbolDisplay.FormatLiteral(value, true);
     private static string QuoteJson(string value) => "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\r", "\\r").Replace("\n", "\\n").Replace("\t", "\\t") + "\"";
     private static string Default(IParameterSymbol p) => p.ExplicitDefaultValue switch

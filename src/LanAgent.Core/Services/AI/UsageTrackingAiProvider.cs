@@ -8,6 +8,7 @@ namespace LanAgent.Core.Services.AI;
 public sealed class UsageTrackingAiProvider(IAiProvider provider, DataStore store) : IAiProvider
 {
     public string ProviderId => provider.ProviderId;
+    public void EndRoutingTurn(Guid turnId) => provider.EndRoutingTurn(turnId);
 
     public Task<IReadOnlyList<ModelInfo>> ListModelsAsync(ApiConfig config, CancellationToken ct = default)
         => provider.ListModelsAsync(config, ct);

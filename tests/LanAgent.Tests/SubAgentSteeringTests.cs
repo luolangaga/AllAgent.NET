@@ -50,20 +50,20 @@ public sealed class SubAgentSteeringTests
     }
 
     [Fact]
-    public async Task SteeringWhileWaitingForHumanKeepsQuestionAndCancellationRejectsAdmission()
+    public async Task SteeringWhileWaitingForApprovalKeepsApprovalAndCancellationRejectsAdmission()
     {
         await using var tasks = new BackgroundTasks(); var session = Guid.NewGuid(); var parent = Guid.NewGuid();
         var waiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         async IAsyncEnumerable<AgentEvent> Run(string id, [EnumeratorCancellation] CancellationToken ct)
         {
-            var response = tasks.AskAsync(id, new AgentQuestion("Choose", ["yes", "no"]), ct);
+            var response = tasks.ApproveAsync(id, new ToolApprovalRequest("file_write", ToolRisk.Write, System.Text.Json.JsonSerializer.SerializeToElement(new { path = "test.txt" })), ct).AsTask();
             waiting.SetResult(); await response;
             yield return new AgentDone("stop");
         }
         var job = tasks.Start("human", session, "agent", Run, parent, () => false);
         await waiting.Task.WaitAsync(TimeSpan.FromSeconds(5)); var admitted = false;
         Assert.Equal(job, tasks.TryJoin(session, parent, _ => admitted = true)); Assert.True(admitted);
-        Assert.Equal(BackgroundTaskState.AwaitingAnswer, tasks.Get(job).State); Assert.NotNull(tasks.Interaction(job));
+        Assert.Equal(BackgroundTaskState.AwaitingApproval, tasks.Get(job).State); Assert.NotNull(tasks.Interaction(job));
         tasks.Cancel(job);
         // Either cancellation is in progress (rejected) or the task is already terminal (no join).
         try { Assert.Null(tasks.TryJoin(session, parent, _ => throw new Exception("must not admit"))); }

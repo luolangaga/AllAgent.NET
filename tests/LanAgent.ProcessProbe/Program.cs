@@ -1,7 +1,27 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
-if (args.FirstOrDefault() == "mcp")
+if (Path.GetFileNameWithoutExtension(Environment.ProcessPath) == "LanAgent.FaultProbe")
+{
+    _ = await Console.In.ReadLineAsync();
+    var marker = Path.Combine(AppContext.BaseDirectory, "worker-starts.txt");
+    await File.AppendAllTextAsync(marker, "start\n");
+    var starts = (await File.ReadAllLinesAsync(marker)).Length;
+    Console.WriteLine(JsonSerializer.Serialize(new { kind = "ready", instructions = "fixture", description = "fixture" }));
+    while (await Console.In.ReadLineAsync() is { } request)
+    {
+        using var json = JsonDocument.Parse(request);
+        if (json.RootElement.GetProperty("kind").GetString() != "execute") break;
+        if (starts == 1)
+        {
+            Console.WriteLine("{\"kind\":\"call\",\"name\":\"side_effect\",\"arguments\":{}}");
+            _ = await Console.In.ReadLineAsync();
+            Console.WriteLine("{\"kind\":\"result\",\"result\":{\"ok\":false,\"data\":{\"stdout\":\"\",\"diagnostic\":null},\"error\":\"Python execution failed: there is no reactor running, must be called from the context of a Tokio 1.x runtime\"}}");
+        }
+        else Console.WriteLine("{\"kind\":\"result\",\"result\":{\"ok\":true,\"data\":{\"stdout\":\"fresh worker\\n\"}}}");
+    }
+}
+else if (args.FirstOrDefault() == "mcp")
 {
     string? line;
     while ((line = await Console.In.ReadLineAsync()) != null)
@@ -29,4 +49,18 @@ else if (args.FirstOrDefault() == "noisy")
     for (var i = 0; i < 1000; i++) { Console.Out.Write(new string('o', 1000)); Console.Error.Write(new string('e', 1000)); }
 }
 else if (args.FirstOrDefault() == "wait") await Task.Delay(TimeSpan.FromMinutes(5));
+else if (args.FirstOrDefault() == "emoji-noisy")
+{
+    Console.WriteLine(string.Concat(Enumerable.Repeat("😀", 12000)) + "STDOUT-END");
+    Console.Error.WriteLine(string.Concat(Enumerable.Repeat("😀", 12000)) + "STDERR-END");
+}
+else if (args.FirstOrDefault() is "tail" or "tail-wait")
+{
+    Console.WriteLine("START-MARKER");
+    for (var i = 0; i < 3000; i++) Console.WriteLine($"progress-{i:D4} 中文 😀");
+    Console.WriteLine("FINAL-ERROR-MARKER"); Console.Error.WriteLine("STDERR-EVIDENCE");
+    await Console.Out.FlushAsync(); await Console.Error.FlushAsync();
+    if (args[0] == "tail-wait") await Task.Delay(TimeSpan.FromMinutes(5));
+    else Environment.ExitCode = 7;
+}
 else Console.WriteLine(JsonSerializer.Serialize(args));

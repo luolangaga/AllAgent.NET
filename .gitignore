@@ -8,6 +8,7 @@ deploy/
 dotnet10-vue-app/
 LanAgent/
 .claude/
+.commandcode/
 .vs/
 .idea/
 **/.env
@@ -18,6 +19,7 @@ LanAgent/
 **/*.pfx
 **/*.pem
 **/lanagent.json*
+**/lanagent-projects.json*
 **/.lanagent/
 SatelliteInterference.spec
 src/LanAgent.Desktop/Assets/web/

@@ -3,7 +3,7 @@ import ast
 import json
 import sys
 
-SAFE_NODES = {ast.Module, ast.Expr, ast.Assign, ast.AugAssign, ast.Name, ast.Load, ast.Store, ast.Constant, ast.List, ast.Tuple, ast.Dict, ast.Set, ast.Subscript, ast.Slice, ast.BinOp, ast.UnaryOp, ast.BoolOp, ast.Compare, ast.If, ast.IfExp, ast.For, ast.While, ast.Break, ast.Continue, ast.Pass, ast.Call, ast.keyword, ast.Attribute, ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp, ast.comprehension, ast.JoinedStr, ast.FormattedValue, ast.FunctionDef, ast.arguments, ast.arg, ast.Return}
+SAFE_NODES = {ast.Module, ast.Expr, ast.Assign, ast.AugAssign, ast.Name, ast.Load, ast.Store, ast.Constant, ast.List, ast.Tuple, ast.Dict, ast.Set, ast.Subscript, ast.Slice, ast.BinOp, ast.UnaryOp, ast.BoolOp, ast.Compare, ast.If, ast.IfExp, ast.For, ast.While, ast.Break, ast.Continue, ast.Pass, ast.Call, ast.keyword, ast.Attribute, ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp, ast.comprehension, ast.JoinedStr, ast.FormattedValue, ast.FunctionDef, ast.arguments, ast.arg, ast.Return, ast.Try, ast.ExceptHandler}
 
 def validate(code, policy):
     # Policy is supplied only by the trusted C# host, never by model arguments.
@@ -16,6 +16,13 @@ def validate(code, policy):
     for node in ast.walk(tree):
         if type(node) not in SAFE_NODES and not isinstance(node, (ast.operator, ast.unaryop, ast.boolop, ast.cmpop)):
             raise ValueError("Forbidden syntax: " + type(node).__name__)
+        if isinstance(node, ast.ExceptHandler):
+            allowed_errors = {"Exception", "ValueError", "TypeError", "KeyError", "IndexError", "RuntimeError", "ZeroDivisionError"}
+            types = node.type.elts if isinstance(node.type, ast.Tuple) else [node.type]
+            if node.type is not None and any(not isinstance(t, ast.Name) or t.id not in allowed_errors for t in types):
+                raise ValueError("Only safe exception types may be caught")
+            if node.name and (node.name.startswith("_") or node.name in SAFE_CALLS or node.name in functions):
+                raise ValueError("Reserved exception variable: " + node.name)
         if isinstance(node, ast.FunctionDef):
             if node.name.startswith("_") or node.name in SAFE_CALLS:
                 raise ValueError("Reserved name: " + node.name)

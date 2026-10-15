@@ -16,7 +16,8 @@ internal sealed class TestWorkspace : IDisposable
         var env = Installed.Value;
         if (!env.Ready) throw new InvalidOperationException("Tests require Python and PowerShell 7.6: " + string.Join(";", env.Problems));
         Python = env.Python!; Pwsh = env.PowerShell!;
-        Options = new AgentOptions { WorkspaceRoot = Root, PythonPath = Python, PowerShellPath = Pwsh, CodeTimeout = TimeSpan.FromSeconds(30), AuditPath = Path.Combine(Root, "audit.jsonl") };
+        // Lifecycle fixtures script exact model requests; memory has its own opt-in integration coverage.
+        Options = new AgentOptions { EnableMemory = false, AuthorProfileDirectory = Path.Combine(Root, "author"), FullAccess = false, WorkspaceRoot = Root, PythonPath = Python, PowerShellPath = Pwsh, CodeTimeout = TimeSpan.FromSeconds(30), AuditPath = Path.Combine(Root, "audit.jsonl") };
     }
     public SystemTools Tools => new(new WorkspacePolicy(Root), new(Python, Pwsh, []), new Dictionary<string, string> { ["probe"] = Path.Combine(AppContext.BaseDirectory, "probe", "LanAgent.ProcessProbe.exe") });
     public void Dispose()

@@ -33,8 +33,10 @@ internal static class TerminalMarkdown
             code.Clear(); codeLanguage = null;
         }
 
-        foreach (var raw in content.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n'))
+        var lines = content.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+        for (var line = 0; line < lines.Length; line++)
         {
+            var raw = lines[line];
             var trimmed = raw.TrimStart();
             if (codeLanguage != null)
             {
@@ -45,6 +47,28 @@ internal static class TerminalMarkdown
             if (trimmed.StartsWith("```", StringComparison.Ordinal))
             {
                 FlushParagraph(); codeLanguage = trimmed[3..].Trim(); continue;
+            }
+            if (line + 1 < lines.Length && raw.Contains('|'))
+            {
+                var headers = TableCells(raw); var separators = TableCells(lines[line + 1]);
+                if (headers.Count > 0 && headers.Count == separators.Count && separators.All(cell => Regex.IsMatch(cell, @"^:?-{3,}:?$")))
+                {
+                    FlushParagraph();
+                    var table = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey);
+                    for (var column = 0; column < headers.Count; column++)
+                    {
+                        var separator = separators[column];
+                        var alignment = separator.EndsWith(':') ? separator.StartsWith(':') ? Justify.Center : Justify.Right : Justify.Left;
+                        table.AddColumn(new TableColumn(new Markup("[bold]" + Inline(headers[column]) + "[/]")) { Alignment = alignment });
+                    }
+                    line++;
+                    while (line + 1 < lines.Length && !string.IsNullOrWhiteSpace(lines[line + 1]) && lines[line + 1].Contains('|'))
+                    {
+                        var cells = TableCells(lines[++line]);
+                        table.AddRow(Enumerable.Range(0, headers.Count).Select(column => (IRenderable)new Markup(Inline(cells.ElementAtOrDefault(column) ?? ""))).ToArray());
+                    }
+                    rows.Add(table); continue;
+                }
             }
             if (string.IsNullOrWhiteSpace(raw)) { FlushParagraph(); if (rows.Count > 0 && rows[^1] is not Text) rows.Add(new Text("")); continue; }
             var heading = Regex.Match(trimmed, @"^#{1,6}\s+(.*?)(?:\s+#+)?$");
@@ -71,6 +95,35 @@ internal static class TerminalMarkdown
         if (codeLanguage != null) FlushCode();
         FlushParagraph();
         return rows.Count == 0 ? new Text("") : new Rows(rows);
+    }
+
+    private static List<string> TableCells(string row)
+    {
+        var cells = new List<string>(); var cell = new System.Text.StringBuilder(); var ticks = 0;
+        var leadingPipe = false; var trailingPipe = false;
+        row = row.Trim();
+        for (var index = 0; index < row.Length; index++)
+        {
+            var character = row[index];
+            if (character == '\\' && index + 1 < row.Length && row[index + 1] is '|' or '\\')
+            { cell.Append(row[++index]); trailingPipe = false; continue; }
+            if (character == '`')
+            {
+                var count = 1; while (index + count < row.Length && row[index + count] == '`') count++;
+                if (ticks == 0) ticks = count; else if (ticks == count) ticks = 0;
+                cell.Append('`', count); index += count - 1; trailingPipe = false; continue;
+            }
+            if (character == '|' && ticks == 0)
+            {
+                if (index == 0) leadingPipe = true;
+                cells.Add(cell.ToString().Trim()); cell.Clear(); trailingPipe = index == row.Length - 1;
+            }
+            else { cell.Append(character); trailingPipe = false; }
+        }
+        cells.Add(cell.ToString().Trim());
+        if (trailingPipe) cells.RemoveAt(cells.Count - 1);
+        if (leadingPipe) cells.RemoveAt(0);
+        return cells;
     }
 
     private static string Inline(string text)
