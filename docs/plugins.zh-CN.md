@@ -18,7 +18,7 @@
 
 搜索使用 NuGet V3 服务索引发现搜索地址，提交 `tags:LanAgent` 查询，再对返回标签做不区分大小写的完整匹配。公开源暂时没有匹配包时会显示空结果；不会编造插件。仓库附带可直接打包、安装的示例。
 
-安装先下载并检查包、读取依赖、选择 .NET 8 兼容的托管库，验证 `LanAgent` 标签和入口清单，拒绝路径越界及依赖冲突，然后询问是否加载 DLL。**DLL 以当前用户权限运行，`LanAgent` 标签不是官方认证，程序集加载上下文也不是权限沙箱。** 只安装信任的作者。Python 模型代码仍在 Hyperlight 中执行；这和已安装的 C# 插件是不同的信任边界。[.NET 插件加载说明](https://learn.microsoft.com/en-us/dotnet/core/tutorials/creating-app-with-plugin-support)
+安装先下载并检查包、读取依赖、选择 .NET 10 兼容的托管库，验证 `LanAgent` 标签和入口清单，拒绝路径越界及依赖冲突，然后询问是否加载 DLL。**DLL 以当前用户权限运行，`LanAgent` 标签不是官方认证，程序集加载上下文也不是权限沙箱。** 只安装信任的作者。Python 模型代码仍在 Hyperlight 中执行；这和已安装的 C# 插件是不同的信任边界。[.NET 插件加载说明](https://learn.microsoft.com/en-us/dotnet/core/tutorials/creating-app-with-plugin-support)
 
 每包下载上限 64 MB，依赖最多 64 个，展开总大小上限 256 MB。安装器不会运行包的 MSBuild targets、安装脚本或可执行文件。依赖按照兼容框架及版本范围解析；遇到需要版本回溯的冲突会明确拒绝，请作者统一依赖版本。第一版主要支持托管 DLL；有原生依赖的插件需自行在 `lanagent/` 中携带适配资产和正确的依赖清单，并测试对应 Windows 架构。
 
@@ -46,7 +46,7 @@ dotnet pack samples/LanAgent.SamplePlugin -c Release -o artifacts/packages
 
 安装后输入 `/ext hello 小明`；`/hooks` 会显示 `example.audit`。`/tools` 中可查看 `example_clock`、`example_note`。后者写入插件自己的数据目录，依然要求逐次授权。插件模型 ID 为 `example-local`，协议 ID 为 `example`，明确标记为离线演示模型，不会伪装成远程 LLM。
 
-SDK 包 `LanAgent.Core` 包含公共契约和 Roslyn 工具源生成器，使用 `dotnet add package LanAgent.Core --version 1.1.0` 从 NuGet 引用。源码和 SDK 使用 `GPL-3.0-only` 许可证，包中附带许可证正文与第三方声明。构建使用支持 Roslyn 4.14 的 SDK，目标运行时为 .NET 8。
+SDK 包 `LanAgent.Core` 包含公共契约和 Roslyn 工具源生成器，使用 `dotnet add package LanAgent.Core --version 1.1.0` 从 NuGet 引用。源码和 SDK 使用 `GPL-3.0-only` 许可证，包中附带许可证正文与第三方声明。构建使用支持 Roslyn 4.14 的 SDK，目标运行时为 .NET 10。
 
 ## 包与入口清单
 
@@ -55,7 +55,7 @@ SDK 包 `LanAgent.Core` 包含公共契约和 Roslyn 工具源生成器，使用
 ```xml
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <EnableDynamicLoading>true</EnableDynamicLoading>
@@ -73,7 +73,7 @@ SDK 包 `LanAgent.Core` 包含公共契约和 Roslyn 工具源生成器，使用
 </Project>
 ```
 
-DLL 位于 NuGet 包的 `lib/net8.0/`，入口清单必须位于 `lanagent/lanagent-plugin.json`：
+DLL 位于 NuGet 包的 `lib/net10.0/`，入口清单必须位于 `lanagent/lanagent-plugin.json`：
 
 ```json
 {

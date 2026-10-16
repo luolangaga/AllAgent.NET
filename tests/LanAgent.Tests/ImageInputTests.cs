@@ -19,7 +19,7 @@ public sealed class ImageInputTests
         Assert.Contains("截图.png", console.Output); Assert.Contains("image/png", console.Output); Assert.Contains("图片附件", console.Output);
         Assert.DoesNotContain(Png, console.Output);
     }
-    private const string Png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jI1kAAAAASUVORK5CYII=";
+    private const string Png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC";
     [Theory]
     [InlineData(true)]
     [InlineData(false)]

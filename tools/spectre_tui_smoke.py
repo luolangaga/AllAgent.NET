@@ -27,7 +27,7 @@ messages = [
 environment = os.environ.copy()
 environment["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1"
 process = PtyProcess.spawn([
-    str(root / "src/LanAgent.Terminal/bin/Debug/net8.0/lanagent.exe"), "chat",
+    str(root / "src/LanAgent.Terminal/bin/Debug/net10.0/lanagent.exe"), "chat",
     "--workspace", str(root), "--data-dir", str(data), "--resume", session
 ], cwd=str(root), env=environment, dimensions=(30, 100))
 chunks = queue.Queue()

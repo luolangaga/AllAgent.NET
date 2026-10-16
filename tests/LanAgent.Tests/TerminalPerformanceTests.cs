@@ -13,6 +13,26 @@ namespace LanAgent.Tests;
 public sealed class TerminalPerformanceTests(ITestOutputHelper output)
 {
     [Fact]
+    public void ScrollDeltaSkipsUnchangedWidePrefixSidebarAndPadding()
+    {
+        List<List<Segment>> before = [[new Segment("中文│"), new Segment("old history"), new Segment("   │ unchanged sidebar")]];
+        List<List<Segment>> after = [[new Segment("中文│"), new Segment("new history"), new Segment("   │ unchanged sidebar")]];
+        var delta = SpectreScreenDisplay.ChangedRows(after, before);
+        Assert.Equal(2, delta.Count);
+        Assert.Equal("\u001b[1;6H", delta[0].Text);
+        Assert.Equal("new history", delta[1].Text);
+    }
+
+    [Fact]
+    public void DeltaDoesNotSkipSuffixThatMovedToDifferentColumns()
+    {
+        List<List<Segment>> before = [[new Segment("a"), new Segment("suffix")]];
+        List<List<Segment>> after = [[new Segment("longer"), new Segment("suffix")]];
+        var delta = SpectreScreenDisplay.ChangedRows(after, before);
+        Assert.Equal("longersuffix", string.Concat(delta.Where(segment => !segment.IsControlCode).Select(segment => segment.Text)));
+    }
+
+    [Fact]
     public void SuggestionScrollingDoesNotRediscoverCommands()
     {
         using var workspace = new TestWorkspace();

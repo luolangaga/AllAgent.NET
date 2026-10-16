@@ -12,6 +12,98 @@ namespace LanAgent.Tests;
 public sealed class AgentDelegationTests
 {
     [Fact]
+    public async Task PartialFailureReportsFailedIdsAndKeepsSuccessfulOutputs()
+    {
+        await using var jobs = new BackgroundTasks();
+        var tool = new AgentDelegationTools(jobs, (request, _) =>
+        {
+            async IAsyncEnumerable<AgentEvent> Run(string id, [EnumeratorCancellation] CancellationToken ct)
+            {
+                await Task.Yield();
+                ct.ThrowIfCancellationRequested();
+                if (request.Prompt == "fail") throw new InvalidOperationException("fixture failure");
+                yield return new TokenDelta("saved output");
+                yield return new AgentDone("stop");
+            }
+            return Task.FromResult(jobs.Start(request.Description, Guid.NewGuid(), "agent", Run));
+        });
+        var result = await tool.InvokeAsync("subagent", JsonSerializer.SerializeToElement(new { tasks = new[] {
+            new { agent = "general", task = "pass" }, new { agent = "general", task = "fail" }
+        } }), default);
+        Assert.False(result.Ok);
+        var data = JsonSerializer.SerializeToElement(result.Data, ToolResult.JsonOptions);
+        Assert.Equal(1, data.GetProperty("succeeded").GetInt32());
+        var failedId = Assert.Single(data.GetProperty("failed").EnumerateArray()).GetString();
+        Assert.Equal(data.GetProperty("results")[1].GetProperty("taskId").GetString(), failedId);
+        Assert.Contains(failedId!, result.Error!);
+        Assert.Contains("saved output", data.GetProperty("results")[0].GetProperty("output").GetString());
+    }
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CancellingParentWaitLeavesAdmittedChildRunningAndNotifiesOnCompletion(bool chain)
+    {
+        await using var jobs = new BackgroundTasks();
+        var admitted = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tool = new AgentDelegationTools(jobs, (request, token) =>
+        {
+            token.ThrowIfCancellationRequested();
+            async IAsyncEnumerable<AgentEvent> Run(string id, [EnumeratorCancellation] CancellationToken ct)
+            {
+                await release.Task.WaitAsync(ct);
+                yield return new TokenDelta("finished independently");
+                yield return new AgentDone("stop");
+            }
+            var id = jobs.Start(request.Description, Guid.NewGuid(), "agent", Run, Guid.NewGuid());
+            admitted.SetResult(id);
+            return Task.FromResult(id);
+        });
+        using var parent = new CancellationTokenSource();
+        var arguments = chain
+            ? JsonSerializer.SerializeToElement(new { chain = new[] { new { agent = "general", task = "first" }, new { agent = "general", task = "must not start" } } })
+            : JsonSerializer.SerializeToElement(new { agent = "general", task = "independent" });
+        var invocation = tool.InvokeAsync("subagent", arguments, parent.Token).AsTask();
+        var child = await admitted.Task;
+        try
+        {
+            parent.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => invocation.WaitAsync(TimeSpan.FromSeconds(2)));
+            Assert.True(BackgroundTasks.IsActive(jobs.Get(child).State));
+            Assert.NotEqual(BackgroundTaskState.Cancelling, jobs.Get(child).State);
+            Assert.True(jobs.Get(child).NotifyParent);
+        }
+        finally { release.TrySetResult(); await jobs.WaitAsync(child); }
+        Assert.Equal(BackgroundTaskState.Completed, jobs.Get(child).State);
+        Assert.Equal("finished independently", jobs.Get(child).FinalOutput);
+        Assert.Single(jobs.List);
+    }
+
+    [Fact]
+    public async Task StuckCancellationReturnsControlWithoutClaimingWorkerStopped()
+    {
+        await using var jobs = new BackgroundTasks();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        async IAsyncEnumerable<AgentEvent> Run(string id, [EnumeratorCancellation] CancellationToken ct)
+        {
+            started.SetResult();
+            await release.Task;
+            yield return new AgentDone("stop");
+        }
+        var session = Guid.NewGuid();
+        var id = jobs.Start("stuck", session, "agent", Run);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        try
+        {
+            await Assert.ThrowsAsync<TimeoutException>(() => jobs.StopSessionAsync(session));
+            Assert.Equal(BackgroundTaskState.Cancelling, jobs.Get(id).State);
+            Assert.True(jobs.Active);
+        }
+        finally { release.SetResult(); await jobs.WaitAsync(id); }
+    }
+
+    [Fact]
     public async Task ChainCanAdmitAFullPreviousResultBeyondTheLegacyPromptLimit()
     {
         using var workspace = new TestWorkspace(); using var store = new DataStore(Path.Combine(workspace.Root, "data"));
@@ -150,7 +242,7 @@ public sealed class AgentDelegationTests
     }
 
     [Fact]
-    public async Task ParallelPreservesInputOrderAndNeverExceedsFourWorkers()
+    public async Task ParallelPreservesInputOrderAndNeverExceedsSixWorkers()
     {
         await using var jobs = new BackgroundTasks(); var active = 0; var maximum = 0;
         var tool = new AgentDelegationTools(jobs, (request, _) =>
@@ -165,7 +257,7 @@ public sealed class AgentDelegationTests
             return Task.FromResult(jobs.Start(request.Description, Guid.NewGuid(), "agent", Run));
         });
         var result = await tool.InvokeAsync("subagent", JsonSerializer.SerializeToElement(new { tasks = Enumerable.Range(0, 8).Select(i => new { agent = "general", task = "task-" + i }).ToArray() }), default);
-        Assert.True(result.Ok, result.Error); Assert.Equal(4, maximum);
+        Assert.True(result.Ok, result.Error); Assert.Equal(6, maximum);
         var data = JsonSerializer.SerializeToElement(result.Data, ToolResult.JsonOptions);
         Assert.Equal(Enumerable.Range(0, 8).Select(i => "task-" + i), data.GetProperty("results").EnumerateArray().Select(r => r.GetProperty("output").GetString()));
     }

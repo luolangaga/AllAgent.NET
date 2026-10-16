@@ -41,7 +41,7 @@ Core 同时包含 Agent 运行库，但单独安装它不会自动得到完整�
 dotnet --info
 ```
 
-插件目标框架是 `.NET 8`，代码用到 C# 12。Core 携带的工具源生成器使用 Roslyn 4.14，因此不要只用早期 .NET 8 SDK 编译插件；选择包含兼容或更新编译器的 SDK，例如 .NET 10 SDK。仓库当前验证环境使用 .NET 11 预览 SDK。SDK 是编译器和构建工具，目标框架则决定程序面向哪个运行时，两者不必同版本。
+插件目标框架是 `.NET 10`，代码用到 C# 12。Core 携带的工具源生成器使用 Roslyn 4.14，因此不要只用早期 .NET 10 SDK 编译插件；选择包含兼容或更新编译器的 SDK，例如 .NET 10 SDK。仓库当前验证环境使用 .NET 11 预览 SDK。SDK 是编译器和构建工具，目标框架则决定程序面向哪个运行时，两者不必同版本。
 
 SDK 包名为 `LanAgent.Core`，通过 NuGet 安装：
 
@@ -58,7 +58,7 @@ dotnet add package LanAgent.Core --version 1.1.0
 ```powershell
 New-Item -ItemType Directory -Force C:\LanAgentPluginLab
 Set-Location C:\LanAgentPluginLab
-dotnet new classlib -n MyFirstPlugin -f net8.0
+dotnet new classlib -n MyFirstPlugin -f net10.0
 Set-Location MyFirstPlugin
 ```
 
@@ -67,7 +67,7 @@ Set-Location MyFirstPlugin
 ```xml
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <EnableDynamicLoading>true</EnableDynamicLoading>
@@ -209,7 +209,7 @@ dotnet pack -c Release --no-build -o ./packages
 成功后得到 `packages/MyFirstPlugin.1.0.0.nupkg`。它至少应包含：
 
 ```text
-lib/net8.0/MyFirstPlugin.dll
+lib/net10.0/MyFirstPlugin.dll
 lanagent/lanagent-plugin.json
 ```
 

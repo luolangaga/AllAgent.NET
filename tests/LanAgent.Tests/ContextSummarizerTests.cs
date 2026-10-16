@@ -11,7 +11,7 @@ public sealed class ContextSummarizerTests
     [Fact]
     public async Task AllImageBatchesReceiveEvidenceAndPreviousConclusions()
     {
-        var png = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jI1kAAAAASUVORK5CYII=");
+        var png = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC");
         var images = Enumerable.Range(0, 9).Select(i => ImageAttachment.FromBytes($"evidence-{i}.png", png.Concat(new[] { (byte)i }).ToArray())).ToArray();
         var provider = new Provider();
         var result = await ContextSummarizer.SummarizeAsync(provider, new ApiConfig(), "Summarize", "Historical objective", images, 8000, Guid.NewGuid(), default);

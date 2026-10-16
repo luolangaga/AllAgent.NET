@@ -72,7 +72,7 @@ public sealed class ComputerUseTests
     {
         if (!OperatingSystem.IsWindows()) return;
         var configuration = Directory.GetParent(Path.TrimEndingDirectorySeparator(AppContext.BaseDirectory))!.Name;
-        var fixturePath = Path.GetFullPath($"../../../../../tests/LanAgent.ComputerUseFixture/bin/{configuration}/net8.0-windows/LanAgent.ComputerUseFixture.exe", AppContext.BaseDirectory);
+        var fixturePath = Path.GetFullPath($"../../../../../tests/LanAgent.ComputerUseFixture/bin/{configuration}/net10.0-windows/LanAgent.ComputerUseFixture.exe", AppContext.BaseDirectory);
         using var fixture = Process.Start(new ProcessStartInfo(fixturePath) { UseShellExecute = false });
         Assert.NotNull(fixture);
         try

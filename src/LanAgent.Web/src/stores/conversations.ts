@@ -1,6 +1,6 @@
 import { defineStore } from '@/lib/store'
 import { ref, computed } from '@/lib/store'
-import type { Conversation, Message } from '@/types'
+import type { Conversation, Message, TodoItem } from '@/types'
 import { invoke, bridgeEvents, type BridgeEvents } from '@/bridge'
 import { restoreMessages, parseObject } from '@/utils/execution'
 
@@ -8,6 +8,7 @@ export const useConversationsStore = defineStore('conversations', () => {
   const conversations = ref<Conversation[]>([])
   const activeId = ref<string | null>(null)
   const messages = ref<Message[]>([])
+  const todos = ref<TodoItem[]>([])
   const streamingMessageId = ref<string | null>(null)
   const activeStreamId = ref<string | null>(null)
   const isLoading = ref(false)
@@ -30,10 +31,14 @@ export const useConversationsStore = defineStore('conversations', () => {
     const selection = ++selectionVersion
     activeId.value = id
     messages.value = []
+    todos.value = []
     isLoading.value = true
     try {
-      const loaded = restoreMessages(await invoke<Message[]>('conversations.getMessages', { conversationId: id }))
-      if (selection === selectionVersion) messages.value = loaded
+      const [loaded, checklist] = await Promise.all([
+        invoke<Message[]>('conversations.getMessages', { conversationId: id }),
+        invoke<TodoItem[]>('todos.get', { conversationId: id })
+      ])
+      if (selection === selectionVersion) { messages.value = restoreMessages(loaded); todos.value = checklist }
     } finally {
       if (selection === selectionVersion) isLoading.value = false
     }
@@ -47,6 +52,7 @@ export const useConversationsStore = defineStore('conversations', () => {
     conversations.value.unshift(conv)
     activeId.value = conv.id
     messages.value = []
+    todos.value = []
     return conv
   }
 
@@ -62,11 +68,21 @@ export const useConversationsStore = defineStore('conversations', () => {
     await invoke('conversations.delete', { id })
     conversations.value = conversations.value.filter(c => c.id !== id)
     if (activeId.value === id) {
+      todos.value = []
       activeId.value = conversations.value[0]?.id ?? null
       messages.value = activeId.value
         ? restoreMessages(await invoke<Message[]>('conversations.getMessages', { conversationId: activeId.value }))
         : []
+      if (activeId.value) todos.value = await invoke<TodoItem[]>('todos.get', { conversationId: activeId.value })
     }
+  }
+
+  async function setTodos(items: TodoItem[]) {
+    if (starting || streamingMessageId.value) throw new Error('请先停止当前生成再编辑 TODO')
+    if (!activeId.value) throw new Error('请先选择会话')
+    const id = activeId.value
+    const saved = await invoke<TodoItem[]>('todos.set', { conversationId: id, todos: items })
+    if (activeId.value === id) todos.value = saved
   }
 
   async function sendMessage(content: string, apiConfigId: string, thinkingEnabled = false, thinkingBudget = 8000) {
@@ -170,6 +186,10 @@ export const useConversationsStore = defineStore('conversations', () => {
 
     const onToolCallCompleted = (data: { id: string; name: string; result: string; streamId: string }) => {
       if (data.streamId !== streamId) return
+      if (data.name === 'todo_write' || data.name === 'todo_read') {
+        const result = parseObject(data.result)
+        if (result.ok === true && Array.isArray(result.data?.todos)) todos.value = result.data.todos
+      }
       const msg = findMessage(assistantId)
       if (msg) {
         const tc = msg.toolCalls?.find(t => t.id === data.id)
@@ -241,7 +261,7 @@ export const useConversationsStore = defineStore('conversations', () => {
   }
 
   return {
-    conversations, activeId, active, messages, streamingMessageId, isLoading,
+    conversations, activeId, active, messages, todos, streamingMessageId, isLoading, setTodos,
     loadAll, selectConversation, createConversation, renameConversation,
     deleteConversation, sendMessage, cancelStream
   }

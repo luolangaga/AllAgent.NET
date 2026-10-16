@@ -40,3 +40,13 @@
 .idea .idea-arrow { top:0; right:0; }
 .new-chat { height:38px; }
 .key-hint { margin-left:22px; }
+.todo-panel { margin: 0 0 24px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 12px; }
+.todo-panel summary { cursor: pointer; font-weight: 600; }
+.todo-panel summary span { margin-left: 8px; font-weight: 400; opacity: .65; }
+.todo-panel ol { list-style: none; padding: 0; margin: 12px 0; }
+.todo-panel li, .todo-panel form { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.todo-panel li > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.todo-panel select, .todo-panel input { background: transparent; color: inherit; border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font: inherit; }
+.todo-panel input { flex: 1; min-width: 0; }
+.todo-panel p { font-size: 13px; opacity: .65; margin: 10px 0; }
+.todo-completed { text-decoration: line-through; opacity: .6; }

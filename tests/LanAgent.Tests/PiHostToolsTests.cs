@@ -61,7 +61,7 @@ public sealed class PiHostToolsTests
     public async Task ReadDetectsImageBytesAndKeepsThemOutOfJson()
     {
         using var w = new TestWorkspace();
-        var bytes = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jI1kAAAAASUVORK5CYII=");
+        var bytes = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC");
         await File.WriteAllBytesAsync(Path.Combine(w.Root, "image.bin"), bytes);
         var result = await w.Tools.ReadAsync("image.bin"); var data = Data(result);
         Assert.Equal("image/png", data.GetProperty("mediaType").GetString());

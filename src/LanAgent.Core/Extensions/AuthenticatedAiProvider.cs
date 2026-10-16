@@ -13,6 +13,8 @@ public sealed class AuthenticatedAiProvider(IAiProvider provider, IAuthenticatio
         authentication.ValidateModelConfiguration(config);
         var copy = JsonSerializer.Deserialize<ApiConfig>(JsonSerializer.Serialize(config))!;
         var credential = await authentication.GetCredentialAsync(ct) ?? throw new InvalidOperationException("认证已过期；请使用 /login " + authentication.Id);
+        if (credential.InferenceBaseUrl != null) copy.BaseUrl = credential.InferenceBaseUrl;
+        if (credential.AccountId != null) copy.ExtraHeadersJson = JsonSerializer.Serialize(new Dictionary<string, string> { ["ChatGPT-Account-Id"] = credential.AccountId });
         copy.ApiKey = credential.AccessToken;
         copy.AuthenticationContextId = credential.ContextId;
         copy.ApiKeyEnvironmentVariable = null; return copy;

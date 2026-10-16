@@ -25,6 +25,7 @@ public class Conversation
     public long CachedInputTokens { get; set; }
     public long CacheUsageRequests { get; set; }
     public List<Message> Messages { get; set; } = new();
+    public List<TodoItem> Todos { get; set; } = new();
     public SessionRevertState? Revert { get; set; }
     public List<Guid> InvalidatedCheckpoints { get; set; } = new();
 }

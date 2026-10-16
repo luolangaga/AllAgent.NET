@@ -9,6 +9,90 @@ namespace LanAgent.Tests;
 [Collection("Hyperlight acceptance")]
 public sealed class HyperlightRecoveryTests
 {
+    [Fact]
+    public async Task GuestSleepWaitsAndWorkerRemainsUsableAcrossRestores()
+    {
+        using var w = new TestWorkspace();
+        await using var runtime = await AgentRuntime.CreateAsync(w.Options);
+        for (var i = 0; i < 3; i++)
+        {
+            // Guest virtual time pauses during host callbacks; measure on the host.
+            var elapsed = System.Diagnostics.Stopwatch.StartNew();
+            var result = await Execute(runtime, """
+                import time
+                from time import sleep
+                sleep(0.1)
+                time.sleep(0)
+                for value, error in [(-1, ValueError), (float('nan'), ValueError), (float('inf'), OverflowError), ('bad', TypeError)]:
+                    try:
+                        time.sleep(value)
+                    except error:
+                        pass
+                    else:
+                        raise AssertionError('invalid sleep accepted')
+                print(call_tool('list_directory', path='.')['ok'])
+                """);
+            Assert.True(result.Ok, result.ToJson());
+            Assert.True(elapsed.Elapsed >= TimeSpan.FromMilliseconds(90));
+            Assert.Equal("True\n", JsonSerializer.SerializeToElement(result.Data).GetProperty("stdout").GetString());
+        }
+        Assert.True((await Execute(runtime, "print(42)")).Ok);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task GuestSleepHonorsExecutionTimeoutAndCancellation(bool cancel)
+    {
+        using var w = new TestWorkspace();
+        await using var runtime = await AgentRuntime.CreateAsync(w.Options with { CodeTimeout = TimeSpan.FromSeconds(1) });
+        using var cancellation = new CancellationTokenSource();
+        var call = runtime.CodeAct.ExecuteAsync("execute_code",
+            JsonSerializer.SerializeToElement(new { code = "import time\ntime.sleep(30)" }),
+            runtime.CodeAct.CallToolAsync, cancellation.Token);
+        if (cancel)
+        {
+            cancellation.CancelAfter(200);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => call.WaitAsync(TimeSpan.FromSeconds(10)));
+        }
+        else
+        {
+            var result = await call.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.False(result.Ok);
+            Assert.Contains("timed out", result.Error);
+        }
+        Assert.True((await Execute(runtime, "print(42)")).Ok);
+    }
+
+    [Fact]
+    public async Task BackgroundCurlDownloadSurvivesGuestArgumentTransportAndStatusWait()
+    {
+        using var w = new TestWorkspace();
+        await using var jobs = new LanAgent.Core.Services.BackgroundTasks();
+        await using var runtime = await AgentRuntime.CreateAsync(w.Options with
+        {
+            FullAccess = true, BackgroundTasks = jobs,
+            ShellAllowlist = new Dictionary<string, string>
+            {
+                ["curl"] = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "curl.exe")
+            }
+        });
+        var content = Enumerable.Range(0, 10000).Select(i => (byte)i).ToArray();
+        var source = Path.Combine(w.Root, "source data.bin");
+        await File.WriteAllBytesAsync(source, content);
+        var args = JsonSerializer.Serialize(new[] { "--fail", "--silent", "--show-error", new Uri(source).AbsoluteUri, "-o", "download file.bin" });
+        var result = await Execute(runtime, $"""
+            r = call_tool('run_shell', exe='curl', args={args}, background=True)
+            assert r['ok'], r
+            status = call_tool('shell_status', id=r['data']['taskId'], wait_seconds=10)
+            assert status['ok'], status
+            print('download checked')
+            """);
+        Assert.True(result.Ok, result.ToJson());
+        Assert.Equal(LanAgent.Core.Services.BackgroundTaskState.Completed, Assert.Single(jobs.List).State);
+        Assert.Equal(content, await File.ReadAllBytesAsync(Path.Combine(w.Root, "download file.bin")));
+    }
+
     private static Task<ToolResult> Execute(AgentRuntime runtime, string code) => runtime.CodeAct.ExecuteAsync("execute_code",
         JsonSerializer.SerializeToElement(new { code }), runtime.CodeAct.CallToolAsync, default);
 

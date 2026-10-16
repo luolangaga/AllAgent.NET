@@ -1,6 +1,7 @@
 using System.Text.Json;
 using LanAgent.Core.Tools;
 using Spectre.Console;
+using Spectre.Console.Rendering;
 
 namespace LanAgent.Terminal;
 
@@ -26,9 +27,16 @@ internal static class ManagementUi
     public static async Task<bool> Confirm(TerminalUi ui, string text) => ui.Interactive && !ui.Json && (FullScreenTerminal.Current is { } screen ? await screen.ConfirmAsync(text) : await AnsiConsole.PromptAsync(new ConfirmationPrompt(Markup.Escape(text)) { DefaultValue = false }));
     public static T Clone<T>(T value) => JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(value))!;
     public static string Choose(string title, params string[] choices) => Choose(title, choices, c => c);
-    public static T Choose<T>(string title, IEnumerable<T> choices, Func<T,string> label) where T : notnull => FullScreenTerminal.Current is { } screen
-        ? screen.Choose(title, choices.ToArray(), label)
-        : AnsiConsole.Prompt(new SelectionPrompt<T>().Title(Markup.Escape(title)).UseConverter(c => Markup.Escape(label(c))).AddChoices(choices));
+    public static T Choose<T>(string title, IEnumerable<T> choices, Func<T,string> label, Func<T,string>? group = null, Func<T,string>? color = null) where T : notnull => FullScreenTerminal.Current is { } screen
+        ? screen.ChooseAsync(title, choices.ToArray(), label, CancellationToken.None, group, color).GetAwaiter().GetResult()
+        : AnsiConsole.Prompt(TerminalSelectionPrompt.Create(title, choices, label, 14, new Style(Color.Cyan1), group, color)).Value;
+    public static async Task<string> ChooseWithBody(string title, IReadOnlyList<string> choices, IRenderable body)
+    {
+        if (FullScreenTerminal.Current is { } screen) return await screen.ChooseAsync(title, choices, value => value, default, body: body);
+        AnsiConsole.Write(new Panel(new SafeTerminalRenderable(body)).Header("Browser Use").Border(BoxBorder.Rounded));
+        var choice = await AnsiConsole.PromptAsync(TerminalSelectionPrompt.Create(title, choices, value => value, 8, new Style(Color.Cyan1)));
+        return choice.Value;
+    }
     public static async Task WriteNewJsonAsync(string path, object data)
     {
         await using var file = new FileStream(Path.GetFullPath(path), FileMode.CreateNew);

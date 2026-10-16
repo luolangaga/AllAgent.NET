@@ -1,5 +1,14 @@
 # Third-party notices
 
+## Browser Use browser operation ports
+
+Browser operation contracts and selected browser algorithms are ported from
+[browser-use/browser-use](https://github.com/browser-use/browser-use), revision
+`df1e21533e323912e79a109146b711dddde8cf23` (MIT License, copyright 2024 Gregor Zunic).
+The full upstream license is retained in `src/LanAgent.Core/Browser/UPSTREAM-LICENSE.txt`.
+The C# / WebView2 adaptation is still incomplete; implemented operations do not imply
+equivalence with the full upstream Python agent, DOM pipeline or cloud integrations.
+
 ## Pi host tool design
 
 LanAgent's batch file editing, line-oriented reading, output truncation and shell
@@ -172,3 +181,7 @@ SOFTWARE.
 ## Iconiq UI frontend
 
 The desktop frontend uses editable MIT-licensed Iconiq UI registry sources from https://iconiqui.com/r/ (upstream: https://github.com/edwinvakayil/iconiq). The complete license is preserved in `src/LanAgent.Web/ICONIQ-LICENSE.txt`. Local adaptations use Vite environment flags and add controlled input, disabled state, and IME handling to AI Input.
+
+## PowerShell SDK
+
+The bundled LanAgent.PowerShell worker embeds Microsoft.PowerShell.SDK 7.6.7 (MIT), from https://github.com/PowerShell/PowerShell. NuGet runtime assets and their third-party notices are distributed with the worker.

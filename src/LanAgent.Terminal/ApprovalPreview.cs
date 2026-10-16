@@ -73,7 +73,7 @@ internal sealed record ApprovalPreview(string Title, string Target, IReadOnlyLis
         rows.Add(new Markup(selected == 0 ? "[bold green]❯ 1. 允许这一次[/]" : "  1. 允许这一次"));
         rows.Add(new Markup(selected == 1 ? "[bold yellow]❯ 2. 拒绝[/]" : "  2. 拒绝"));
         if (RememberForSession != null) rows.Add(new Markup(selected == 2 ? "[bold green]❯ 3. 此会话记住目录[/]" : "  3. 此会话记住目录"));
-        rows.Add(new Text("↑↓ 选择 · Enter 确认 · Y 允许 · N/Esc 拒绝" + (RememberForSession != null ? " · A 记住目录" : "") + " · Ctrl+C 取消任务", new Style(Color.Grey)));
+        rows.Add(new Text("↑↓ 选择 · Enter 确认 · Y 允许 · N/Esc 拒绝" + (RememberForSession != null ? " · A 记住目录" : "") + " · Ctrl+C 取消任务", new Style(Color.Grey)).Crop());
         return new Rows(rows);
     }
     private static string Display(JsonElement value) => value.ValueKind switch

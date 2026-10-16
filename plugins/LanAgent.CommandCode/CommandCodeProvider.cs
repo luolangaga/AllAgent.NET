@@ -103,7 +103,11 @@ public sealed class CommandCodeProvider(CommandCodeAccount account, HttpClient h
         var tools = new JsonArray();
         foreach (var tool in request.Tools ?? []) tools.Add(new JsonObject { ["name"] = tool.Name, ["description"] = tool.Description, ["input_schema"] = JsonSerializer.SerializeToNode(tool.Parameters) });
         var parameters = new JsonObject { ["model"] = request.Config.DefaultModel, ["messages"] = messages, ["system"] = system, ["max_tokens"] = Math.Clamp(request.Config.MaxTokens, 1, 200000), ["stream"] = true, ["temperature"] = request.Config.Temperature, ["tools"] = tools };
-        if (request.Config.ThinkingEnabled && request.Config.ReasoningEffort != "default") parameters["reasoning_effort"] = request.Config.ReasoningEffort;
+        if (request.Config.ReasoningEffort != "default")
+        {
+            if (!ReasoningSettings.Efforts(request.Config).Contains(request.Config.ReasoningEffort)) throw new ArgumentException("当前模型不支持所选思考强度。");
+            parameters["reasoning_effort"] = request.Config.ReasoningEffort;
+        }
         return new JsonObject
         {
             ["config"] = JsonSerializer.SerializeToNode(new { workingDir = WorkingDir, date = DateTime.UtcNow.ToString("yyyy-MM-dd"), environment = "win32", structure = Array.Empty<string>(), isGitRepo = false, currentBranch = "", mainBranch = "", gitStatus = "", recentCommits = Array.Empty<string>() }),

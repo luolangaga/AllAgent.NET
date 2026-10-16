@@ -1,0 +1,230 @@
+/* ==========================================================================
+   动画基础设施：全部基于 steps() 的"低帧率"像素节奏
+   ========================================================================== */
+
+/* ---------- 滚动入场（IntersectionObserver 挂 .is-in） ---------- */
+.reveal {
+  opacity: 0;
+  transform: translateY(14px);
+}
+
+.reveal.is-in {
+  animation: reveal-in 520ms steps(7, end) forwards;
+  animation-delay: var(--d, 0ms);
+}
+
+@keyframes reveal-in {
+  0% {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  40% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 像素抖动揭示：用 clip-path 横向分块"拼"出来 */
+.reveal-pixel.is-in {
+  animation: reveal-pixel 560ms steps(8, end) forwards;
+  animation-delay: var(--d, 0ms);
+}
+
+.reveal-pixel {
+  opacity: 0;
+  clip-path: polygon(0 0, 0 0, 0 100%, 0 100%);
+}
+
+@keyframes reveal-pixel {
+  0% {
+    opacity: 1;
+    clip-path: polygon(0 0, 0 0, 0 100%, 0 100%);
+  }
+  100% {
+    opacity: 1;
+    clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+  }
+}
+
+/* ---------- 光标闪烁 ---------- */
+.caret::after {
+  content: '';
+  display: inline-block;
+  width: 0.62em;
+  height: 1.05em;
+  margin-left: 0.18em;
+  background: var(--c-mint);
+  vertical-align: -0.18em;
+  animation: caret-blink 1s steps(1, end) infinite;
+}
+
+@keyframes caret-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+/* ---------- 扫描线推进 ---------- */
+.scan-sweep {
+  position: absolute;
+  inset-inline: 0;
+  height: 25%;
+  background: linear-gradient(180deg, transparent, rgba(111, 242, 176, 0.13), transparent);
+  animation: scan-sweep 4.6s linear infinite;
+  pointer-events: none;
+}
+
+@keyframes scan-sweep {
+  0% {
+    transform: translateY(-120%);
+  }
+  100% {
+    transform: translateY(520%);
+  }
+}
+
+/* ---------- 跑马灯 ---------- */
+.marquee {
+  display: flex;
+  width: max-content;
+  animation: marquee var(--marquee-duration, 34s) linear infinite;
+}
+
+.marquee-host:hover .marquee {
+  animation-play-state: paused;
+}
+
+@keyframes marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+/* ---------- 帧动画（2 帧精灵） ---------- */
+.sprite-blink {
+  animation: sprite-blink 1.4s steps(1, end) infinite;
+}
+
+@keyframes sprite-blink {
+  0%,
+  60% {
+    opacity: 1;
+  }
+  61%,
+  100% {
+    opacity: 0.25;
+  }
+}
+
+.float-y {
+  animation: float-y 5.2s steps(12, end) infinite alternate;
+}
+
+@keyframes float-y {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(-8px);
+  }
+}
+
+/* ---------- 数据包沿路径流动 ---------- */
+.pulse-line {
+  position: relative;
+  overflow: hidden;
+}
+
+.pulse-line::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, var(--c-mint), transparent);
+  transform: translateX(-100%);
+  animation: pulse-run 2.8s steps(24, end) infinite;
+}
+
+@keyframes pulse-run {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* ---------- glitch：色差闪动 ---------- */
+.glitch-host:hover .glitch {
+  animation: glitch 460ms steps(3, end) infinite;
+}
+
+@keyframes glitch {
+  0% {
+    text-shadow: 2px 0 var(--c-rose), -2px 0 var(--c-cyan);
+    transform: translateX(0);
+  }
+  33% {
+    text-shadow: -3px 0 var(--c-rose), 3px 0 var(--c-cyan);
+    transform: translateX(1px);
+  }
+  66% {
+    text-shadow: 3px 0 var(--c-violet), -3px 0 var(--c-amber);
+    transform: translateX(-1px);
+  }
+  100% {
+    text-shadow: 2px 0 var(--c-cyan), -2px 0 var(--c-rose);
+    transform: translateX(0);
+  }
+}
+
+/* ---------- 点点矩阵波动 ---------- */
+.matrix-dot {
+  animation: matrix-dot 2.4s steps(6, end) infinite;
+}
+
+@keyframes matrix-dot {
+  0%,
+  100% {
+    opacity: 0.12;
+  }
+  30% {
+    opacity: 0.5;
+  }
+}
+
+/* ---------- 旋转（像素框） ---------- */
+.spin-step {
+  animation: spin-step 3s steps(8, end) infinite;
+}
+
+@keyframes spin-step {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---------- 降级：尊重系统偏好 ---------- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+
+  .reveal,
+  .reveal-pixel {
+    opacity: 1;
+    transform: none;
+    clip-path: none;
+  }
+}

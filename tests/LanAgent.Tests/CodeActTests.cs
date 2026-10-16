@@ -169,6 +169,19 @@ public sealed class CodeActTests
         Assert.DoesNotContain("unpacking", Assert.Single(provider.ModelTools).Description);
     }
 
+    [Fact]
+    public async Task InstructionsRejectPythonPackagesWithoutInjectingLegacyCatalogOrUserCommands()
+    {
+        await using var provider = new CodeActProvider(new ToolRegistry(), new PythonCodeValidator("unused"), new RuntimeErrorSandbox(),
+            pythonLibraryContext: () => throw new InvalidOperationException("Legacy pip catalog must not be read"));
+        provider.PowerShellCapabilitiesProvider = () => "[]";
+        var instructions = provider.Instructions;
+        Assert.Contains("Do not install or import third-party Python packages", instructions);
+        Assert.DoesNotContain("/powershell", instructions);
+        Assert.DoesNotContain("pip.md", instructions);
+        Assert.DoesNotContain("Installed host libraries", instructions);
+    }
+
     private sealed class RuntimeErrorSandbox : ICodeSandbox
     {
         public string? Source { get; private set; }
@@ -360,10 +373,10 @@ public sealed class CodeActTests
     }
 
     [Fact]
-    public async Task MissingWorkerFailsClosed()
+    public async Task MissingExplicitHyperlightWorkerFailsClosed()
     {
         using var workspace = new TestWorkspace();
-        await using var runtime = await AgentRuntime.CreateAsync(workspace.Options with { SandboxWorkerPath = Path.Combine(workspace.Root, "missing.exe") });
+        await using var runtime = await AgentRuntime.CreateAsync(workspace.Options with { SandboxMode = SandboxMode.Hyperlight, SandboxWorkerPath = Path.Combine(workspace.Root, "missing.exe") });
         Assert.False((await runtime.ProbeSandboxAsync()).Ok);
         var rejected = await runtime.CodeAct.ExecuteAsync("file_read", JsonSerializer.SerializeToElement(new { path = "x" }), runtime.CodeAct.CallToolAsync, default);
         Assert.False(rejected.Ok);

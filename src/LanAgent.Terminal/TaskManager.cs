@@ -16,9 +16,10 @@ internal sealed class TaskManager(BackgroundTasks tasks, TerminalUi ui, DataStor
         });
     }
     private static string State(BackgroundTaskState state) => state switch { BackgroundTaskState.Queued => "排队", BackgroundTaskState.Running => "运行中", BackgroundTaskState.Cancelling => "正在停止", BackgroundTaskState.AwaitingApproval => "[yellow]等待授权[/]", BackgroundTaskState.AwaitingAnswer => "[yellow]等待回答[/]", BackgroundTaskState.Completed => "[green]完成[/]", BackgroundTaskState.Cancelled => "已取消", BackgroundTaskState.Interrupted => "退出中断", _ => "[red]失败[/]" };
-    public async Task ExecuteAsync(IReadOnlyList<string> words)
+    public async Task ExecuteAsync(IReadOnlyList<string> words, CancellationToken ct = default)
     {
-        var action = words.FirstOrDefault() ?? (ui.Interactive && !ui.Json ? "panel" : "list");
+        var action = words.FirstOrDefault() ?? (ui.AgentIsLive ? "list" : ui.Interactive && !ui.Json ? "panel" : "list");
+        if (ui.AgentIsLive && action is "panel" or "wait") throw new ArgumentException("运行中请用 /tasks list|show|approve|answer|deny|cancel ID；任务持续执行，完成后可使用 wait。");
         if (action == "list") { List(); return; }
         if (action == "panel")
         {
@@ -39,6 +40,7 @@ internal sealed class TaskManager(BackgroundTasks tasks, TerminalUi ui, DataStor
                 break;
             case "cancel":
                 tasks.Cancel(id);
+                if (ui.AgentIsLive) { ManagementUi.Success(ui, "已请求停止任务 " + id); break; }
                 await ManagementUi.Busy("停止任务并等待执行器退出", ct => tasks.WaitAsync(id, ct));
                 ManagementUi.Success(ui, "任务已停止 " + id); break;
             case "wait":
@@ -56,10 +58,11 @@ internal sealed class TaskManager(BackgroundTasks tasks, TerminalUi ui, DataStor
                 if (result.State is BackgroundTaskState.AwaitingApproval or BackgroundTaskState.AwaitingAnswer) ManagementUi.Success(ui, "任务需要你处理，请打开 /tasks。"); break;
             case "approve":
                 var approval = tasks.Interaction(id)?.Approval ?? throw new ArgumentException("任务没有待处理授权。");
-                tasks.Respond(id, await ui.RequestApprovalAsync(approval with { Source = "任务 " + id + (approval.Source == null ? "" : " · " + approval.Source) }, default) ? "allow" : null); break;
+                tasks.Respond(id, await ui.RequestApprovalAsync(approval with { Source = "任务 " + id + (approval.Source == null ? "" : " · " + approval.Source) }, ct) ? "allow" : null); break;
             case "answer":
                 var question = tasks.Interaction(id)?.Question ?? throw new ArgumentException("任务没有待回答的问题。");
-                ManagementUi.Interactive(ui); tasks.Respond(id, await ui.RequestQuestionAsync(question with { Question = "任务 " + id + "：" + question.Question }, default)); break;
+                if (!ui.AgentIsLive) ManagementUi.Interactive(ui);
+                tasks.Respond(id, await ui.RequestQuestionAsync(question with { Question = "任务 " + id + "：" + question.Question }, ct)); break;
             case "deny": tasks.Respond(id, null); break;
             default: throw new ArgumentException("任务操作：list / show / approve / answer / deny / cancel / wait。");
         }

@@ -8,6 +8,7 @@
     <Project Path="samples/LanAgent.SamplePlugin/LanAgent.SamplePlugin.csproj" />
   </Folder>
   <Folder Name="/src/">
+    <Project Path="src/LanAgent.Browser/LanAgent.Browser.csproj" />
     <Project Path="src/LanAgent.Core/LanAgent.Core.csproj" />
     <Project Path="src/LanAgent.ComputerUse/LanAgent.ComputerUse.csproj" />
     <Project Path="src/LanAgent.Desktop/LanAgent.Desktop.csproj" />
@@ -20,4 +21,5 @@
     <Project Path="tests/LanAgent.ProcessProbe/LanAgent.ProcessProbe.csproj" />
     <Project Path="tests/LanAgent.Tests/LanAgent.Tests.csproj" />
   </Folder>
+  <Project Path="src/LanAgent.PowerShell/LanAgent.PowerShell.csproj" />
 </Solution>

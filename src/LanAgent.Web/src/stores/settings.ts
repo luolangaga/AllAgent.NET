@@ -9,9 +9,17 @@ export const useSettingsStore = defineStore('settings', () => {
   const defaultModel = ref('')
   const streamingEnabled = ref(true)
   const defaultProviderId = ref('')
+  const browserUseEnabled = ref(true)
+  const browserUseMode = ref<'builtin' | 'chromium'>('builtin')
+  const browserExecutablePath = ref('')
+  const browserCdpUrl = ref('')
 
   async function load() {
     const s = await invoke<AppSettings>('settings.get')
+    browserUseEnabled.value = s.browserUseEnabled ?? true
+    browserUseMode.value = s.browserUseMode ?? 'builtin'
+    browserExecutablePath.value = s.browserExecutablePath ?? ''
+    browserCdpUrl.value = s.browserCdpUrl ?? ''
     theme.value = s.theme
     language.value = s.language
     defaultModel.value = s.defaultModel
@@ -21,6 +29,10 @@ export const useSettingsStore = defineStore('settings', () => {
 
   async function save() {
     await invoke('settings.save', {
+      browserUseEnabled: browserUseEnabled.value,
+      browserUseMode: browserUseMode.value,
+      browserExecutablePath: browserExecutablePath.value,
+      browserCdpUrl: browserCdpUrl.value,
       theme: theme.value,
       language: language.value,
       defaultModel: defaultModel.value,
@@ -44,5 +56,5 @@ export const useSettingsStore = defineStore('settings', () => {
     if (theme.value === 'system') applyTheme('system')
   })
 
-  return { theme, language, defaultModel, streamingEnabled, defaultProviderId, load, save, applyTheme }
+  return { browserUseEnabled, browserUseMode, browserExecutablePath, browserCdpUrl, theme, language, defaultModel, streamingEnabled, defaultProviderId, load, save, applyTheme }
 })

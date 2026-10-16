@@ -5,7 +5,7 @@ namespace LanAgent.Tests;
 
 public sealed class PastedImageTests
 {
-    private const string Png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jI1kAAAAASUVORK5CYII=";
+    private const string Png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC";
     [Fact]
     public async Task VtShiftInsertReadsClipboardAsPaste()
     {

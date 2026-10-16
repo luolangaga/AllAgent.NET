@@ -14,7 +14,7 @@ internal sealed class InputInbox(DataStore store, string workspace)
     public IReadOnlyList<PendingInput> Pending => store.GetPendingInputs(Session);
     public PendingInput? Next => AutomaticDeliveryPaused ? null : Pending.FirstOrDefault(item => item.Delivery == "steer") ?? Pending.FirstOrDefault();
     public string Label => Pending.Count is var count && count > 0 ? $"待处理输入 {count}" + (AutomaticDeliveryPaused ? " · 已暂停" : "") + " · /queue" : "";
-    public async Task<PendingInput> EnqueueAsync(string draft, string delivery = "queue", CancellationToken ct = default)
+    public async Task<PendingInput> EnqueueAsync(string draft, string delivery = "steer", CancellationToken ct = default)
     {
         var expanded = await PromptReferences.ExpandWithImagesAsync(draft, workspace, ct, allowExplicitExternalImages: true);
         return store.EnqueueInput(Session, draft, expanded.Text, expanded.Images, delivery);
@@ -24,6 +24,12 @@ internal sealed class InputInbox(DataStore store, string workspace)
         var words = CommandLineWords.Parse(command); var action = words.ElementAtOrDefault(1) ?? "list";
         if (words.Length == 1 && FullScreenTerminal.Current is { } screen)
             return await screen.PendingInputsAsync(this, draft, ct);
+        if (action == "add")
+        {
+            var text = command.Split(' ', 3, StringSplitOptions.RemoveEmptyEntries).ElementAtOrDefault(2);
+            if (string.IsNullOrWhiteSpace(text)) throw new ArgumentException("用法：/queue add 下一条任务");
+            await EnqueueAsync(text, "queue", ct); return null;
+        }
         if (action == "run" && words.Length == 2) { AutomaticDeliveryPaused = false; return null; }
         if (action == "list")
         {
@@ -31,7 +37,7 @@ internal sealed class InputInbox(DataStore store, string workspace)
             foreach (var item in Pending) table.AddRow(item.Id.ToString()[..8], item.Delivery == "steer" ? "当前任务" : "排队", Markup.Escape(item.Draft));
             TerminalOutput.Write(new Panel(table).Header("待处理输入 · /queue steer|queue|edit|delete ID")); return null;
         }
-        if (words.Length != 3 || action is not ("steer" or "queue" or "edit" or "delete")) throw new ArgumentException("用法：/queue [list|steer|queue|edit|delete ID]");
+        if (words.Length != 3 || action is not ("steer" or "queue" or "edit" or "delete")) throw new ArgumentException("用法：/queue [add 任务|list|steer|queue|edit|delete ID|run]");
         var matches = Pending.Where(item => item.Id.ToString().StartsWith(words[2], StringComparison.OrdinalIgnoreCase)).ToArray();
         if (matches.Length != 1) throw new ArgumentException("输入 ID 不存在或不唯一。");
         var input = matches[0];

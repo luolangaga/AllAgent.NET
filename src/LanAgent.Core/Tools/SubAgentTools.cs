@@ -16,7 +16,7 @@ public partial class SubAgentTools
         Func<SubAgentRequest, CancellationToken, Task<string>>? launchAsync = null)
     { _tasks = tasks; _start = start; _delegate = launch; _delegateAsync = launchAsync; }
 
-    [AgentTool("subagent"), Description("Run a specialized child in its own conversation and microVM. general handles implementation and research; explore only searches and analyzes with host-enforced read-only permissions. Other configured roles and their descriptions are listed in the system instructions. Foreground is the default and returns the final answer; background returns immediately. Pass sessionID to continue a previous child or steer a running child of this conversation at its next model boundary. Steering joins the existing task; it does not interrupt an executing tool or resolve pending human approval/questions. Changing a running child's role updates its live host restrictions and next-step instructions; the parent's read-only mode remains binding. Explicit model/provider changes apply at its next model-step boundary. Include all relevant context in a new child's prompt. Set model/provider only if the user explicitly requested them. Resolve any pending approval/question in the task manager before waiting again.")]
+    [AgentTool("subagent"), Description("First inspect enough context to define a bounded task and separate edit scope. Delegate substantial independent work when the benefit exceeds startup and integration cost; keep small tasks and the critical dependent path with the parent. Use background children for independent tasks and collect their results; at most 6 children run concurrently across roles. Use ordinary parallel tool calls for short reads, searches and checks; handle small dependent work directly. Run a specialized child in its own conversation and microVM. general handles implementation and research; explore only searches and analyzes with host-enforced read-only permissions. Other configured roles and their descriptions are listed in the system instructions. Foreground is the default and returns the final answer; background returns immediately. Pass sessionID to continue a previous child or steer a running child of this conversation at its next model boundary. Steering joins the existing task; it does not interrupt an executing tool or resolve pending human approval/questions. Changing a running child's role updates its live host restrictions and next-step instructions; the parent's read-only mode remains binding. Explicit model/provider changes apply at its next model-step boundary. Include all relevant context in a new child's prompt. Set model/provider only if the user explicitly requested them. Resolve any pending approval/question in the task manager before waiting again.")]
     public async Task<ToolResult> DelegateAsync(
         [Description("Configured role name, including general and explore")] string agent,
         [Description("Short task label, 1–120 characters")] string description,
@@ -45,7 +45,7 @@ public partial class SubAgentTools
                 while (_tasks.Get(id).State is BackgroundTaskState.Queued or BackgroundTaskState.Running)
                     await Task.Delay(100, ct);
             }
-            catch (OperationCanceledException) { _tasks.Cancel(id); throw; }
+            catch (OperationCanceledException) { _tasks.NotifyParentOnCompletion(id); throw; }
         }
         var info = _tasks.Get(id);
         if (background || info.State is BackgroundTaskState.AwaitingAnswer or BackgroundTaskState.AwaitingApproval)

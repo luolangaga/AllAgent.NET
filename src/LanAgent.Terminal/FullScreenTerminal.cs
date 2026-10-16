@@ -23,7 +23,52 @@ internal sealed class FullScreenTerminal : IDisposable
     private readonly Dictionary<string, CodeExecutionBlock> _executions = [];
     private readonly Dictionary<(int X, int Y), (CodeExecutionBlock Block, int Span)> _traceCells = [];
     private (CodeExecutionBlock Block, int Span)? _inspector;
+    private readonly Stack<((CodeExecutionBlock Block, int Span) Inspector, int Scroll, int Selected)> _inspectorHistory = [];
     private int _inspectorScroll, _inspectorSelection;
+    private TextViewport? _inspectorViewport;
+    private (CodeExecutionBlock Block, int Span, int Selected, int Version)? _inspectorCacheKey;
+    private (int X, int Y)? _detailStart, _detailEnd;
+    private bool _detailDragging;
+    private int _detailPointerX, _detailPointerY;
+    private long _detailScrollTick;
+    private int _detailTop, _detailLeft;
+
+    private void ClearDetailSelection() { _detailStart = _detailEnd = null; _detailDragging = false; }
+    private bool DetailPointer(TerminalInput input)
+    {
+        if (input.Pointer is not { Button: PointerButton.Left } pointer || _inspectorViewport is not { } view) return false;
+        _detailPointerX = pointer.X; _detailPointerY = pointer.Y;
+        var inside = pointer.X >= _detailLeft && pointer.X < _detailLeft + view.Width && pointer.Y >= _detailTop && pointer.Y < _detailTop + view.Height;
+        if (pointer.Action == PointerAction.Down)
+        {
+            ClearDetailSelection();
+            if (!inside) return true;
+            _detailDragging = true;
+            _detailStart = _detailEnd = DetailPoint();
+        }
+        else if (_detailDragging)
+        {
+            _detailEnd = DetailPoint();
+            if (pointer.Action == PointerAction.Up)
+            {
+                _detailDragging = false;
+                if (_detailStart == _detailEnd) InspectPointer(input with { Pointer = pointer with { Action = PointerAction.Down } });
+            }
+        }
+        return true;
+    }
+    private (int X, int Y) DetailPoint() =>
+        (Math.Clamp(_detailPointerX - _detailLeft, 0, Math.Max(0, _inspectorViewport!.Width - 1)),
+         _inspectorScroll + Math.Clamp(_detailPointerY - _detailTop, 0, _inspectorViewport.Height - 1));
+    internal void AutoScrollDetail(long now)
+    {
+        if (!_detailDragging || _inspectorViewport is not { } view || now - _detailScrollTick < 50) return;
+        var delta = _detailPointerY <= _detailTop ? -1 : _detailPointerY >= _detailTop + view.Height - 1 ? 1 : 0;
+        if (delta == 0) return;
+        _detailScrollTick = now;
+        _inspectorScroll = Math.Clamp(_inspectorScroll + delta, 0, Math.Max(0, view.Lines.Count - view.Height));
+        _detailEnd = DetailPoint();
+    }
     private readonly IAnsiConsole _native;
     private readonly object _drawGate = new();
     private readonly SpectreScreenDisplay _display;
@@ -39,6 +84,7 @@ internal sealed class FullScreenTerminal : IDisposable
     private int _enabledSkills;
     private string _status = "准备就绪";
     private IRenderable? _activity, _dialog, _conversationPrompt;
+    private bool _busyDialogActive;
     private InputState _input = new();
     private InputText? _inputText;
     private int _inputX, _inputY, _inputWidth;
@@ -65,9 +111,12 @@ internal sealed class FullScreenTerminal : IDisposable
     private readonly ConsoleCancelEventHandler _cancelHandler;
     public bool ShowSidebar { get; set; } = true;
     public Func<string>? ExtensionSummary { get; set; }
+    public Func<string>? ModelFooter { get; set; }
     public Func<string>? TaskNotice { get; set; }
     public Func<string, BackgroundTaskInfo?>? TaskLookup { get; set; }
+    public Func<string, IReadOnlyList<BackgroundTaskInfo>>? InvocationTasks { get; set; }
     public Func<BackgroundTaskInfo, IRenderable>? TaskTranscript { get; set; }
+    public Func<BackgroundTaskInfo, IRenderable>? TaskPreview { get; set; }
     public Guid SessionId { get; private set; }
     public string Model { get; private set; } = "未选择模型";
     public TerminalTheme Theme { get; set; }
@@ -157,13 +206,15 @@ internal sealed class FullScreenTerminal : IDisposable
     {
         block.UseMarkers = true;
         block.TaskLookup = TaskLookup;
+        block.InvocationTasks = InvocationTasks;
         block.TaskTranscript = TaskTranscript;
+        block.TaskPreview = TaskPreview;
         _executions[block.TraceId] = block;
         if (_executions.Count > 300) _executions.Remove(_executions.Keys.First());
     }
     internal bool InspectLatest()
     {
-        if (_executions.Values.LastOrDefault(b => !b.IsReasoning) is not { } block) return false;
+        if (_executions.Values.LastOrDefault(b => !b.IsReasoning && !b.IsChildTranscript) is not { } block) return false;
         OpenInspector(block, -1); return true;
     }
     internal bool InspectLatestThought()
@@ -172,20 +223,44 @@ internal sealed class FullScreenTerminal : IDisposable
         OpenInspector(block, -1); return true;
     }
     internal void InspectThought(string text) => OpenInspector(new CodeExecutionBlock("live-thought", text, reasoning: true), -1);
-    private void OpenInspector(CodeExecutionBlock block, int span) { _inspector = (block, span); _inspectorScroll = _inspectorSelection = 0; }
-    private void CloseInspector() { _inspector = null; _inspectorScroll = _inspectorSelection = 0; }
+    private void OpenInspector(CodeExecutionBlock block, int span, bool nested = false)
+    {
+        ClearDetailSelection();
+        if (nested && _inspector is { } current) _inspectorHistory.Push((current, _inspectorScroll, _inspectorSelection));
+        else _inspectorHistory.Clear();
+        var target = block.InspectionTarget(span); _inspector = (block, target.Span); _inspectorScroll = 0; _inspectorSelection = target.Selected;
+    }
+    private void CloseInspector() { ClearDetailSelection(); _inspectorViewport = null; _inspectorCacheKey = null; _inspector = null; _inspectorScroll = _inspectorSelection = 0; _inspectorHistory.Clear(); }
+    private void BackInspector()
+    {
+        ClearDetailSelection();
+        if (_inspectorHistory.TryPop(out var previous)) { _inspector = previous.Inspector; _inspectorScroll = previous.Scroll; _inspectorSelection = previous.Selected; }
+        else CloseInspector();
+    }
+    private bool InspectPointer(TerminalInput input)
+    {
+        if (input.Pointer is not { Action: PointerAction.Down, Button: PointerButton.Left } pointer || !_traceCells.TryGetValue((pointer.X, pointer.Y), out var trace)) return false;
+        var target = trace.Block.InspectionTarget(trace.Span);
+        if (_inspector is { } current && current.Block == trace.Block && current.Span == target.Span && _inspectorSelection == target.Selected) return true;
+        OpenInspector(trace.Block, trace.Span, nested: _inspector != null); return true;
+    }
     internal bool InspectorInput(TerminalInput input)
     {
         if (_inspector == null) return false;
         if (input.Key.Key == ConsoleKey.C && input.Key.Modifiers.HasFlag(ConsoleModifiers.Control)) return false;
-        if (input.Key.Key is ConsoleKey.Escape or ConsoleKey.Enter) { CloseInspector(); return true; }
+        if (input.Key.Key is ConsoleKey.Escape or ConsoleKey.Enter) { BackInspector(); return true; }
+        if (input.Pointer is { Button: PointerButton.Right }) return false;
+        if (DetailPointer(input)) return true;
+        if (input.Key.Key == ConsoleKey.A && input.Key.Modifiers.HasFlag(ConsoleModifiers.Control) && _inspectorViewport is { } all)
+        { _detailStart = (0, 0); _detailEnd = (all.Width - 1, all.Lines.Count - 1); return true; }
         if (input.Wheel != 0) _inspectorScroll = Math.Max(0, _inspectorScroll - input.Wheel);
         else if (input.Key.Key is ConsoleKey.UpArrow or ConsoleKey.PageUp) _inspectorScroll = Math.Max(0, _inspectorScroll - (input.Key.Key == ConsoleKey.PageUp ? 8 : 1));
         else if (input.Key.Key is ConsoleKey.DownArrow or ConsoleKey.PageDown) _inspectorScroll += input.Key.Key == ConsoleKey.PageDown ? 8 : 1;
         else if (input.Key.Key is ConsoleKey.LeftArrow or ConsoleKey.RightArrow)
         {
+            ClearDetailSelection();
             var trace = _inspector.Value;
-            var count = trace.Span < 0 ? trace.Block.Invocations.Count : trace.Block.Invocations.Count(call => call.SpanIndex == trace.Span);
+            var count = trace.Block.DetailCount(trace.Span);
             _inspectorSelection = Math.Clamp(_inspectorSelection + (input.Key.Key == ConsoleKey.LeftArrow ? -1 : 1), 0, Math.Max(0, count - 1)); _inspectorScroll = 0;
         }
         return true;
@@ -247,8 +322,8 @@ internal sealed class FullScreenTerminal : IDisposable
             if (index < _hints.Count) { ClearTranscriptSelection(); _dragSelecting = false; state.Complete(_hints[index]); }
             return true;
         }
+        if (_dialog == null && InspectPointer(input)) return true;
         if (_inspector != null || _conversationPrompt != null) return true;
-        if (_dialog == null && pointer.Action == PointerAction.Down && _traceCells.TryGetValue((pointer.X, pointer.Y), out var trace)) { OpenInspector(trace.Block, trace.Span); return true; }
         if (_dialog != null || _inputText == null) return true;
         var inside = pointer.X >= _inputX && pointer.X < _inputX + _inputWidth && pointer.Y >= _inputY && pointer.Y < _inputY + _inputText.VisibleRows;
         if (pointer.Action == PointerAction.Down)
@@ -279,6 +354,8 @@ internal sealed class FullScreenTerminal : IDisposable
     {
         if (input.Pointer is not { Button: PointerButton.Right } pointer) return false;
         if (pointer.Action != PointerAction.Down) return true;
+        if (_inspector != null && _detailStart != null)
+        { CopyTranscriptSelection(new('\0', ConsoleKey.C, false, false, true)); return true; }
         if (state.HasSelection) { state.CopySelection(); return true; }
         if (_transcriptSelectionStart != _transcriptSelectionEnd && _transcriptSelectionStart != null)
         { CopyTranscriptSelection(new('\0', ConsoleKey.C, false, false, true)); return true; }
@@ -299,29 +376,23 @@ internal sealed class FullScreenTerminal : IDisposable
             if (x < _transcriptRight || y < 2 || y >= _lastHeight - 2) return null;
             selected = new SelectionRegion(_transcriptRight + 1, 2, _lastWidth - 1, _lastHeight - 2);
         }
-        var block = selected.Value; var column = 0; var separators = new List<int>();
+        var block = selected.Value;
         string Row(int row) => string.Concat(_selectionLines[row].Select(segment => segment.Text));
         if (Row(block.Top).Any(c => c is '┏' or '┌' or '╭' or '╔')) block = block with { Top = Math.Min(block.Top + 1, block.Bottom - 1) };
         if (Row(block.Bottom - 1).Any(c => c is '┗' or '└' or '╰' or '╚')) block = block with { Bottom = Math.Max(block.Top + 1, block.Bottom - 1) };
-        foreach (var segment in _selectionLines[y])
-        {
-            var chars = StringInfo.GetTextElementEnumerator(segment.Text);
-            while (chars.MoveNext())
-            {
-                var element = chars.GetTextElement();
-                if (column >= block.Left && column < block.Right && element is "│" or "┃" or "║") separators.Add(column);
-                column += new Segment(element).CellCount();
-            }
-        }
-        // A table column or panel is its own horizontal selection block.
-        var left = separators.Where(position => position < x).DefaultIfEmpty(block.Left - 1).Max() + 1;
-        var right = separators.Where(position => position >= x).DefaultIfEmpty(block.Right).Min();
-        return right > left ? block with { Left = left, Right = right } : null;
+        return block;
     }
+
     private bool IsTranscriptPoint(int x, int y) => x >= _transcriptLeft && x < _transcriptRight && y >= _transcriptTop && y < _transcriptTop + _transcriptHeight;
     private (int X, int Y) ClampTranscriptPoint(int x, int y) => (Math.Clamp(x, _transcriptLeft, Math.Max(_transcriptLeft, _transcriptRight - 1)), Math.Clamp(y, _transcriptTop, Math.Max(_transcriptTop, _transcriptTop + _transcriptHeight - 1)));
     public bool CopyTranscriptSelection(ConsoleKeyInfo key)
     {
+        if (key.Key == ConsoleKey.C && key.Modifiers.HasFlag(ConsoleModifiers.Control) && _inspectorViewport is { } detail && _detailStart is { } a && _detailEnd is { } b)
+        {
+            var text = new SelectionRegion(0, 0, detail.Width, detail.Lines.Count).Extract(detail.Lines, a, b);
+            _selectionNotice = ClipboardText.Write(text) ? "已复制选中详情文字" : "剪贴板暂不可用";
+            return true;
+        }
         if (key.Key != ConsoleKey.C || !key.Modifiers.HasFlag(ConsoleModifiers.Control) || _transcriptSelectionStart is not { } start || _transcriptSelectionEnd is not { } end) return false;
         var selected = ExtractSelection(start, end);
         if (selected.Length == 0) { _selectionNotice = "请先拖选消息文字"; return true; }
@@ -343,27 +414,40 @@ internal sealed class FullScreenTerminal : IDisposable
         }
         var narrow = width < 100 || !ShowSidebar; var sidebarWidth = narrow ? 0 : 29;
         var inputRows = new InputLayout(_input.Text, Math.Max(1, width - sidebarWidth - 4)).Rows.Count;
-        var inputHeight = Math.Clamp(inputRows + 2, 5, Math.Min(9, Math.Max(5, height / 3)));
+        // Compact input leaves room for history above an inline approval in short windows.
+        var minimumInputHeight = _conversationPrompt != null && height <= 24 ? 3 : 5;
+        var inputHeight = Math.Clamp(inputRows + 2, minimumInputHeight, Math.Min(9, Math.Max(5, height / 3)));
         var hintsHeight = _hints.Count > 0 ? Math.Min(6, _hints.Count + 1) : 0;
         if (height < 24) hintsHeight = Math.Min(3, hintsHeight);
-        var bodyHeight = Math.Max(1, height - 2 - inputHeight - hintsHeight - 2);
-        _hintsTop = height - 2 - inputHeight - hintsHeight; _hintsHeight = hintsHeight == 0 ? 0 : hintsHeight - 1;
+        var bodyHeight = Math.Max(1, height - 3 - inputHeight - hintsHeight - 2);
+        _hintsTop = height - 3 - inputHeight - hintsHeight; _hintsHeight = hintsHeight == 0 ? 0 : hintsHeight - 1;
         _transcriptTop = 3; _transcriptHeight = Math.Max(1, bodyHeight - 2); _transcriptLeft = 1; _transcriptRight = Math.Max(2, width - sidebarWidth - 1);
         var conversation = _store.GetConversation(SessionId);
         var title = conversation?.Title is { Length: > 0 } text && text != "New Conversation" ? text : "开始新的对话";
-        var layout = new Layout("screen").SplitRows(new Layout("header").Size(2), new Layout("main"), new Layout("footer").Size(2));
+        var layout = new Layout("screen").SplitRows(new Layout("header").Size(2), new Layout("main"), new Layout("footer").Size(3));
         layout["header"].Update(new Rows(new SingleLineText(" LanAgent │ " + title, new Style(Accent, decoration: Decoration.Bold)), new SingleLineText(" " + _ui.Workspace, new Style(Color.Grey))));
         var dialog = _dialog;
         if (dialog == null && _inspector is { } inspection)
         {
             var task = inspection.Block.SelectedTask(inspection.Span, _inspectorSelection);
             var child = task != null && (task.Kind == "agent" || task.Kind != "shell" && task.ParentSessionId != null);
-            dialog = new Panel(new TextViewport(inspection.Block.Details(inspection.Span, _inspectorSelection), Math.Max(2, height - 10), _inspectorScroll)).Header(child ? "子代理消息 · " + Markup.Escape(TerminalSafeText.Clean(task!.Title)) : "工具执行详情").Border(BoxBorder.Rounded).BorderColor(Accent).Padding(1, 1);
+            var cacheKey = (inspection.Block, inspection.Span, _inspectorSelection, inspection.Block.Version);
+            if (_inspectorCacheKey != cacheKey)
+            {
+                _inspectorViewport = new TextViewport(inspection.Block.Details(inspection.Span, _inspectorSelection), Math.Max(2, height - 10), _inspectorScroll);
+                _inspectorCacheKey = cacheKey;
+            }
+            var viewport = _inspectorViewport!;
+            viewport.Height = Math.Max(2, height - 10); viewport.Offset = _inspectorScroll;
+            viewport.SelectionStart = _detailStart; viewport.SelectionEnd = _detailEnd;
+            viewport.SelectionColor = Accent;
+            _detailLeft = 2; _detailTop = 5;
+            dialog = new Panel(viewport).Header(child ? "子代理消息 · " + Markup.Escape(TerminalSafeText.Clean(task!.Title)) : "工具执行详情").Border(BoxBorder.Rounded).BorderColor(Accent).Padding(1, 1);
         }
         if (dialog != null)
         {
             layout["main"].Update(new Align(dialog, HorizontalAlignment.Center, VerticalAlignment.Middle));
-            layout["footer"].Update(new Text(_inspector != null && _dialog == null ? " 滚轮/↑↓ 查看 · ←→ 切换实际调用 · Esc/Enter 关闭" : " ↑↓ 选择 · Enter 确认 · Esc 返回 / 拒绝", new Style(Color.Grey)));
+            layout["footer"].Update(new Text(_busyDialogActive ? " 正在自动连接 · 双击 Esc / Ctrl+C 取消" : _inspector != null && _dialog == null ? " 滚轮/↑↓ 查看 · 拖选/Ctrl+A 全选 · Ctrl+C 复制 · ←→ 切换 · Esc 关闭" : " ↑↓ 选择 · Enter 确认 · Esc 返回 / 拒绝", new Style(Color.Grey)));
             return new ScreenSurface(layout, width, height, Background, Theme.Foreground);
         }
         var left = new Layout("chat").SplitRows(new Layout("messages"), new Layout("suggestions").Size(Math.Max(1, hintsHeight)), new Layout("input").Size(inputHeight));
@@ -387,12 +471,12 @@ internal sealed class FullScreenTerminal : IDisposable
                 hints.Add(new Markup(hint.MarkerMarkup + (index == selected ? "[black on #7dcfff] › " : "[dim]   ") + Markup.Escape(hint.Text + "  " + hint.Description) + "[/]"));
             left["suggestions"].Update(new Rows(hints));
         }
-        _inputText = new InputText(_input, maxRows: inputHeight - 2); _inputX = 2; _inputY = height - 2 - inputHeight + 1; _inputWidth = width - sidebarWidth - 4;
+        _inputText = new InputText(_input, maxRows: inputHeight - 2); _inputX = 2; _inputY = height - 3 - inputHeight + 1; _inputWidth = width - sidebarWidth - 4;
         left["input"].Update(new Panel(_inputText).Header("[bold #7dcfff] " + (string.IsNullOrEmpty(_input.Text) ? "输入任务" : "正在输入") + " [/]").Border(BoxBorder.Heavy).BorderColor(Accent).Padding(1, 0).Expand());
-        if (!narrow) layout["sidebar"].Update(new ScreenSurface(new Panel(Sidebar()).Border(BoxBorder.None).Padding(1, 1).Expand(), sidebarWidth, height - 4, Surface));
+        if (!narrow) layout["sidebar"].Update(new ScreenSurface(new Panel(Sidebar()).Border(BoxBorder.None).Padding(1, 1).Expand(), sidebarWidth, height - 5, Surface));
         var imageLabel = PromptReferences.ImageDraftLabel(_input.Text);
         if (conversation?.Revert != null) imageLabel = "已暂存撤回 · /redo 恢复原历史和文件 · 提交新任务后丢弃被撤回的历史" + (imageLabel.Length > 0 ? " · " + imageLabel : "");
-        layout["footer"].Update(new Rows(new SingleLineText(" " + _ui.ContextLabel + " │ " + TaskNotice?.Invoke() + (_scroll > 0 ? "阅读历史 ↑ · PgDn | " : "") + (_selectionNotice ?? _input.Notice ?? _status), new Style(_ui.ContextUsedTokens >= _ui.ContextCapacityTokens * 0.85 ? Color.Yellow : Color.Grey)), new SingleLineText(" " + (imageLabel.Length > 0 ? imageLabel : "F1 菜单  F2 模型  Ctrl+E 执行详情  消息区拖选文字 · Ctrl+C 复制 | 输入区 Shift+方向选择"), new Style(Color.Grey))));
+        layout["footer"].Update(new Rows(new SingleLineText(" " + _ui.TurnTokenLabel + (ModelFooter?.Invoke() is { Length: > 0 } extra ? " │ " + extra : ""), new Style(Color.Grey)), new SingleLineText(" " + _ui.ContextLabel + " │ " + TaskNotice?.Invoke() + (_scroll > 0 ? "阅读历史 ↑ · PgDn | " : "") + (_selectionNotice ?? _input.Notice ?? _status), new Style(_ui.ContextUsedTokens >= _ui.ContextCapacityTokens * 0.85 ? Color.Yellow : Color.Grey)), new SingleLineText(" " + _ui.ThinkingEffortLabel + " │ " + (imageLabel.Length > 0 ? imageLabel : "F1 菜单  F2 模型  Ctrl+E 执行详情  消息区拖选文字 · Ctrl+C 复制 | 输入区 Shift+方向选择"), new Style(Color.Grey))));
         return new ScreenSurface(layout, width, height, Background, Theme.Foreground);
     }
     private IRenderable Sidebar()
@@ -433,10 +517,12 @@ internal sealed class FullScreenTerminal : IDisposable
         {
             var width = Math.Clamp(Console.WindowWidth, 1, 500); var height = Math.Clamp(Console.WindowHeight, 1, 200);
             var now = Environment.TickCount64;
+            AutoScrollDetail(now);
             var key = new HashCode();
             key.Add(width); key.Add(height); key.Add(Theme); key.Add(Model); key.Add(SessionId); key.Add(ShowSidebar);
-            key.Add(_scroll); key.Add(_status); key.Add(_selectionNotice); key.Add(_ui.ContextLabel);
+            key.Add(_scroll); key.Add(_status); key.Add(_selectionNotice); key.Add(_ui.ContextLabel); key.Add(_ui.ThinkingEffortLabel); key.Add(_ui.TurnTokenLabel);
             key.Add(_input.Text); key.Add(_input.Cursor); key.Add(_input.Anchor); key.Add(_input.Selection); key.Add(_input.Notice);
+            key.Add(_detailStart); key.Add(_detailEnd);
             key.Add(_transcriptSelectionStart); key.Add(_transcriptSelectionEnd); key.Add(_inspector); key.Add(_inspectorScroll); key.Add(_inspectorSelection);
             key.Add(_dialog); key.Add(_conversationPrompt); key.Add(now / 1000);
             foreach (var hint in _hints) key.Add(hint);
@@ -461,6 +547,7 @@ internal sealed class FullScreenTerminal : IDisposable
     {
         _visibleBlocks.Clear();
         var segments = BuildFrame(width, height).Render(RenderOptions.Create(_native, _native.Profile.Capabilities), width).ToArray();
+        if (_inspectorViewport != null && _inspector != null) _inspectorScroll = _inspectorViewport.Offset;
         _traceCells.Clear();
         var markers = _executions.Values.SelectMany(block => block.Markers.Select(pair => (Color: pair.Value, Block: block, Span: pair.Key))).ToDictionary(pair => pair.Color);
         var lines = Segment.SplitLines(segments, width, height);
@@ -521,7 +608,7 @@ internal sealed class FullScreenTerminal : IDisposable
         }
         return await pending;
     }
-    public async Task<T> BusyAsync<T>(string title, Func<CancellationToken, Task<T>> action, CancellationToken ct = default, Func<string>? titleProvider = null, bool allowEscape = false)
+    public async Task<T> BusyAsync<T>(string title, Func<CancellationToken, Task<T>> action, CancellationToken ct = default, Func<string>? titleProvider = null, bool allowEscape = false, Func<IRenderable>? bodyProvider = null)
     {
         // Actions may open prompts; use our display owner instead of nesting Spectre Status/Live scopes.
         using var cancelled = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -530,12 +617,18 @@ internal sealed class FullScreenTerminal : IDisposable
         var watch = System.Diagnostics.Stopwatch.StartNew();
         var keys = allowEscape ? _keys : null;
         var cancelConfirmation = new EscapeCancelConfirmation();
+        var previousDialog = _dialog;
+        var previousBusyDialog = _busyDialogActive;
+        if (bodyProvider != null) _busyDialogActive = true;
         try
         {
             var task = action(cancelled.Token);
             while (!task.IsCompleted)
             {
+                cancelled.Token.ThrowIfCancellationRequested();
                 var glyph = LoadingIndicator.Frame(watch.ElapsedMilliseconds);
+                if (bodyProvider != null) SetDialog(new Panel(new Rows(bodyProvider(), new Text($"\n{glyph} {titleProvider?.Invoke() ?? title} · {watch.Elapsed.TotalSeconds:F0}s · 双击 Esc / Ctrl+C 取消", new Style(Accent))))
+                    .Header(Markup.Escape(title)).Border(BoxBorder.Rounded).BorderColor(Accent).Padding(1, 1));
                 SetActivity(new Text($"{glyph} {titleProvider?.Invoke() ?? title}… {watch.Elapsed.TotalSeconds:F0}s · {(cancelConfirmation.Armed ? "再次按 Esc 确认取消 · " : allowEscape ? "双击 Esc / " : "")}Ctrl+C 取消", new Style(Accent))); Draw();
                 if (keys?.HasInput == true)
                 {
@@ -547,7 +640,7 @@ internal sealed class FullScreenTerminal : IDisposable
             }
             return await task;
         }
-        finally { SetActivity(null); Console.CancelKeyPress -= handler; Draw(); }
+        finally { if (bodyProvider != null) SetDialog(previousDialog); _busyDialogActive = previousBusyDialog; SetActivity(null); Console.CancelKeyPress -= handler; Draw(); }
     }
     public async Task<string> ReadInputAsync(InputEditor editor, string status, string initial, CancellationToken ct)
     {
@@ -710,27 +803,34 @@ internal sealed class FullScreenTerminal : IDisposable
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return null; }
     }
-    private sealed record PromptChoice<T>(T Value);
-    public async Task<T> ChooseAsync<T>(string title, IReadOnlyList<T> choices, Func<T,string> label, CancellationToken ct)
+    public async Task<T> ChooseAsync<T>(string title, IReadOnlyList<T> choices, Func<T,string> label, CancellationToken ct, Func<T,string>? group = null, Func<T,string>? color = null, IRenderable? body = null)
     {
         if (choices.Count == 0) throw new ArgumentException("没有可选项。");
         return await WithPromptAsync(async token =>
         {
-            var prompt = new SelectionPrompt<PromptChoice<T>>()
-                .Title(Markup.Escape(TerminalSafeText.Clean(title)))
-                .PageSize(Math.Clamp(_native.Profile.Height - 8, 3, 14))
-                .HighlightStyle(new Style(Accent, decoration: Decoration.Bold))
-                .UseConverter(choice => Markup.Escape(TerminalSafeText.Clean(label(choice.Value))))
-                .EnableSearch().SearchPlaceholderText("[dim]输入关键字搜索 · ↑↓ 选择 · Enter 确认 · Esc 返回[/]")
-                .WrapAround().AddChoices(choices.Select(choice => new PromptChoice<T>(choice)));
-            prompt.CancelResult = () => throw new OperationCanceledException("已返回。");
+            var bodyHeight = body == null ? 0 : Math.Clamp(_native.Profile.Height / 3, 3, 9);
+            if (body != null) _native.Write(new Panel(new TextViewport(new SafeTerminalRenderable(body), bodyHeight, 0)).Border(BoxBorder.Rounded).BorderColor(Accent));
+            var prompt = TerminalSelectionPrompt.Create(title, choices, label,
+                Math.Clamp(_native.Profile.Height - (body == null ? 8 : bodyHeight + 10), 3, 14), new Style(Accent, decoration: Decoration.Bold), group, color);
             return (await new SpectrePromptConsole(_native, _entered ? _keys : null).PromptAsync(prompt, token)).Value;
         }, ct);
     }
     public async Task<string?> QuestionAsync(LanAgent.Core.Tools.AgentQuestion question, CancellationToken ct)
     {
-        try { return await WithPromptAsync(token => TerminalQuestionPrompt.AskAsync(_native, _entered ? _keys : new TerminalKeyReader(_native.Input.IsKeyAvailable, () => _native.Input.ReadKey(true) ?? default), question, token), ct); }
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        _promptCancellation = cancellation;
+        try
+        {
+            return await TerminalQuestionPrompt.AskAsync(_native,
+                _entered ? _keys : new TerminalKeyReader(_native.Input.IsKeyAvailable, () => _native.Input.ReadKey(true) ?? default),
+                question, cancellation.Token, body =>
+                {
+                    SetConversationPrompt(new Panel(body).Header("需要你的回答").Border(BoxBorder.Rounded).BorderColor(Color.Yellow));
+                    Draw();
+                });
+        }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return null; }
+        finally { SetConversationPrompt(null); _promptCancellation = null; Draw(); }
     }
 
     private async Task<T> WithPromptAsync<T>(Func<CancellationToken, Task<T>> action, CancellationToken ct)
@@ -887,13 +987,43 @@ internal interface IVersionedRenderable { int Version { get; } }
 
 internal sealed class TextViewport(IRenderable content, int height, int offset) : IRenderable
 {
+    public int Height { get; set; } = height;
+    public int Offset { get; set; } = offset;
+    public int Width { get; private set; }
+    public IReadOnlyList<List<Segment>> Lines { get; private set; } = [];
+    public (int X, int Y)? SelectionStart { get; set; }
+    public (int X, int Y)? SelectionEnd { get; set; }
+    public Color SelectionColor { get; set; }
     public Measurement Measure(RenderOptions options, int maxWidth) => new(maxWidth, maxWidth);
     public IEnumerable<Segment> Render(RenderOptions options, int maxWidth)
     {
-        var natural = new RenderOptions(options.Capabilities, options.ConsoleSize) { Height = null };
-        var lines = Segment.SplitLines(content.Render(natural, maxWidth), maxWidth, null);
-        foreach (var line in lines.Skip(Math.Min(offset, Math.Max(0, lines.Count - height))).Take(height))
-        { foreach (var segment in line) yield return segment; yield return Segment.LineBreak; }
+        if (Width != maxWidth)
+        {
+            var natural = new RenderOptions(options.Capabilities, options.ConsoleSize) { Height = null };
+            Lines = Segment.SplitLines(content.Render(natural, maxWidth), maxWidth, null);
+            Width = maxWidth;
+        }
+        Offset = Math.Clamp(Offset, 0, Math.Max(0, Lines.Count - Height));
+        var region = new SelectionRegion(0, 0, Width, Lines.Count);
+        for (var row = 0; row < Height; row++)
+        {
+            var y = Offset + row;
+            var x = 0;
+            if (y < Lines.Count) foreach (var segment in Lines[y])
+            {
+                if (SelectionStart is not { } first || SelectionEnd is not { } last)
+                { yield return segment; continue; }
+                var elements = StringInfo.GetTextElementEnumerator(segment.Text);
+                while (elements.MoveNext())
+                {
+                    var element = elements.GetTextElement(); var cells = new Segment(element).CellCount();
+                    yield return new Segment(element, region.Selected(x, y, cells, first, last)
+                        ? new Style(Color.Black, SelectionColor, segment.Style.Decoration) : segment.Style);
+                    x += cells;
+                }
+            }
+            yield return Segment.LineBreak;
+        }
     }
 }
 

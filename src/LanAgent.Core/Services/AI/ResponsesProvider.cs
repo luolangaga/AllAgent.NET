@@ -20,13 +20,15 @@ public sealed class ResponsesProvider(HttpClient? http = null) : IAiProvider
     public string ProviderId => "responses";
     public async Task<IReadOnlyList<ModelInfo>> ListModelsAsync(ApiConfig config, CancellationToken ct = default)
     {
-        using var request = Request(HttpMethod.Get, config, "/models");
+        using var request = Request(HttpMethod.Get, config, config.BaseUrl.TrimEnd('/') == LanAgent.Core.Extensions.ChatGptAuthentication.CodexEndpoint ? "/models?client_version=0.0.0" : "/models");
         using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
         if (!response.IsSuccessStatusCode) throw new InvalidOperationException("模型目录请求失败（HTTP " + (int)response.StatusCode + "）。");
         using var json = JsonDocument.Parse(await ReadBoundedAsync(response.Content, 2000000, ct));
         var root = json.RootElement;
         if (root.TryGetProperty("models", out var models)) return models.EnumerateArray().Where(m => m.TryGetProperty("visibility", out var v) && v.GetString() == "list")
-            .Select(m => new ModelInfo(m.GetProperty("slug").GetString()!, m.TryGetProperty("display_name", out var name) ? name.GetString() ?? m.GetProperty("slug").GetString()! : m.GetProperty("slug").GetString()!, m.TryGetProperty("context_window", out var context) && context.TryGetInt32(out var capacity) ? capacity : null, m.TryGetProperty("max_output_tokens", out var output) && output.TryGetInt32(out var maximum) ? maximum : null)).ToArray();
+            .Select(m => new ModelInfo(m.GetProperty("slug").GetString()!, m.TryGetProperty("display_name", out var name) ? name.GetString() ?? m.GetProperty("slug").GetString()! : m.GetProperty("slug").GetString()!, m.TryGetProperty("context_window", out var context) && context.TryGetInt32(out var capacity) ? capacity : null, m.TryGetProperty("max_output_tokens", out var output) && output.TryGetInt32(out var maximum) ? maximum : null)
+            { ReasoningLevels = m.TryGetProperty("supported_reasoning_levels", out var levels) && levels.ValueKind == JsonValueKind.Array
+                ? levels.EnumerateArray().Where(level => level.ValueKind == JsonValueKind.Object && level.TryGetProperty("effort", out _)).Select(level => level.GetProperty("effort").GetString()!).Where(level => !string.IsNullOrWhiteSpace(level)).ToArray() : null }).ToArray();
         return root.GetProperty("data").EnumerateArray().Select(m => new ModelInfo(m.GetProperty("id").GetString()!, m.GetProperty("id").GetString()!)).ToArray();
     }
     private static HttpRequestMessage Request(HttpMethod method, ApiConfig configuration, string path)
@@ -65,7 +67,7 @@ public sealed class ResponsesProvider(HttpClient? http = null) : IAiProvider
         }
         var body = new JsonObject { ["model"] = request.Config.DefaultModel, ["input"] = input, ["stream"] = true, ["store"] = false, ["include"] = new JsonArray("reasoning.encrypted_content") };
         if (request.Config.ProviderId != "codex") body["max_output_tokens"] = ModelCatalog.OutputLimit(request.Config);
-        if (instructions.Count > 0) body["instructions"] = string.Join("\n\n", instructions);
+        if (instructions.Count > 0 || request.Config.BaseUrl.TrimEnd('/') == LanAgent.Core.Extensions.ChatGptAuthentication.CodexEndpoint) body["instructions"] = string.Join("\n\n", instructions);
         if (request.Tools is { Count: > 0 })
         {
             var tools = new JsonArray();
@@ -73,8 +75,8 @@ public sealed class ResponsesProvider(HttpClient? http = null) : IAiProvider
             body["tools"] = new JsonArray(new JsonObject { ["type"] = "namespace", ["name"] = "lanagent", ["description"] = "LanAgent's host-controlled CodeAct execution capability.", ["tools"] = tools });
             body["parallel_tool_calls"] = false;
         }
-        var effort = request.Config.ReasoningEffort;
-        if (effort != "default") body["reasoning"] = new JsonObject { ["effort"] = effort == "off" ? "none" : effort, ["summary"] = "auto" };
+        PromptCacheRouting.Apply(body, request);
+        ReasoningSettings.Apply(body, request.Config);
         return body;
     }
     public async IAsyncEnumerable<StreamChunk> StreamChatAsync(ChatRequest request, [EnumeratorCancellation] CancellationToken ct = default)
@@ -100,6 +102,8 @@ public sealed class ResponsesProvider(HttpClient? http = null) : IAiProvider
         await using var stream = await response.Content.ReadAsStreamAsync(ct); using var reader = new StreamReader(stream);
         var calls = new Dictionary<string, (string Id, string Name, StringBuilder Args)>();
         var streamedOutput = new SortedDictionary<int, JsonObject>();
+        var reasoningText = new Dictionary<string, string>();
+        var finishedReasoning = new HashSet<string>();
         var eventData = new StringBuilder();
         while (await reader.ReadLineAsync(ct) is { } line)
         {
@@ -123,8 +127,18 @@ public sealed class ResponsesProvider(HttpClient? http = null) : IAiProvider
                         CheckItemSize(textItem);
                     }
                     yield return new(ChunkType.TextDelta, TextDelta: node["delta"]?.GetValue<string>()); break;
-                case "response.reasoning_summary_text.delta": case "response.reasoning_text.delta": yield return new(ChunkType.ThinkingDelta, TextDelta: node["delta"]?.GetValue<string>()); break;
-                case "response.reasoning_summary_text.done": yield return new(ChunkType.ThinkingDelta, TextDelta: "\n"); break;
+                case "response.reasoning_summary_text.delta": case "response.reasoning_text.delta":
+                    var key = ReasoningKey(node, node["type"]!.GetValue<string>().Contains("summary"));
+                    var text = node["delta"]?.GetValue<string>() ?? "";
+                    reasoningText[key] = reasoningText.GetValueOrDefault(key, "") + text;
+                    if (text.Length > 0) yield return new(ChunkType.ThinkingDelta, TextDelta: text);
+                    break;
+                case "response.reasoning_summary_text.done": case "response.reasoning_text.done":
+                case "response.reasoning_summary_part.done":
+                    foreach (var remaining in CompleteReasoning(ReasoningKey(node, node["type"]!.GetValue<string>().Contains("summary")),
+                        node["text"]?.GetValue<string>() ?? node["part"]?["text"]?.GetValue<string>() ?? ""))
+                        yield return new(ChunkType.ThinkingDelta, TextDelta: remaining);
+                    break;
                 case "response.content_part.added":
                 case "response.content_part.done":
                     if (FindStreamedItem(node) is { } messageItem && node["part"] is JsonObject part)
@@ -150,6 +164,8 @@ public sealed class ResponsesProvider(HttpClient? http = null) : IAiProvider
                 case "response.output_item.done":
                     if (node["item"] is not JsonObject finished) throw new InvalidDataException("Responses 完成输出项缺失。");
                     RememberItem(node, finished);
+                    foreach (var remaining in ItemReasoning(finished, node["output_index"]?.GetValue<int>() ?? 0))
+                        yield return new(ChunkType.ThinkingDelta, TextDelta: remaining);
                     break;
                 case "response.function_call_arguments.delta":
                     if (calls.TryGetValue(node["item_id"]!.GetValue<string>(), out var call))
@@ -170,6 +186,9 @@ public sealed class ResponsesProvider(HttpClient? http = null) : IAiProvider
                             { CachedInputTokens = usage["input_tokens_details"]?["cached_tokens"]?.GetValue<int>() } };
                     if (node["response"]?["output"] is not JsonArray output) throw new InvalidDataException("Responses 完成事件缺少输出。");
                     output = CompleteOutput(output, streamedOutput);
+                    for (var outputIndex = 0; outputIndex < output.Count; outputIndex++)
+                        if (output[outputIndex] is JsonObject reasoningItem)
+                            foreach (var remaining in ItemReasoning(reasoningItem, outputIndex)) yield return new(ChunkType.ThinkingDelta, TextDelta: remaining);
                     if (output.Count > 100 || output.Any(i => i?["type"]?.GetValue<string>() is not ("function_call" or "reasoning" or "message"))) throw new InvalidDataException("Responses 返回了未启用的输出工具或过多输出项。");
                     foreach (var completedCall in output.OfType<JsonObject>().Where(i => i["type"]?.GetValue<string>() == "function_call"))
                     {
@@ -188,6 +207,23 @@ public sealed class ResponsesProvider(HttpClient? http = null) : IAiProvider
         // Never execute partial streamed calls or treat an interrupted stream as a successful answer.
         yield return new(ChunkType.Error, ErrorMessage: "连接中断，未收到 response.completed；本轮函数调用未执行。");
 
+        string ReasoningKey(JsonNode node, bool summary) => $"{node["output_index"]?.GetValue<int>() ?? 0}:{(summary ? "summary" : "content")}:{node[summary ? "summary_index" : "content_index"]?.GetValue<int>() ?? 0}";
+        IEnumerable<string> CompleteReasoning(string key, string full)
+        {
+            var received = reasoningText.GetValueOrDefault(key, "");
+            if (full.Length == 0 && received.Length == 0 || !finishedReasoning.Add(key)) yield break;
+            if (full.StartsWith(received, StringComparison.Ordinal) && full.Length > received.Length) yield return full[received.Length..];
+            if (full.Length > 0 || received.Length > 0) yield return "\n";
+        }
+        IEnumerable<string> ItemReasoning(JsonObject item, int index)
+        {
+            if (item["type"]?.GetValue<string>() != "reasoning") yield break;
+            foreach (var field in new[] { "summary", "content" })
+                if (item[field] is JsonArray parts)
+                    for (var partIndex = 0; partIndex < parts.Count; partIndex++)
+                        if (parts[partIndex]?["text"]?.GetValue<string>() is { Length: > 0 } full)
+                            foreach (var text in CompleteReasoning($"{index}:{field}:{partIndex}", full)) yield return text;
+        }
         JsonObject? FindStreamedItem(JsonNode node)
         {
             if (node["output_index"] is { } index && streamedOutput.TryGetValue(index.GetValue<int>(), out var indexed)) return indexed;

@@ -6,10 +6,10 @@ namespace LanAgent.Terminal;
 
 internal static class TerminalQuestionPrompt
 {
-    public static async Task<string?> AskAsync(IAnsiConsole console, TerminalKeyReader reader, AgentQuestion question, CancellationToken ct)
+    public static async Task<string?> AskAsync(IAnsiConsole console, TerminalKeyReader reader, AgentQuestion question, CancellationToken ct, Action<Spectre.Console.Rendering.IRenderable>? render = null)
     {
         var host = new SpectrePromptConsole(console, reader);
-        if (question.Choices.Count == 0)
+        if (question.Choices.Count == 0 && render == null)
         {
             var answer = await host.PromptAsync(new TextPrompt<string>(Markup.Escape(TerminalSafeText.Clean(question.Question)) + " › ").AllowEmpty(), ct);
             return string.IsNullOrWhiteSpace(answer) ? null : question.Multiple ? JsonSerializer.Serialize(new[] { answer }) : answer;
@@ -34,8 +34,9 @@ internal static class TerminalQuestionPrompt
             if (notice != null) rows.Add("[yellow]" + Markup.Escape(notice) + "[/]");
             return new Markup(string.Join("\n", rows));
         }
-        await console.Live(Render()).AutoClear(true).StartAsync(async context =>
+        async Task ReadAnswerAsync(Action<Spectre.Console.Rendering.IRenderable> update)
         {
+            update(Render());
             while (true)
             {
                 var key = await host.Input.ReadKeyAsync(true, ct) ?? default;
@@ -44,7 +45,11 @@ internal static class TerminalQuestionPrompt
                 else if (key.Key == ConsoleKey.Enter)
                 {
                     if (focus == question.Choices.Count && string.IsNullOrWhiteSpace(typed.ToString()))
-                    { requestOther = true; break; }
+                    {
+                        if (render == null) { requestOther = true; break; }
+                        notice = "请输入其他回答，再按 Enter 提交。";
+                        update(Render()); continue;
+                    }
                     var answers = new List<string>();
                     if (question.Multiple)
                     {
@@ -56,7 +61,7 @@ internal static class TerminalQuestionPrompt
                     if (answers.Count == 0)
                     {
                         notice = "请先按空格勾选答案，再按 Enter 提交。";
-                        context.UpdateTarget(Render()); continue;
+                        update(Render()); continue;
                     }
                     result = question.Multiple ? JsonSerializer.Serialize(answers) : answers[0];
                     break;
@@ -71,9 +76,11 @@ internal static class TerminalQuestionPrompt
                 {
                     if (!selected.Add(focus)) selected.Remove(focus);
                 }
-                context.UpdateTarget(Render());
+                update(Render());
             }
-        });
+        }
+        if (render != null) await ReadAnswerAsync(render);
+        else await console.Live(Render()).AutoClear(true).StartAsync(context => ReadAnswerAsync(context.UpdateTarget));
         if (requestOther)
         {
             // Close the Live scope before opening a text prompt; never nest dynamic displays.

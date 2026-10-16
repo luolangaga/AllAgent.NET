@@ -9,44 +9,62 @@ public sealed class AgentRuntime : IAsyncDisposable
     public RuntimeEnvironment Environment { get; }
     public ToolRegistry Tools { get; }
     public CodeActProvider CodeAct { get; }
+    public LanAgent.Core.Services.PowerShellModuleStore PowerShellModules { get; }
     private readonly LanAgent.Core.Services.BackgroundTasks _jobs;
+    private readonly FallbackCodeSandbox _sandbox;
+    private readonly BrowserUseTools _browser;
+    public string SandboxName => _sandbox.Name;
+    public string? SandboxFallbackReason => _sandbox.FallbackReason;
 
     private AgentRuntime(AgentOptions options, RuntimeEnvironment environment)
     {
         Options = options;
         Environment = environment;
+        PowerShellModules = new(options.SharedDirectory, environment.PowerShell);
         _jobs = options.BackgroundTasks ?? new();
-        Tools = new ToolRegistry(options.FullAccess ? (request, _) => { if (request.Name is not ("file_write" or "file_edit" or "write" or "edit")) options.Checkpoints?.MarkExternalAction(); return ValueTask.FromResult(true); } : options.Approver, options.AuditPath, options.Hooks, options.InvocationPolicy, options.InvocationAuthorization);
-        Tools.Register(new SystemTools(new WorkspacePolicy(options.WorkspaceRoot, options.FullAccess, options.ExternalDirectoryPermissions), environment, options.ShellAllowlist, options.Checkpoints, options.ExternalDirectoryPermissions, _jobs));
+        Tools = new ToolRegistry(options.FullAccess ? (request, _) => { if (request.Name is not ("file_write" or "file_edit" or "write" or "edit")) options.Checkpoints?.MarkExternalAction(); return ValueTask.FromResult(true); } : options.Approver, options.AuditPath, options.Hooks, options.InvocationPolicy, options.InvocationAuthorization, options.MaxToolResultCharacters, options.MaxToolStreamCharacters);
+        Tools.Register(new SystemTools(new WorkspacePolicy(options.WorkspaceRoot, options.FullAccess, options.ExternalDirectoryPermissions), environment, options.ShellAllowlist, options.Checkpoints, options.ExternalDirectoryPermissions, _jobs, options.FileReadMaxBytes, options.FileReadMaxLines, PowerShellModules.Root));
+        Tools.Register(new PowerShellModuleTools(PowerShellModules));
+        Tools.Register(new PowerShellInvokeTools(new WorkspacePolicy(options.WorkspaceRoot, options.FullAccess, options.ExternalDirectoryPermissions), environment, PowerShellModules, options.Checkpoints, options.ExternalDirectoryPermissions));
         if (!options.IsSubAgent) Tools.Register(new AgentInteractionTools(options.QuestionHandler));
         Tools.Register(new ComputerUseTools(options.ComputerUse));
-        Tools.Register(new WebTools(options.WebSearchBaseUrl));
-        if (options.PythonLibraries is { Ready: true } libraries) Tools.Register(new PythonLibraryTools(libraries));
-        CodeAct = new CodeActProvider(Tools, new PythonCodeValidator(environment.Python!), new HyperlightProcessSandbox(options), options.ShellAllowlist, options.FullAccess,
-            System.Text.Json.JsonSerializer.Serialize(new { workspaceRoot = Path.GetFullPath(options.WorkspaceRoot), python = environment.Python, powerShell = environment.PowerShell, operatingSystem = System.Runtime.InteropServices.RuntimeInformation.OSDescription, fileReadPageCharacters = ToolResult.MaxOutputCharacters, sourceCharacters = 32000 }, ToolResult.JsonOptions),
-            options.PythonLibraries is { Ready: true } contextLibraries ? () => File.ReadAllText(contextLibraries.CatalogPath) : null);
+        _browser = new BrowserUseTools(options.BrowserUse);
+        Tools.Register(new BrowserSkillTools(_browser));
+        if (options.Skills != null) Tools.Register(new SkillTools(options.Skills));
+        Tools.Register(new WebTools(_browser));
+        _sandbox = new FallbackCodeSandbox(options with { PythonPath = environment.Python });
+        CodeAct = new CodeActProvider(Tools, new PythonCodeValidator(environment.Python!), _sandbox, options.ShellAllowlist, options.FullAccess,
+            System.Text.Json.JsonSerializer.Serialize(new { workspaceRoot = Path.GetFullPath(options.WorkspaceRoot), python = environment.Python, shellRuntime = "Embedded PowerShell SDK; internal worker, not a pwsh CLI. Use powershell_invoke for module commands; use run_shell for external programs or .ps1 files.", operatingSystem = System.Runtime.InteropServices.RuntimeInformation.OSDescription, fileReadMaxBytes = options.FileReadMaxBytes, fileReadMaxLines = options.FileReadMaxLines, toolResultMaxCharacters = options.MaxToolResultCharacters, guestStdoutMaxCharacters = ToolResult.MaxOutputCharacters, sourceCharacters = options.MaxCodeCharacters }, ToolResult.JsonOptions),
+            null, options.MaxCodeCharacters);
     }
 
     public static async Task<AgentRuntime> CreateAsync(AgentOptions options, CancellationToken ct = default)
     {
         options.Validate();
-        if (options.PythonLibraries is { Ready: true } libraries) await libraries.RefreshAsync(ct);
         var doctor = new EnvironmentDoctor();
         var environment = options.InstallationApprover == null
             ? await doctor.CheckAsync(options.PythonPath, options.PowerShellPath, ct)
             : await doctor.EnsureAsync(options.InstallationApprover, options.PythonPath, options.PowerShellPath, ct);
         if (!environment.Ready) throw new InvalidOperationException(string.Join("\n", environment.Problems) + " 请运行 lanagent doctor --install。");
         var runtime = new AgentRuntime(options, environment);
+        try { await runtime.PowerShellModules.ExecuteAsync("list", ct: ct); }
+        catch { await runtime.DisposeAsync(); throw; }
+        runtime.CodeAct.PowerShellCapabilitiesProvider = () => runtime.PowerShellModules.Summary;
         runtime.CodeAct.HostToolsProvider = options.HostToolsProvider;
         return runtime;
     }
 
-    public async Task<ToolResult> ProbeSandboxAsync(CancellationToken ct = default) =>
-        await CodeAct.ExecuteAsync("execute_code", System.Text.Json.JsonSerializer.SerializeToElement(new { code = "import base64, struct\ns = '中文 😀'\nassert base64.b64decode(base64.b64encode(s.encode('utf-16-le'))).decode('utf-16-le') == s\nassert struct.unpack('<H', struct.pack('<H', 1234))[0] == 1234\nprint(1 + 1)" }), CodeAct.CallToolAsync, ct);
+    public async Task<ToolResult> ProbeSandboxAsync(CancellationToken ct = default)
+    {
+        try { await CodeAct.PrepareAsync(ct); }
+        catch (InvalidOperationException ex) { return ToolResult.Failure(ex.Message); }
+        return await CodeAct.ExecuteAsync("execute_code", System.Text.Json.JsonSerializer.SerializeToElement(new { code = "import json\nassert json.loads('{\"value\": 2}')[\"value\"] == 2\nprint(1 + 1)" }), CodeAct.CallToolAsync, ct);
+    }
 
     public async ValueTask DisposeAsync()
     {
         await CodeAct.DisposeAsync();
+        await _browser.DisposeAsync();
         if (Options.BackgroundTasks == null) await _jobs.DisposeAsync();
     }
 }

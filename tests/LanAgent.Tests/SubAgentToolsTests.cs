@@ -11,6 +11,34 @@ namespace LanAgent.Tests;
 public sealed class SubAgentToolsTests
 {
     [Fact]
+    public async Task ForegroundWaitCancellationPreservesChildUntilExplicitTaskCancellation()
+    {
+        await using var tasks = new BackgroundTasks();
+        var admitted = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tools = new SubAgentTools(tasks, (_, _, _) => "unused", request =>
+        {
+            async IAsyncEnumerable<AgentEvent> Run(string id, [EnumeratorCancellation] CancellationToken ct)
+            {
+                await Task.Delay(Timeout.Infinite, ct);
+                yield return new AgentDone("stop");
+            }
+            var id = tasks.Start(request.Description, Guid.NewGuid(), "agent", Run);
+            admitted.SetResult(id);
+            return id;
+        });
+        using var parent = new CancellationTokenSource();
+        var pending = tools.DelegateAsync("general", "child", "work", ct: parent.Token);
+        var id = await admitted.Task;
+        parent.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.True(BackgroundTasks.IsActive(tasks.Get(id).State));
+        Assert.NotEqual(BackgroundTaskState.Cancelling, tasks.Get(id).State);
+        Assert.True(tasks.Get(id).NotifyParent);
+        await tools.CancelAsync(id);
+        Assert.Equal(BackgroundTaskState.Cancelled, (await tasks.WaitAsync(id)).State);
+    }
+
+    [Fact]
     public async Task CompletedChildReturnsFinalResponseAndPersistsItSeparatelyFromProgress()
     {
         using var workspace = new TestWorkspace();

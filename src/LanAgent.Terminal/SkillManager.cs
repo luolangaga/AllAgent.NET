@@ -25,8 +25,9 @@ internal sealed class SkillManager(SkillCatalog catalog, TerminalUi ui, Terminal
         if (action == "panel")
         {
             List();
-            var choice = ManagementUi.Choose("技能管理", "返回", "创建", "导入", "查看", "启用", "禁用", "卸载", "导出");
+            var choice = ManagementUi.Choose("技能管理", "返回", "商店", "创建", "导入", "查看", "启用", "禁用", "卸载", "导出");
             if (choice == "返回") return;
+            if (choice == "商店") { await ToolStorePage.Skills(catalog, ui, []); return; }
             action = choice switch { "创建" => "add", "导入" => "import", "查看" => "show", "启用" => "enable", "禁用" => "disable", "卸载" => "remove", _ => "export" };
             if (action == "import") words = new[] { action, await ManagementUi.Text("SKILL.md 或技能目录路径"), ManagementUi.Choose("安装位置", "project", "user") };
             else if (action is not "add")
@@ -39,6 +40,7 @@ internal sealed class SkillManager(SkillCatalog catalog, TerminalUi ui, Terminal
         }
         switch (action)
         {
+            case "store": case "search": await ToolStorePage.Skills(catalog, ui, words.Skip(1).ToArray()); return;
             case "list": List(); return;
             case "add":
                 var name = cli.Get("name"); var description = cli.Get("description"); var file = cli.Get("instructions-file");
@@ -74,6 +76,12 @@ internal sealed class SkillManager(SkillCatalog catalog, TerminalUi ui, Terminal
     {
         target = Path.GetFullPath(target);
         if (Directory.Exists(target) || File.Exists(target)) throw new IOException("导出目录已存在。");
+        if (skill.Scope == "builtin")
+        {
+            Directory.CreateDirectory(target);
+            File.WriteAllText(Path.Combine(target, "SKILL.md"), "---\nname: " + skill.Name + "\ndescription: " + skill.Description + "\n---\n\n" + skill.Instructions);
+            return;
+        }
         var root = Path.GetDirectoryName(skill.Path)!;
         if (target.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("导出目录不能位于技能包内部。");
         var policy = new WorkspacePolicy(root);

@@ -101,7 +101,7 @@ public sealed class TokenUsageStatsTests
     {
         using var w = new TestWorkspace(); var directory = Path.Combine(w.Root, "data");
         var configuration = Directory.GetParent(Path.TrimEndingDirectorySeparator(AppContext.BaseDirectory))!.Name;
-        var exe = Path.GetFullPath($"../../../../../src/LanAgent.Terminal/bin/{configuration}/net8.0/lanagent.exe", AppContext.BaseDirectory);
+        var exe = Path.GetFullPath($"../../../../../src/LanAgent.Terminal/bin/{configuration}/net10.0/lanagent.exe", AppContext.BaseDirectory);
         async Task<JsonElement> Stats()
         {
             var result = await BoundedProcess.RunAsync(BoundedProcess.StartInfo(exe,

@@ -63,18 +63,37 @@ internal sealed class SpectreScreenDisplay(IAnsiConsole console, bool fullScreen
         for (var y = 0; y < rows.Count; y++)
         {
             if (previous != null && y < previous.Count && Equal(rows[y], previous[y])) continue;
-            // Absolute addressing avoids newlines, auto-wrap and whole-screen erase/repaint.
-            delta.Add(Segment.Control($"\u001b[{y + 1};1H"));
-            delta.AddRange(rows[y]);
+            var row = rows[y];
+            var first = 0; var end = row.Count; var column = 1;
+            if (previous != null && y < previous.Count)
+            {
+                var old = previous[y];
+                while (first < Math.Min(row.Count, old.Count) && EqualSegment(row[first], old[first]))
+                { column += row[first].CellCount(); first++; }
+                // Only skip a suffix at the same physical columns. Full frames are padded;
+                // the width check also keeps this safe for unpadded callers and wide Unicode.
+                if (row.Sum(segment => segment.CellCount()) == old.Sum(segment => segment.CellCount()))
+                {
+                    var oldEnd = old.Count;
+                    while (end > first && oldEnd > first && EqualSegment(row[end - 1], old[oldEnd - 1]))
+                    { end--; oldEnd--; }
+                }
+            }
+            // Keep unchanged borders, sidebar and trailing padding out of the output stream.
+            delta.Add(Segment.Control($"\u001b[{y + 1};{column}H"));
+            for (var index = first; index < end; index++) delta.Add(row[index]);
         }
         return delta;
     }
+
+    private static bool EqualSegment(Segment left, Segment right) =>
+        left.Text == right.Text && left.Style.Equals(right.Style) && left.Link == right.Link && left.IsControlCode == right.IsControlCode;
 
     private static bool Equal(List<Segment> left, List<Segment> right)
     {
         if (left.Count != right.Count) return false;
         for (var i = 0; i < left.Count; i++)
-            if (left[i].Text != right[i].Text || !left[i].Style.Equals(right[i].Style) || left[i].Link != right[i].Link) return false;
+            if (!EqualSegment(left[i], right[i])) return false;
         return true;
     }
 

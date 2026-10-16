@@ -17,7 +17,7 @@ public sealed class TerminalSelectionPersistenceTests
             Guid id;
             using (var store = new DataStore(path))
             {
-                var config = new ApiConfig { DefaultModel = "first", Models = ["first", "second"], IsEnabled = true };
+                var config = new ApiConfig { DefaultModel = "first", Models = ["first", "second"], ApiKey = "fixture-key", IsEnabled = true };
                 store.AddApiConfig(config); id = config.Id;
                 var manager = new ModelManager(store, new TerminalUi(true, false), TerminalArguments.Parse([]));
                 Assert.Equal("second", (await manager.SelectAsync(id.ToString(), "second")).DefaultModel);

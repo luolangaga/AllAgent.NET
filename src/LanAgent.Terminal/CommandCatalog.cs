@@ -7,7 +7,7 @@ internal sealed record CommandHint(string Text, string Description, string Usage
 
 internal static class CommandCatalog
 {
-    private static readonly string[] CommonCommands = ["/help", "/model", "/login", "/new", "/workspace", "/session", "/tasks", "/permissions", "/undo", "/settings"];
+    private static readonly string[] CommonCommands = ["/help", "/model", "/login", "/new", "/workspace", "/session", "/todo", "/tasks", "/permissions", "/sandbox", "/questions", "/undo", "/settings"];
 
     public static IReadOnlyList<CommandHint> Common => Builtins.Where(c => !c.Advanced).ToArray();
     public static IReadOnlyList<CommandHint> Builtins { get; } = Build();
@@ -19,22 +19,33 @@ internal static class CommandCatalog
 
     private static IEnumerable<CommandHint> All => new CommandHint[]
     {
-        new("/agents", "子代理角色列表与配置", "[list|show 名称|import 路径.json|remove 名称]"),
-        new("/queue", "管理已保存的待处理输入", "[list|steer|queue|edit|delete ID|run]"),
+        new("/powershell", "打开 PowerShell 能力商店面板", "[panel|list|search 关键词|install 模块 [版本]|commands [模块]]"),
+        new("/todo", "查看和管理当前会话的 TODO 清单", "[list|add 内容|start 序号|done 序号|pending 序号|remove 序号|clear]"),
+        new("/sandbox", "查看或切换沙箱 · 保存到当前工作区", "[status|auto|hyperlight|monty]"),
+        new("/sandbox auto", "优先 Hyperlight，启动失败自动使用 Monty"),
+        new("/sandbox hyperlight", "指定 Hyperlight 微虚拟机"),
+        new("/sandbox monty", "指定 Monty · 无需虚拟化"),
+        new("/sandbox status", "查看沙箱选择和实际后端"),
+        new("/questions", "设置 Agent 提问偏好 · 默认不追加提示词", "[default|minimal|balanced|proactive|status]（0–3）"),
+        new("/questions default", "默认 · 不追加提示词"), new("/questions minimal", "少问 · 优先自主推进"),
+        new("/questions balanced", "适中 · 澄清关键歧义"), new("/questions proactive", "多问 · 主动确认目标与偏好"),
+        new("/questions status", "查看当前提问偏好"),
+        new("/agents", "交互配置子代理：模型、权限、预算与失败策略", "[panel|edit 名称|add|list|show 名称|import 路径.json|remove 名称]"),
+        new("/queue", "管理已保存的待处理输入", "[add 任务|list|steer|queue|edit|delete ID|run]"),
         new("/timeline", "按用户消息定位历史并执行消息操作", "[list|jump|copy|restore|fork|revert ID]"),
         new("/fork", "选择完整会话或历史消息之前分支", "[--before 消息ID [标题]]"),
         new("/steer", "在模型步骤边界更新当前任务", "任务说明"),
         new("/parent", "返回父会话"), new("/children", "查看或进入当前会话的子代理", "[子会话 ID]"),
         new("/copy", "复制会话 Markdown", "[last 最后回复|id 会话ID]"),
         new("/permissions directories", "查看会话记住的外部目录", "[clear 撤销全部]"),
-        new("/context-size", "设置当前模型上下文容量", "[auto|自定义数值]"),
+        new("/context-size", "设置当前模型上下文容量（不带参数选择预设）", "[auto|32k|64k|128k|200k|256k|400k|500k|1M|1050k|自定义数值]"),
         new("/background", "启动后台任务并继续聊天", "任务描述"), new("/subagents", "设置子代理默认模型；默认跟随当前模型", "[inherit|配置名 [模型 ID]]"), new("/tasks", "子代理和后台任务：结果、授权与取消"), new("/tasks show", "查看任务结果", "ID"), new("/tasks approve", "处理任务授权", "ID"), new("/tasks answer", "回答任务问题", "ID"), new("/tasks cancel", "取消任务", "ID"),
         new("/plugins", ".NET 插件管理 / NuGet 商店"), new("/plugins search", "搜索 LanAgent 标签包", "关键词"), new("/plugins install", "安装并启用 NuGet 插件", "包ID 版本"), new("/plugins import", "安装本地插件包", "路径.nupkg"), new("/plugins enable", "启用插件", "包ID"), new("/plugins disable", "禁用插件", "包ID"), new("/plugins remove", "卸载插件", "包ID"), new("/ext", "执行插件命令", "名称 参数"),
         new("/hooks", "生命周期 Hooks"), new("/hooks enable", "启用 Hook", "名称"), new("/hooks disable", "禁用 Hook", "名称"), new("/login", "账号登录 · 内置提供商与插件", "[提供商]"), new("/login status", "查看账号与模型连接状态"), new("/logout", "退出账号登录", "[提供商]"),
         new("/help", "快速上手与常用操作", "[all 查看全部命令]"), new("/skills", "技能管理面板"),
-        new("/skills list", "列出指令技能"), new("/skills add", "创建技能"), new("/skills import", "导入 SKILL.md 和支持文件", "路径 [project|user]"),
+        new("/skills store", "在线技能商店", "[关键词]"), new("/skills search", "搜索在线技能", "关键词"), new("/skills list", "列出指令技能"), new("/skills add", "创建技能"), new("/skills import", "导入 SKILL.md 和支持文件", "路径 [project|user]"),
         new("/skills show", "查看技能正文", "名称"), new("/skills enable", "启用技能", "名称"), new("/skills disable", "禁用技能", "名称"), new("/skills remove", "卸载技能入口", "名称"), new("/skills export", "导出技能包", "名称 目录"),
-        new("/mcp", "MCP 连接管理面板"), new("/mcp list", "连接状态与诊断"), new("/mcp add", "添加 stdio / HTTP 服务"), new("/mcp edit", "编辑服务连接", "名称"),
+        new("/mcp", "MCP 连接管理面板"), new("/mcp store", "官方 MCP 商店", "[关键词]"), new("/mcp search", "搜索官方 MCP 目录", "关键词"), new("/mcp list", "连接状态与诊断"), new("/mcp add", "添加 stdio / HTTP 服务"), new("/mcp edit", "编辑服务连接", "名称"),
         new("/mcp connect", "连接或重新连接", "名称"), new("/mcp disconnect", "断开连接", "名称"), new("/mcp tools", "查看服务工具和 JSON Schema", "名称"),
         new("/mcp enable", "启用服务", "名称"), new("/mcp disable", "禁用并断开", "名称"), new("/mcp remove", "移除服务", "名称"),
         new("/mcp import", "导入 mcpServers 配置", "路径"), new("/mcp export", "导出脱敏配置", "路径"),
@@ -50,8 +61,8 @@ internal static class CommandCatalog
         new("/checkpoints", "查看任务检查点"), new("/diff", "查看文件工具修改预览", "[检查点 ID]"), new("/undo", "撤销上一轮对话和文件修改"), new("/redo", "重做已撤销任务"),
         new("/status", "模型、工作区、权限与连接状态"), new("/permissions", "切换权限模式", "[ask|full|plan]"), new("/permissions full", "完全访问 · 不逐次审核"), new("/plan", "切换只读规划模式"),
         new("/tools", "查看当前 C# 工具契约"), new("/doctor", "检查 Python、库环境、ripgrep 与执行环境", "[install 修复环境]"),
+        new("/browser", "浏览器操作 · 默认开启 · 外置连接向导", "[on|off|status|connect|tutorial|mode builtin|chromium|cdp URL|executable PATH]"),
         new("/computer", "电脑操作总开关 · AI 自动选择模式", "[on|off|status|isolated URL Token文件]"),
-        new("/install-pip", "安装共享宿主 Python 库并更新 pip.md", "包名 [包名==版本 ...]"),
         new("/memory", "查看或编辑项目指令", "[show|set 内容]"), new("/init", "创建项目指令模板"),
         new("/settings", "显示与主题设置", "[verbose on|off]"),
         new("/themes", "切换并保存界面主题", "[night|warm|light]"), new("/spinner", "切换并保存加载指示，默认 Mindblown", "[list|样式名称]"), new("/thinking", "显示/隐藏思考内容"), new("/details", "显示/隐藏工具详情"), new("/mcp auth", "给 MCP 绑定认证入口", "服务 ID|none"), new("/providers auth", "给模型绑定认证入口", "配置 ID|none")

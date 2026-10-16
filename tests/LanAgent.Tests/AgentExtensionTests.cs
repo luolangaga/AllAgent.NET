@@ -54,10 +54,10 @@ public sealed class AgentExtensionTests
         {
             await Task.Yield();
             Assert.Contains(registry.Definitions, d => d.Name == "file_write");
-            Assert.Equal("original", Assert.Single(catalog.List()).Name);
+            Assert.Equal("original", Assert.Single(catalog.List(), s => s.Scope != "builtin").Name);
         }));
         Assert.False(File.Exists(Path.Combine(w.Root, "blocked")));
-        Assert.Equal("original", Assert.Single(catalog.List()).Name);
+        Assert.Equal("original", Assert.Single(catalog.List(), s => s.Scope != "builtin").Name);
     }
 
     [Fact]

@@ -103,7 +103,11 @@ public static class ModelCatalog
     }
     public static void Remember(ApiConfig config, IEnumerable<ModelInfo> models)
     {
-        foreach (var model in models) config.ModelLimits[model.Id] = new(model.ContextTokens, model.OutputTokens);
+        foreach (var model in models)
+        {
+            config.ModelLimits[model.Id] = new(model.ContextTokens, model.OutputTokens);
+            if (model.ReasoningLevels != null) config.ModelReasoningLevels[model.Id] = model.ReasoningLevels.ToList();
+        }
     }
     // Bound automatic generation while respecting model output and context limits.
     // Zero opts into automatic sizing; positive values remain an explicit user override.

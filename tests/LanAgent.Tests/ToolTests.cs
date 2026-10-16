@@ -171,8 +171,13 @@ public sealed class ToolTests
         var output = await workspace.Tools.RunShellAsync("probe", ["noisy"]);
         Assert.True(output.Ok, output.ToJson()); Assert.True(output.Truncated);
         var json = JsonSerializer.SerializeToElement(output.Data);
-        Assert.Equal(ToolResult.MaxOutputCharacters, json.GetProperty("stdout").GetString()!.Length);
-        Assert.Equal(ToolResult.MaxOutputCharacters, json.GetProperty("stderr").GetString()!.Length);
+        // The window bounds JSON bytes; SDK output includes escaped line endings.
+        Assert.Equal(ToolResult.MaxOutputCharacters, JsonEncodedText.Encode(json.GetProperty("stdout").GetString()!).EncodedUtf8Bytes.Length);
+        Assert.Equal(ToolResult.MaxOutputCharacters, JsonEncodedText.Encode(json.GetProperty("stderr").GetString()!).EncodedUtf8Bytes.Length);
+        var stdout = await File.ReadAllTextAsync(json.GetProperty("stdoutPath").GetString()!);
+        var stderr = await File.ReadAllTextAsync(json.GetProperty("stderrPath").GetString()!);
+        Assert.Equal(new string('o', 1_000_000), stdout.TrimEnd('\r', '\n'));
+        Assert.Equal(new string('e', 1_000_000), stderr.TrimEnd('\r', '\n'));
     }
 
     [Fact]

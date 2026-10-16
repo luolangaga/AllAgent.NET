@@ -22,7 +22,7 @@ def message(session, text):
          "messages": [message(child, "CHILD-NAVIGATION-PROOF")]}
     ], "apiConfigs": [], "skills": [], "appSettings": {}, "mcpServerConfigs": []
 }), encoding="utf-8")
-proc = PtyProcess.spawn([str(root / "src/LanAgent.Terminal/bin/Release/net8.0/lanagent.exe"),
+proc = PtyProcess.spawn([str(root / "src/LanAgent.Terminal/bin/Release/net10.0/lanagent.exe"),
                          "chat", "--workspace", str(root), "--data-dir", str(output), "--resume", parent],
                         cwd=str(root), dimensions=(30, 100))
 chunks = queue.Queue()

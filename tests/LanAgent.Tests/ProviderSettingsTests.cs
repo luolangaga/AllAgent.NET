@@ -34,8 +34,8 @@ public sealed class ProviderSettingsTests
         var config = new ApiConfig { ProviderId = "custom", ReasoningProtocol = "none" };
         Assert.Throws<ArgumentException>(() => ReasoningSettings.SetEffort(config, "high"));
         var body = new JsonObject(); ReasoningSettings.Apply(body, config); Assert.Empty(body);
-        config.ReasoningProtocol = "anthropic-budget"; config.ThinkingBudget = 8192; config.MaxTokens = 4096; ReasoningSettings.SetEffort(config, "budget");
-        Assert.Throws<ArgumentException>(() => ReasoningSettings.Apply(body, config));
+        config.ReasoningProtocol = "anthropic-budget"; config.ThinkingBudget = 8192; config.MaxTokens = 4096;
+        Assert.Throws<ArgumentException>(() => ReasoningSettings.SetEffort(config, "budget"));
     }
     [Theory]
     [InlineData("openai", "/models", "Authorization", "Bearer fixture-key", "{\"data\":[{\"id\":\"model-a\"},{\"id\":\"model-b\"}]}")]

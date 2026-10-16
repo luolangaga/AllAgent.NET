@@ -93,9 +93,9 @@ public class OpenAiProvider : IAiProvider
         {
             ct.ThrowIfCancellationRequested();
             if (string.IsNullOrWhiteSpace(line)) continue;
-            if (!line.StartsWith("data: ")) continue;
+            if (!line.StartsWith("data:", StringComparison.Ordinal)) continue;
 
-            var data = line[6..];
+            var data = line[5..].TrimStart();
             if (data == "[DONE]")
             {
                 if (finishReason == null) { yield return new StreamChunk(ChunkType.Error, ErrorMessage: "OpenAI stream ended without a finish reason."); yield break; }
@@ -130,6 +130,7 @@ public class OpenAiProvider : IAiProvider
                 yield return new StreamChunk(ChunkType.TextDelta, TextDelta: content);
 
             var reasoning = delta["reasoning_content"]?.GetValue<string>();
+            if (string.IsNullOrEmpty(reasoning) && delta["reasoning"] is JsonValue reasoningValue && reasoningValue.TryGetValue<string>(out var compatibleReasoning)) reasoning = compatibleReasoning;
             if (!string.IsNullOrEmpty(reasoning))
                 yield return new StreamChunk(ChunkType.ThinkingDelta, TextDelta: reasoning);
 
@@ -177,8 +178,6 @@ public class OpenAiProvider : IAiProvider
     internal static string BuildRawRequestBody(ApiConfig config, ChatRequest request, bool hasTools)
     {
         var messages = new JsonArray();
-        var hasReasoningInHistory = request.Messages.Any(m =>
-            m.Role == "assistant" && !string.IsNullOrWhiteSpace(m.ReasoningContent));
 
         foreach (var m in request.Messages)
         {
@@ -209,8 +208,8 @@ public class OpenAiProvider : IAiProvider
                 msg["content"] = m.Content ?? "";
             }
 
-            if (m.Role == "assistant" && !string.IsNullOrWhiteSpace(m.ReasoningContent))
-                msg["reasoning_content"] = m.ReasoningContent;
+            if (m.Role == "assistant" && (!string.IsNullOrWhiteSpace(m.ReasoningContent) || hasTools && ProviderCatalog.ReasoningFor(config) == "deepseek"))
+                msg["reasoning_content"] = m.ReasoningContent ?? "";
             if (m.Images.Count > 0)
             {
                 ImageAttachment.Validate(m.Images);
@@ -238,6 +237,7 @@ public class OpenAiProvider : IAiProvider
             ["stream_options"] = new JsonObject { ["include_usage"] = true },
         };
 
+        PromptCacheRouting.Apply(body, request);
         body["temperature"] = config.Temperature;
         body["max_tokens"] = ModelCatalog.OutputLimit(config);
         ReasoningSettings.Apply(body, config);

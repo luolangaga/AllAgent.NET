@@ -15,6 +15,90 @@ namespace LanAgent.Tests;
 public sealed class AgentEngineTests
 {
     [Fact]
+    public async Task RejectedHistoricalImageIsBackedUpRemovedAndRetriedWithoutLosingOtherImages()
+    {
+        using var workspace = new TestWorkspace();
+        var data = Path.Combine(workspace.Root, "data");
+        using var store = new DataStore(data);
+        var session = new Conversation(); store.AddConversation(session);
+        var bytes = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC");
+        var retained = ImageAttachment.FromBytes("keep.png", bytes);
+        var rejected = ImageAttachment.FromBytes("reject.png", bytes);
+        store.AddMessage(session.Id, new Message { ConversationId = session.Id, Role = "user", Content = "retain this text", Images = [retained, rejected] });
+        var provider = new ScriptedProvider([new(ChunkType.Error, ErrorMessage: "HTTP 400: messages[2].image[1]: You have uploaded an unsupported image.")], Answer("recovered"));
+        await using var codeAct = new CodeActProvider(new ToolRegistry(), new(workspace.Python), new FakeSandbox());
+        var events = await Collect(new AgentEngine(store, provider, codeAct, workspace.Options).RunAsync(session.Id, "continue", Config));
+        Assert.DoesNotContain(events, e => e is AgentError);
+        Assert.Equal(2, provider.Requests.Count);
+        Assert.Equal(retained, Assert.Single(provider.Requests[1].Messages[2].Images));
+        Assert.Contains("retain this text", provider.Requests[1].Messages[2].Content);
+        Assert.Single(Directory.GetFiles(Path.Combine(data, "rejected-images")));
+        using var reopened = new DataStore(data);
+        Assert.Equal(retained, Assert.Single(reopened.GetMessages(session.Id).SelectMany(m => m.Images)));
+    }
+
+    [Fact]
+    public async Task TodoToolsAreAvailableAndUpdatedChecklistReachesNextModelRequest()
+    {
+        using var workspace = new TestWorkspace(); using var store = new DataStore(Path.Combine(workspace.Root, "data"));
+        var session = new Conversation(); store.AddConversation(session);
+        var registry = new ToolRegistry();
+        var sandbox = new FakeSandbox { ToolName = "todo_write", Arguments = JsonSerializer.SerializeToElement(new { todos = new[] { new TodoItem("verify", "验证 TODO", "in_progress") } }, ToolResult.JsonOptions) };
+        var provider = new ScriptedProvider(Call("plan"), Answer("done"), Answer("continued"), Answer("cleared"));
+        await using var codeAct = new CodeActProvider(registry, new(workspace.Python), sandbox);
+        var engine = new AgentEngine(store, provider, codeAct, workspace.Options);
+        var events = await Collect(engine.RunAsync(session.Id, "implement", Config));
+        Assert.True(Assert.Single(sandbox.Results).Ok);
+        Assert.Contains(events, e => e is ToolCallCompleted { ToolName: "todo_write" });
+        Assert.Contains("todo_write", provider.Requests[0].Messages[0].Content);
+        Assert.Equal(provider.Requests[0].Messages.Take(2), provider.Requests[1].Messages.Take(2));
+        Assert.Equal(provider.Requests[0].Messages, provider.Requests[1].Messages.Take(provider.Requests[0].Messages.Count));
+        Assert.Contains("in_progress", provider.Requests[1].Messages.Last().Content);
+        await Collect(engine.RunAsync(session.Id, "continue", Config));
+        Assert.Equal(provider.Requests[1].Messages.Select(message => JsonSerializer.Serialize(message)),
+            provider.Requests[2].Messages.Take(provider.Requests[1].Messages.Count).Select(message => JsonSerializer.Serialize(message)));
+        Assert.Single(provider.Requests[2].Messages, message => message.ToolName == "todo_context");
+        store.SetTodos(session.Id, []);
+        await Collect(engine.RunAsync(session.Id, "clear checklist", Config));
+        var cleared = provider.Requests[3].Messages.Last();
+        Assert.Equal("todo_context", cleared.ToolName);
+        Assert.EndsWith("[]", cleared.Content);
+        Assert.Equal(provider.Requests[2].Messages.Select(message => JsonSerializer.Serialize(message)),
+            provider.Requests[3].Messages.Take(provider.Requests[2].Messages.Count).Select(message => JsonSerializer.Serialize(message)));
+        Assert.Empty(store.GetTodos(session.Id));
+    }
+    [Fact]
+    public async Task HostInvocationScopeLinksForegroundChildrenBeforeTheirResultExists()
+    {
+        using var workspace = new TestWorkspace(); using var store = new DataStore(Path.Combine(workspace.Root, "data"));
+        await using var jobs = new BackgroundTasks();
+        var session = new Conversation(); store.AddConversation(session);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        async IAsyncEnumerable<AgentEvent> Child(string id, [EnumeratorCancellation] CancellationToken ct)
+        { ready.SetResult(); await release.Task.WaitAsync(ct); yield return new AgentDone("stop"); }
+        var registry = new ToolRegistry();
+        registry.Register(new AgentDelegationTools(jobs, (request, ct) => Task.FromResult(jobs.Start(request.Description, Guid.NewGuid(), "agent", Child, session.Id, ownerToken: ct))));
+        var sandbox = new FakeSandbox { ToolName = "subagent", Arguments = JsonSerializer.SerializeToElement(new { agent = "general", task = "independent task" }) };
+        var provider = new ScriptedProvider(Call("code"), Answer("done"));
+        await using var codeAct = new CodeActProvider(registry, new(workspace.Python), sandbox);
+        var host = new TaskCompletionSource<ToolCallStarted>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var run = Task.Run(async () =>
+        {
+            await foreach (var evt in new AgentEngine(store, provider, codeAct, workspace.Options).RunAsync(session.Id, "task", Config))
+                if (evt is ToolCallStarted { ToolName: "subagent" } start) host.SetResult(start);
+        });
+        try
+        {
+            var invocation = await host.Task.WaitAsync(TimeSpan.FromSeconds(5)); await ready.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(run.IsCompleted);
+            Assert.Equal(invocation.Id, Assert.Single(jobs.List).ParentToolCallId);
+            Assert.Null(Assert.Single(jobs.List).FinalOutput);
+        }
+        finally { release.TrySetResult(); await run.WaitAsync(TimeSpan.FromSeconds(5)); }
+        Assert.Null(AgentExecutionScope.ToolCallId);
+    }
+    [Fact]
     public async Task UnavailableSandboxStopsBeforeAnyModelRequest()
     {
         using var workspace = new TestWorkspace(); using var store = new DataStore(Path.Combine(workspace.Root, "data"));
@@ -177,7 +261,7 @@ public sealed class AgentEngineTests
         var registry = new ToolRegistry(); registry.Register(workspace.Tools); var sandbox = new FakeSandbox();
         var model = new ScriptedProvider(Call("first"), [new(ChunkType.Usage) { Usage = new(50, 5) }, new(ChunkType.Error, ErrorMessage: "HTTP 503: service unavailable")], Answer("done"));
         await using var codeAct = new CodeActProvider(registry, new(workspace.Python), sandbox);
-        var events = await Collect(new AgentEngine(store, model, codeAct, workspace.Options).RunAsync(session.Id, "task", Config));
+        var events = await Collect(new AgentEngine(store, model, codeAct, workspace.Options with { RetryAfterModelOutput = true }).RunAsync(session.Id, "task", Config));
         Assert.Equal(3, model.Requests.Count); Assert.Single(sandbox.Results);
         Assert.Contains(events, e => e is AgentNotice notice && notice.Message.Contains("重试"));
         Assert.Equal("stop", Assert.IsType<AgentDone>(events.Last()).FinishReason);
@@ -354,12 +438,40 @@ public sealed class AgentEngineTests
             [new(ChunkType.TextDelta, TextDelta: "DISCARDED-PARTIAL"), new(ChunkType.ToolCallDelta, ToolCall: new("discarded-call", "execute_code", "{")), new(ChunkType.Error, ErrorMessage: error)],
             Answer("SSL-RECOVERED"));
         await using var codeAct = new CodeActProvider(registry, new(workspace.Python), sandbox);
-        var events = await Collect(new AgentEngine(store, model, codeAct, workspace.Options).RunAsync(session.Id, "task", Config));
+        var events = await Collect(new AgentEngine(store, model, codeAct, workspace.Options with { RetryAfterModelOutput = true }).RunAsync(session.Id, "task", Config));
         Assert.Equal(3, model.Requests.Count); Assert.Single(sandbox.Results);
         Assert.Contains(events, e => e is AgentNotice { ResetResponse: true });
         Assert.DoesNotContain(events.OfType<ToolCallStarted>(), e => e.Id == "discarded-call");
         Assert.DoesNotContain(store.GetMessages(session.Id), m => m.Content.Contains("DISCARDED-PARTIAL"));
         Assert.Equal("SSL-RECOVERED", store.GetMessages(session.Id).Last(m => m.Role == "assistant").Content);
+        Assert.Equal("stop", Assert.IsType<AgentDone>(events.Last()).FinishReason);
+    }
+
+    [Theory]
+    [InlineData(ChunkType.ThinkingDelta)]
+    [InlineData(ChunkType.TextDelta)]
+    [InlineData(ChunkType.Usage)]
+    public async Task DefaultDoesNotReplayPotentiallyBilledOutput(ChunkType kind)
+    {
+        using var workspace = new TestWorkspace(); using var store = new DataStore(Path.Combine(workspace.Root, "data"));
+        var session = new Conversation(); store.AddConversation(session);
+        var chunk = kind == ChunkType.Usage ? new StreamChunk(kind) { Usage = new(10, 5) } : new StreamChunk(kind, TextDelta: "started");
+        var model = new ScriptedProvider([chunk, new(ChunkType.Error, ErrorMessage: "HTTP 503: service unavailable")], Answer("unexpected"));
+        await using var codeAct = new CodeActProvider(new ToolRegistry(), new(workspace.Python), new FakeSandbox());
+        var events = await Collect(new AgentEngine(store, model, codeAct, workspace.Options).RunAsync(session.Id, "task", Config));
+        Assert.Single(model.Requests);
+        Assert.Equal("error", Assert.IsType<AgentDone>(events.Last()).FinishReason);
+    }
+
+    [Fact]
+    public async Task DefaultRetriesFailureBeforeAnyOutput()
+    {
+        using var workspace = new TestWorkspace(); using var store = new DataStore(Path.Combine(workspace.Root, "data"));
+        var session = new Conversation(); store.AddConversation(session);
+        var model = new ScriptedProvider([new(ChunkType.Error, ErrorMessage: "HTTP 429: rate limit")], Answer("recovered"));
+        await using var codeAct = new CodeActProvider(new ToolRegistry(), new(workspace.Python), new FakeSandbox());
+        var events = await Collect(new AgentEngine(store, model, codeAct, workspace.Options with { ModelRetryDelay = TimeSpan.Zero }).RunAsync(session.Id, "task", Config));
+        Assert.Equal(2, model.Requests.Count);
         Assert.Equal("stop", Assert.IsType<AgentDone>(events.Last()).FinishReason);
     }
 
@@ -369,6 +481,8 @@ public sealed class AgentEngineTests
 
     private sealed class FakeSandbox : ICodeSandbox
     {
+        public string ToolName = "list_directory";
+        public JsonElement Arguments = JsonSerializer.SerializeToElement(new { path = "." });
         public bool Block; public bool FailPreparation; public int Calls = 1; public List<ToolResult> Results = [];
         public Task<CodeSandboxContext?> PrepareAsync(IReadOnlyList<AgentToolDescriptor> tools, CancellationToken ct) => FailPreparation
             ? throw new InvalidOperationException("MicroVM unavailable") : Task.FromResult<CodeSandboxContext?>(null);
@@ -377,7 +491,7 @@ public sealed class AgentEngineTests
         {
             Started.TrySetResult();
             if (Block) await Task.Delay(Timeout.Infinite, ct);
-            for (var index = 0; index < Calls; index++) Results.Add(await callback("list_directory", JsonSerializer.SerializeToElement(new { path = "." }), ct));
+            for (var index = 0; index < Calls; index++) Results.Add(await callback(ToolName, Arguments, ct));
             return ToolResult.Success(new { stdout = "1\n", stderr = "", exitCode = 0 });
         }
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;

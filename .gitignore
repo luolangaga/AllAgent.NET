@@ -2,6 +2,7 @@
 **/obj/
 **/node_modules/
 artifacts/
+.artifacts/
 build/
 dist/
 deploy/

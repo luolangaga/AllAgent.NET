@@ -6,7 +6,7 @@ namespace LanAgent.Core.Services;
 
 public sealed class PythonPackageEnvironment(string directory)
 {
-    public static IReadOnlyList<string> Defaults { get; } = ["requests", "beautifulsoup4", "Pillow", "PyYAML", "numpy", "pandas", "openpyxl", "python-docx", "pypdf"];
+    public static IReadOnlyList<string> Defaults { get; } = ["requests", "beautifulsoup4", "PyYAML", "numpy", "pypdf"];
     private readonly SemaphoreSlim _gate = new(1, 1);
     public string Root { get; } = Path.GetFullPath(directory);
     public string PythonPath => Path.Combine(Root, "python", "venv", OperatingSystem.IsWindows() ? "Scripts/python.exe" : "bin/python");

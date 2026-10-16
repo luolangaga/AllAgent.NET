@@ -6,6 +6,7 @@ using Xunit;
 
 namespace LanAgent.Tests;
 
+[Collection("Terminal interaction")]
 public sealed class WorkspaceNavigationTests
 {
     [Theory]

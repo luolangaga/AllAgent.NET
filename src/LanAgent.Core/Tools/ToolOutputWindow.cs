@@ -9,15 +9,15 @@ internal static class ToolOutputWindow
     public const int MaxBytes = 20_000;
     public const int MaxLines = 2_000;
     public static int JsonBytes(string text) => Encoding.UTF8.GetByteCount(JsonSerializer.Serialize(text, ToolResult.JsonOptions)) - 2;
-    public static string JsonHead(string text)
+    public static string JsonHead(string text, int maxBytes = MaxBytes)
     {
-        var head = Head(text);
-        if (JsonBytes(head) <= MaxBytes) return head;
-        var low = 0; var high = MaxBytes;
+        var head = Head(text, maxBytes);
+        if (JsonBytes(head) <= maxBytes) return head;
+        var low = 0; var high = maxBytes;
         while (low < high)
         {
             var middle = (low + high + 1) / 2;
-            if (JsonBytes(Head(text, middle)) <= MaxBytes) low = middle; else high = middle - 1;
+            if (JsonBytes(Head(text, middle)) <= maxBytes) low = middle; else high = middle - 1;
         }
         return Head(text, low);
     }

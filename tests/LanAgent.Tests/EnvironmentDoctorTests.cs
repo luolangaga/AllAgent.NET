@@ -12,6 +12,8 @@ public sealed class EnvironmentDoctorTests
     private static ProcessOutput Python(int minor = 13) => new(0,
         JsonSerializer.Serialize(new { exe = Executable("python.exe"), major = 3, minor }), "", false);
 
+    private static ProcessOutput Sdk() => new(0, JsonSerializer.Serialize(new { runtime = "LanAgent.PowerShell.SDK", version = "7.6.7" }), "", false);
+
     [Theory]
     [InlineData(9, false)]
     [InlineData(10, true)]
@@ -21,7 +23,7 @@ public sealed class EnvironmentDoctorTests
     {
         var calls = new List<string>();
         var doctor = new EnvironmentDoctor(name => name == "python.exe" ? Executable(name) : null,
-            (info, _, _) => { calls.Add(info.FileName); return Task.FromResult(info.FileName.EndsWith("python.exe", StringComparison.Ordinal) ? Python(minor) : new ProcessOutput(0, "7.6.2", "", false)); });
+            (info, _, _) => { calls.Add(info.FileName); return Task.FromResult(info.FileName.EndsWith("python.exe", StringComparison.Ordinal) ? Python(minor) : Sdk()); });
         var environment = await doctor.CheckAsync(pwsh: Executable("pwsh.exe"));
         Assert.Equal(ready, environment.Ready);
         Assert.Equal(new[] { Executable("python.exe"), Executable("pwsh.exe") }, calls);
@@ -30,47 +32,31 @@ public sealed class EnvironmentDoctorTests
     }
 
     [Fact]
-    public async Task InstallsPinnedPowerShell76ThenRequiresRestartWithoutContinuingChecks()
-    {
-        var calls = new List<ProcessStartInfo>(); string? notice = null;
-        var doctor = new EnvironmentDoctor(Executable, (info, _, _) =>
-        {
-            calls.Add(info);
-            if (info.FileName.EndsWith("python.exe", StringComparison.Ordinal)) return Task.FromResult(Python());
-            return Task.FromResult(info.ArgumentList[0] switch
-            {
-                "show" => new ProcessOutput(0, "7.7.0\n7.6.2\n7.6.12\n", "", false),
-                "install" => new ProcessOutput(0, "installed", "", false),
-                _ => new ProcessOutput(1, "", "missing", false)
-            });
-        });
-        var restart = await Assert.ThrowsAsync<EnvironmentRestartRequiredException>(() => doctor.EnsureAsync((message, _) =>
-        { notice = message; return ValueTask.FromResult(true); }));
-        Assert.Contains("PowerShell 7.6", notice); Assert.Contains("winget", notice); Assert.Contains("重新启动", notice);
-        Assert.Contains("安装完成", restart.Message); Assert.Contains("重新启动 LanAgent", restart.Message);
-        Assert.Equal(4, calls.Count);
-        Assert.Equal(Executable("winget.exe"), calls[3].FileName);
-        Assert.Equal("Microsoft.PowerShell", calls[3].ArgumentList[2]);
-        Assert.Equal("7.6.12", calls[3].ArgumentList[^1]);
-    }
-
-    [Theory]
-    [InlineData(false, false)]
-    [InlineData(true, true)]
-    public async Task DeniedOrFailedInstallDoesNotClaimSuccess(bool approve, bool failedInstall)
+    public async Task MissingBundledSdkDoesNotInstallSystemPowerShell()
     {
         var calls = new List<ProcessStartInfo>();
         var doctor = new EnvironmentDoctor(Executable, (info, _, _) =>
         {
             calls.Add(info);
-            if (info.FileName.EndsWith("python.exe", StringComparison.Ordinal)) return Task.FromResult(Python());
-            return Task.FromResult(info.ArgumentList[0] == "show" ? new ProcessOutput(0, "7.6.2\n", "", false)
-                : new ProcessOutput(1, "", "installation failed", false));
+            return Task.FromResult(info.FileName.EndsWith("python.exe", StringComparison.Ordinal) ? Python() : new ProcessOutput(1, "", "missing", false));
         });
-        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => doctor.EnsureAsync((_, _) => ValueTask.FromResult(approve)));
-        Assert.IsNotType<EnvironmentRestartRequiredException>(failure);
-        Assert.Contains(failedInstall ? "安装 PowerShell 7.6 失败" : "安装未获同意", failure.Message);
-        Assert.Equal(approve ? 4 : 2, calls.Count);
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => doctor.EnsureAsync((_, _) => throw new Exception("Must not request installation")));
+        Assert.Contains("SDK worker", error.Message);
+        Assert.Equal(2, calls.Count);
+        Assert.Equal("--probe", calls[1].ArgumentList[0]);
+        Assert.DoesNotContain(calls, call => call.FileName.EndsWith("winget.exe"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DeniedOrFailedPythonInstallDoesNotClaimSuccess(bool approve)
+    {
+        var doctor = new EnvironmentDoctor(name => name is "python3.exe" or "py.exe" ? null : Executable(name), (info, _, _) =>
+            Task.FromResult(info.ArgumentList[0] == "--probe" ? Sdk() : new ProcessOutput(1, "", "missing", false)));
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => doctor.EnsureAsync((_, _) => ValueTask.FromResult(approve)));
+        Assert.IsNotType<EnvironmentRestartRequiredException>(error);
+        Assert.Contains(approve ? "安装 Python 3.13 失败" : "安装未获同意", error.Message);
     }
 
     [Theory]
@@ -84,7 +70,7 @@ public sealed class EnvironmentDoctorTests
         {
             calls.Add(info);
             if (info.FileName.EndsWith("python.exe", StringComparison.Ordinal)) return Task.FromResult(minor < 0 ? new ProcessOutput(1, "", "missing", false) : Python(minor));
-            return Task.FromResult(new ProcessOutput(0, info.ArgumentList[0] == "install" ? "installed" : "7.6.2", "", false));
+            return Task.FromResult(info.ArgumentList[0] == "install" ? new ProcessOutput(0, "installed", "", false) : Sdk());
         });
         var restart = await Assert.ThrowsAsync<EnvironmentRestartRequiredException>(() => doctor.EnsureAsync((message, _) =>
         { notices.Add(message); return ValueTask.FromResult(true); }));

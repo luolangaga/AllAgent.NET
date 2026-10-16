@@ -81,7 +81,7 @@ public sealed class ComputerUseOverlayTests
     {
         if (!OperatingSystem.IsWindows() || !Environment.UserInteractive) return;
         var configuration = Directory.GetParent(Path.TrimEndingDirectorySeparator(AppContext.BaseDirectory))!.Name;
-        var path = Path.GetFullPath($"../../../../../tests/LanAgent.ComputerUseFixture/bin/{configuration}/net8.0-windows/LanAgent.ComputerUseFixture.exe", AppContext.BaseDirectory);
+        var path = Path.GetFullPath($"../../../../../tests/LanAgent.ComputerUseFixture/bin/{configuration}/net10.0-windows/LanAgent.ComputerUseFixture.exe", AppContext.BaseDirectory);
         using var fixture = Process.Start(new ProcessStartInfo(path) { UseShellExecute = false, CreateNoWindow = true });
         Assert.NotNull(fixture);
         var state = new ComputerUseState(); state.Configure(true, ComputerInteractionMode.BackgroundOnly);

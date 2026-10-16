@@ -5,7 +5,10 @@ namespace LanAgent.Core.Services.AI;
 
 public static class ModelContext
 {
-    public static int Capacity(ApiConfig config) => Validate(ModelCatalog.Resolve(config)?.ContextTokens ?? (config.ModelContextWindows.TryGetValue(config.DefaultModel, out var manual) ? manual : 100000));
+    public static int Capacity(ApiConfig config) => Validate(config.ModelContextWindows.TryGetValue(config.DefaultModel, out var manual) ? manual
+        : ModelCatalog.Resolve(config)?.ContextTokens ?? CodexPreset(config) ?? 100000);
+    private static int? CodexPreset(ApiConfig config) => config.ProviderId is "codex" or "openai" &&
+        config.DefaultModel is "gpt-6.1-sol" or "gpt-6-astra" or "gpt-6-sol" or "gpt-6-luna" ? 1050000 : null;
     public static int Validate(int value) => value is >= 1024 and <= 10000000 ? value : throw new ArgumentException("模型上下文容量范围为 1024–10000000 Token。");
     public static int Parse(string text)
     {

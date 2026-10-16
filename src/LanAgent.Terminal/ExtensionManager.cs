@@ -15,6 +15,7 @@ internal sealed class ExtensionManager(PluginHost host, BackgroundTasks tasks, s
     private IReadOnlyList<OAuthProfile> Profiles => File.Exists(ProfilesPath) ? JsonSerializer.Deserialize<OAuthProfile[]>(File.ReadAllText(ProfilesPath)) ?? [] : [];
     private readonly IReadOnlyList<IAuthenticationProvider> _builtins = [new ChatGptAuthentication(dataDirectory)];
     public IReadOnlyList<IAuthenticationProvider> Authentication => _builtins.Concat(Profiles.Where(p => !_builtins.Any(a => a.Id.Equals(p.Id, StringComparison.OrdinalIgnoreCase))).Select(p => (IAuthenticationProvider)new OAuthAuthentication(p, new TokenVault(Path.Combine(dataDirectory, "credentials"))))).Concat(host.Authentication.Where(a => !_builtins.Any(b => b.Id.Equals(a.Id, StringComparison.OrdinalIgnoreCase)))).ToArray();
+    public IReadOnlyList<ModelFooterProvider> FooterProviders => _builtins.OfType<ChatGptAuthentication>().Select(a => a.FooterProvider).Concat(host.FooterProviders).ToArray();
     public IAuthenticationProvider FindAuthentication(string id) => Authentication.SingleOrDefault(a => a.Id.Equals(id, StringComparison.OrdinalIgnoreCase)) ?? throw new ArgumentException("登录提供商不存在；使用 /login 选择内置入口，或启用认证插件。");
     private void Idle() { if (tasks.Active) throw new InvalidOperationException("请先取消或完成后台任务，再更改插件 / Hooks / 认证配置。"); }
     public void ListPlugins()
@@ -153,6 +154,7 @@ internal sealed class ExtensionManager(PluginHost host, BackgroundTasks tasks, s
         if (FullScreenTerminal.Current is { } screen)
             await screen.BusyAsync("等待账号授权", Login, ct, () => selected.LoginInstructions ?? "等待浏览器登录", allowEscape: true);
         else await ManagementUi.Busy("等待账号授权（最多 5 分钟）", Login, ct);
+        ui.FooterRevision++;
         await ShowLoginStatusAsync(selected, ct);
         if (selected is ChatGptAuthentication) await ConnectChatGptModelsAsync(selected, ct);
         else if (selected is IAccountModelProvider accountModels)
@@ -166,8 +168,8 @@ internal sealed class ExtensionManager(PluginHost host, BackgroundTasks tasks, s
                 config.Models = models.Select(m => m.Id).ToList();
                 ModelCatalog.Remember(config, models);
                 config.MaxTokens = 0;
-                config.DefaultModel = ui.Interactive && !ui.Json
-                    ? ManagementUi.Choose("选择账号模型", models, m => m.DisplayName + " · " + m.Id).Id : config.Models[0];
+                config.DefaultModel = previous != null && config.Models.Contains(previous.DefaultModel)
+                    ? previous.DefaultModel : config.Models[0];
                 if (previous != null) { config.Id = previous.Id; store.UpdateApiConfig(config); }
                 else store.AddApiConfig(config);
                 ManagementUi.Success(ui, "账号模型已连接：" + config.DefaultModel + "；使用 /model 切换。");
@@ -186,6 +188,7 @@ internal sealed class ExtensionManager(PluginHost host, BackgroundTasks tasks, s
         var selected = words.Count > 0 ? FindAuthentication(words[0])
             : ManagementUi.Choose("选择要退出的账号", Authentication, a => a.Name + " · " + a.Id);
         await selected.LogoutAsync(ct);
+        ui.FooterRevision++;
         foreach (var config in store.ApiConfigs.Where(c => c.AuthenticationProviderId == selected.Id)) { var copy = ManagementUi.Clone(config); copy.IsEnabled = false; store.UpdateApiConfig(copy); }
         ManagementUi.Success(ui, "已退出 " + selected.Name + "。本地登录凭据已清除；服务端撤销以提供商说明为准。");
     }
@@ -231,8 +234,7 @@ internal sealed class ExtensionManager(PluginHost host, BackgroundTasks tasks, s
             config.Models = models.Select(m => m.Id).ToList();
                 ModelCatalog.Remember(config, models);
                 config.MaxTokens = 0;
-            if (ui.Interactive && !ui.Json) config.DefaultModel = ManagementUi.Choose("选择 ChatGPT 模型", models, m => m.DisplayName + " · " + m.Id).Id;
-            else if (!config.Models.Contains(config.DefaultModel)) config.DefaultModel = config.Models[0];
+            if (!config.Models.Contains(config.DefaultModel)) config.DefaultModel = config.Models[0];
             config.IsEnabled = true;
             if (previous == null) store.AddApiConfig(config); else store.UpdateApiConfig(config);
             ManagementUi.Success(ui, "账号模型目录已连接：" + config.DefaultModel + "；使用 /model 切换。实际可用性将在首次请求确认。");

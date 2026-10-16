@@ -6,6 +6,20 @@ namespace LanAgent.Tests;
 public sealed class FileSearchTests
 {
     [Fact]
+    public async Task FullAccessCanSearchAnExplicitAncestorDirectory()
+    {
+        using var w = new TestWorkspace();
+        var tools = new LanAgent.Core.Tools.SystemTools(new(w.Root, fullAccess: true), new(w.Python, w.Pwsh, []), new Dictionary<string, string>());
+        // A fixture-owned ancestor proves the restriction is gone without scanning user directories.
+        var nested = Path.Combine(w.Root, "project"); Directory.CreateDirectory(nested);
+        var scopedTools = new LanAgent.Core.Tools.SystemTools(new(nested, fullAccess: true), new(w.Python, w.Pwsh, []), new Dictionary<string, string>());
+        await File.WriteAllTextAsync(Path.Combine(w.Root, "local.txt"), "workspace proof");
+        Assert.Null(scopedTools.ValidateInvocation("file_glob", JsonSerializer.SerializeToElement(new { path = w.Root })));
+        Assert.True((await scopedTools.GlobFilesAsync("*.txt", w.Root)).Ok);
+        Assert.True((await scopedTools.SearchFilesAsync("workspace proof", w.Root)).Ok);
+        Assert.True((await tools.SearchFilesAsync("workspace proof")).Ok);
+    }
+    [Fact]
     public async Task SearchSupportsRegexContextFiltersAndPagination()
     {
         using var w = new TestWorkspace();
@@ -17,6 +31,7 @@ public sealed class FileSearchTests
         Assert.True(first.Ok); Assert.True(first.Truncated);
         var data = JsonSerializer.SerializeToElement(first.Data, LanAgent.Core.Tools.ToolResult.JsonOptions);
         var match = Assert.Single(data.GetProperty("matches").EnumerateArray());
+        Assert.Equal("a.cs", match.GetProperty("path").GetString());
         Assert.Equal(2, match.GetProperty("line").GetInt32());
         Assert.Equal("before", match.GetProperty("context")[0].GetProperty("text").GetString());
         var second = await w.Tools.SearchFilesAsync("QuickMode|FastMode", regex: true, file_pattern: "*.cs", limit: 1, offset: 1);

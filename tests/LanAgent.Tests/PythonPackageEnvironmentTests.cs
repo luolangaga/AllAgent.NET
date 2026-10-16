@@ -49,21 +49,20 @@ public sealed class PythonPackageEnvironmentTests
         Assert.Equal("csv", environment.Aliases()["csv"]); Assert.False(environment.Aliases().ContainsKey("call_tool"));
         var options = temporary.Options with { FullAccess = true, PythonPath = environment.PythonPath, PythonLibraries = environment };
         await using var runtime = await AgentRuntime.CreateAsync(options);
-        Assert.Contains("Installed host libraries (not guest imports; use host tools):\n" + File.ReadAllText(environment.CatalogPath), runtime.CodeAct.Instructions);
+        Assert.DoesNotContain(File.ReadAllText(environment.CatalogPath), runtime.CodeAct.Instructions);
+        Assert.Contains("Do not install or import third-party Python packages", runtime.CodeAct.Instructions);
         var executableLine = File.ReadLines(environment.CatalogPath).Single(line => line.StartsWith("Host Python executable: ", StringComparison.Ordinal));
         var catalogPython = JsonSerializer.Deserialize<string>(executableLine["Host Python executable: ".Length..]);
         Assert.Equal(Path.GetFullPath(environment.PythonPath), Path.GetFullPath(catalogPython!), ignoreCase: true);
         Assert.Contains("not automatically importable", File.ReadAllText(environment.CatalogPath));
+        Assert.Contains("managed package venv", File.ReadAllText(environment.CatalogPath));
+        Assert.Contains("Package environment prefix:", File.ReadAllText(environment.CatalogPath));
+        Assert.Contains("Base interpreter prefix:", File.ReadAllText(environment.CatalogPath));
         Assert.DoesNotContain("Aliases are available in full-access host Python", File.ReadAllText(environment.CatalogPath));
-        Assert.Contains(runtime.Tools.Definitions, tool => tool.Name == "python_library_docs");
+        Assert.DoesNotContain(runtime.Tools.Definitions, tool => tool.Name == "python_library_docs");
         Assert.DoesNotContain(runtime.Tools.Definitions, tool => tool.Name == "python_libraries");
         Assert.DoesNotContain("Use python_libraries to check", runtime.CodeAct.Instructions);
         Assert.DoesNotContain("np/numpy", runtime.CodeAct.Instructions);
-        var source = "import csv; from pathlib import Path; import requests; print(list(csv.reader(['a,b']))[0]); print(requests.__version__); print(Path('.').resolve().name)";
-        var code = "r = call_tool('run_shell', exe=" + JsonSerializer.Serialize(environment.PythonPath) + ", args=['-c', " + JsonSerializer.Serialize(source) + "])\nassert r['ok'], r['error']\nprint(r['data']['stdout'])";
-        var result = await runtime.CodeAct.ExecuteAsync("execute_code", JsonSerializer.SerializeToElement(new { code }), runtime.CodeAct.CallToolAsync, default);
-        Assert.True(result.Ok, result.ToJson());
-        var output = JsonSerializer.SerializeToElement(result.Data); Assert.Equal(0, output.GetProperty("exitCode").GetInt32());
-        Assert.Contains("['a', 'b']", output.GetProperty("stdout").GetString());
+        Assert.Contains("powershell_capabilities", runtime.CodeAct.Instructions);
     }
 }

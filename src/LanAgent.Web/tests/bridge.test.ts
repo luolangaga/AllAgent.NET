@@ -81,9 +81,37 @@ describe('native bridge contract', () => {
     const { useConversationsStore } = await import('../src/stores/conversations')
     const store = useConversationsStore(); const requests: Request[] = []; handle = request => { requests.push(request) }
     const first = store.selectConversation('first'); const second = store.selectConversation('second')
-    reply(requests[1], [{ id: 'new', role: 'user', content: 'new' }]); await second
-    reply(requests[0], [{ id: 'old', role: 'user', content: 'old' }]); await first
+    const requestFor = (id: string, method: string) => requests.find(r => r.method === method && r.params.conversationId === id)!
+    reply(requestFor('second', 'conversations.getMessages'), [{ id: 'new', role: 'user', content: 'new' }])
+    reply(requestFor('second', 'todos.get'), [{ id: 'todo-new', content: '新清单', status: 'pending' }]); await second
+    reply(requestFor('first', 'conversations.getMessages'), [{ id: 'old', role: 'user', content: 'old' }])
+    reply(requestFor('first', 'todos.get'), [{ id: 'todo-old', content: '旧清单', status: 'pending' }]); await first
     expect(store.activeId).toBe('second'); expect(store.messages[0].content).toBe('new')
+    expect(store.todos[0].id).toBe('todo-new')
+  })
+  it('loads, edits and streams TODO progress without accepting late stream updates', async () => {
+    const { useConversationsStore } = await import('../src/stores/conversations')
+    const store = useConversationsStore()
+    const pending = [{ id: '1', content: '验证', status: 'pending' as const }]
+    handle = request => {
+      if (request.method === 'conversations.getMessages') reply(request, [])
+      else if (request.method === 'todos.get') reply(request, pending)
+      else if (request.method === 'todos.set') reply(request, request.params.todos)
+      else if (request.method === 'chat.startStream') reply(request, 'stream-1')
+      else reply(request, true)
+    }
+    await store.selectConversation('conv-1'); expect(store.todos).toEqual(pending)
+    await store.setTodos([{ ...pending[0], status: 'in_progress' }]); expect(store.todos[0].status).toBe('in_progress')
+    await store.sendMessage('开始', 'config-1')
+    await expect(store.setTodos([])).rejects.toThrow('请先停止')
+    const completed = [{ ...pending[0], status: 'completed' }]
+    event('agent.toolCallCompleted', { id: 'todo', name: 'todo_write', result: JSON.stringify({ ok: true, data: { todos: completed } }) })
+    expect(store.todos[0].status).toBe('completed')
+    event('agent.toolCallCompleted', { id: 'bad', name: 'todo_write', result: '{"ok":false,"error":"invalid"}' })
+    expect(store.todos[0].status).toBe('completed')
+    event('agent.done', { reason: 'stop' })
+    event('agent.toolCallCompleted', { id: 'late', name: 'todo_write', result: '{"ok":true,"data":{"todos":[]}}' })
+    expect(store.todos).toHaveLength(1)
   })
   it('restores persisted host tool traces', async () => {
     const { restoreMessages } = await import('../src/utils/execution')

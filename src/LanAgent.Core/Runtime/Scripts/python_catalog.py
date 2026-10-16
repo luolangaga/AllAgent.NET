@@ -1,11 +1,9 @@
 import importlib.metadata as metadata, importlib.util, json, pathlib, re, sys
 
 root = pathlib.Path(sys.argv[1])
-defaults = {'requests', 'beautifulsoup4', 'pillow', 'pyyaml', 'numpy', 'pandas', 'openpyxl', 'python-docx', 'pypdf'}
+defaults = {'requests', 'beautifulsoup4', 'pyyaml', 'numpy', 'pypdf'}
 known = {'requests': {'requests': 'requests'}, 'beautifulsoup4': {'bs4': 'bs4', 'BeautifulSoup': 'bs4:BeautifulSoup'},
-         'pillow': {'PIL': 'PIL', 'Image': 'PIL.Image'}, 'pyyaml': {'yaml': 'yaml'},
-         'numpy': {'np': 'numpy', 'numpy': 'numpy'}, 'pandas': {'pd': 'pandas', 'pandas': 'pandas'},
-         'openpyxl': {'openpyxl': 'openpyxl'}, 'python-docx': {'docx': 'docx', 'Document': 'docx:Document'},
+         'pyyaml': {'yaml': 'yaml'}, 'numpy': {'np': 'numpy', 'numpy': 'numpy'},
          'pypdf': {'pypdf': 'pypdf', 'PdfReader': 'pypdf:PdfReader', 'PdfWriter': 'pypdf:PdfWriter'}}
 packages = []
 aliases = {'Path': 'pathlib:Path', 'json': 'json', 'os': 'os', 'sys': 'sys', 're': 're', 'math': 'math', 'datetime': 'datetime', 'subprocess': 'subprocess'}
@@ -53,13 +51,25 @@ registry = {'python': sys.executable, 'packages': packages, 'aliases': aliases}
 (root / 'python' / 'libraries.json.tmp').write_text(json.dumps(registry, ensure_ascii=False, indent=2), encoding='utf-8')
 (root / 'python' / 'libraries.json.tmp').replace(root / 'python' / 'libraries.json')
 lines = ['# LanAgent installed host Python libraries', '',
-         'Generated from installed packages in the shared host environment. These packages are not automatically importable in the Hyperlight guest, including full-access mode.', '',
-         'Host Python executable: ' + json.dumps(sys.executable, ensure_ascii=False), '',
-         'Use explicit imports in host scripts launched through call_tool("run_shell", exe=<host Python executable>, args=["-c", <script>]). Host command permissions still apply. Import names below are references, not automatically injected globals.', '',
-         'The guest separately bundles base64, struct and UTF-16 codecs for pure in-memory transformations; these do not require pip installation.', '',
+         'Third-party packages installed in the LanAgent managed package venv (CPython), not the global host Python. These packages are not automatically importable in the guest. This is not a sandbox import list or a Python standard-library compatibility list. Neither Hyperlight nor Monty automatically inherits these packages, including full-access mode.', '',
+         'Host Python executable: ' + json.dumps(sys.executable, ensure_ascii=False),
+         'Package environment prefix: ' + json.dumps(sys.prefix, ensure_ascii=False),
+         'Base interpreter prefix: ' + json.dumps(sys.base_prefix, ensure_ascii=False), '',
+         'Use explicit imports in host scripts launched through call_tool("run_shell", exe=<host Python executable>, args=["-I", "-c", <script>], working_directory=<workspace>, timeout_seconds=120). Check both ok and data.exitCode. Import names below are references, not automatically injected globals.', '',
+         'Host scripts run with host process permissions, outside guest isolation. Host command approvals and role restrictions still apply. Use the exact executable above; the private Monty runtime Python does not contain these packages.', '',
+         'Guest standard-library support depends on the active backend. Hyperlight separately bundles base64, struct and UTF-16 codecs; Monty has its own supported subset. A failed guest import does not mean the installed host package is missing.', '',
+         'Example: run host Python with the exact executable above:', '',
+         '```python',
+         'script = ' + json.dumps('import json; print(json.dumps({"sum": sum([1, 2, 3])}))'),
+         'r = call_tool("run_shell", exe=' + json.dumps(sys.executable, ensure_ascii=True) + ', args=["-I", "-c", script], working_directory=".", timeout_seconds=120)',
+         'if r["ok"] and r["data"]["exitCode"] == 0:',
+         '    print(r["data"]["stdout"])',
+         'else:',
+         '    print(r)',
+         '```', '',
          '| Package | Version | Import names / suggested aliases | Documentation |', '| --- | --- | --- | --- |']
 for package in packages:
-    lines.append('| ' + package['name'] + ' | ' + package['version'] + ' | ' + ', '.join(package['aliases']) + ' | ' + (package['document'] or 'Built-in / no extra documentation') + ' |')
+    lines.append('| ' + package['name'] + ' | ' + package['version'] + ' | ' + ', '.join(package['aliases']) + ' | ' + (package['document'] or 'Installed package / no extra documentation') + ' |')
 (root / 'pip.md.tmp').write_text('\n'.join(lines) + '\n', encoding='utf-8')
 (root / 'pip.md.tmp').replace(root / 'pip.md')
 print(json.dumps({'packages': len(packages), 'python': sys.executable}, ensure_ascii=False))

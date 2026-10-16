@@ -6,7 +6,7 @@ namespace LanAgent.Core.Services;
 
 /// <summary>Live read-only restrictions apply even when the parent granted full access.</summary>
 public sealed class SubAgentRolePolicy(Func<bool> readOnly, string workspace, ExternalDirectoryPermissions? permissions = null,
-    Func<AgentRoleDefinition>? role = null, ToolApprover? approver = null)
+    Func<AgentRoleDefinition>? role = null, ToolApprover? approver = null, Func<IReadOnlyList<string>?>? parentTools = null)
 {
     private readonly Lazy<WorkspacePolicy> _workspace = new(() => new(workspace, permissions: permissions));
     public ToolResult? Validate(AgentToolDescriptor tool, JsonElement arguments)
@@ -39,6 +39,11 @@ public sealed class SubAgentRolePolicy(Func<bool> readOnly, string workspace, Ex
     private (string? Name, string Effect, string? Version) Evaluate(AgentToolDescriptor tool, JsonElement arguments)
     {
         var current = role?.Invoke();
+        if (parentTools?.Invoke() is { } parent && !parent.Contains(tool.Name, StringComparer.Ordinal))
+            return (current?.Name, "deny", null);
+        if (tool.Name is "skill_read" or "skill_reference" && current?.Execution?.Skills is { } skills &&
+            !skills.Contains(ToolArguments.Get<string>(arguments, "name", ""), StringComparer.OrdinalIgnoreCase))
+            return (current.Name, "deny", JsonSerializer.Serialize(current));
         var canonical = tool.Name switch { "file_read" => "read", "file_write" => "write", "file_edit" => "edit", "file_search" => "grep", "file_glob" => "find", "list_directory" => "ls", _ => tool.Name };
         if (current?.Tools is { } tools && !tools.Contains(canonical, StringComparer.Ordinal) && !tools.Contains(tool.Name, StringComparer.Ordinal))
             return (current.Name, "deny", JsonSerializer.Serialize(current));
@@ -46,13 +51,14 @@ public sealed class SubAgentRolePolicy(Func<bool> readOnly, string workspace, Ex
         var action = tool.Name switch
         {
             "file_read" => "read", "file_write" => "write", "file_edit" => "edit", "list_directory" or "ls" => "list",
-            "run_shell" or "powershell" => "bash", "web_fetch" => "webfetch", "web_search" => "websearch",
+            "run_shell" or "powershell" or "powershell_invoke" or "powershell_command_info" => "bash", "web_fetch" => "webfetch", "web_search" => "websearch",
             "skill_read" or "skill_reference" => "skill", "subagent" or "start_agent" => "task", _ => tool.Name
         };
         var resource = tool.Name switch
         {
             "file_read" or "file_write" or "file_edit" or "list_directory" or "file_search" or "file_glob" or "read" or "write" or "edit" or "grep" or "find" or "ls" => _workspace.Value.ResolveForApproval(ToolArguments.Get(arguments, "path", ".")),
             "run_shell" => ToolArguments.Get<string>(arguments, "exe") + " " + string.Join(" ", ToolArguments.Get<string[]>(arguments, "args", [])),
+            "powershell_invoke" or "powershell_command_info" => ToolArguments.Get<string>(arguments, "module") + "\\" + ToolArguments.Get<string>(arguments, "command"),
             "bash" or "powershell" => ToolArguments.Get<string>(arguments, "command", ""),
             "web_fetch" => ToolArguments.Get<string>(arguments, "url", "*"),
             "web_search" => ToolArguments.Get<string>(arguments, "query", "*"),

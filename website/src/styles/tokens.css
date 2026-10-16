@@ -1,0 +1,91 @@
+/* ==========================================================================
+   LanAgent 官网 · 设计令牌（像素 / 位图风格）
+   —— 所有颜色、间距、动画节奏都在这里收口，组件不写裸值
+   ========================================================================== */
+
+:root {
+  /* ---------- 像素栅格 ---------- */
+  --bit: 4px; /* 一个"像素点"的尺寸，与 Pixelium 的 --px-bit 保持一致 */
+  --grid: calc(var(--bit) * 2); /* 8px 基础栅格 */
+  --grid-2: calc(var(--bit) * 4); /* 16px */
+  --grid-3: calc(var(--bit) * 6); /* 24px */
+
+  /* ---------- 调色板：磷光终端 ---------- */
+  --c-void: #06080a;
+  --c-bg: #0a0e12;
+  --c-bg-soft: #0e141a;
+  --c-surface: #121a21;
+  --c-surface-2: #18222b;
+  --c-surface-3: #1f2b35;
+  --c-line: #22313c;
+  --c-line-strong: #33475a;
+
+  --c-text: #e6f2ee;
+  --c-text-dim: #a9bfc4;
+  --c-text-mute: #6f858e;
+
+  --c-mint: #6ff2b0;
+  --c-mint-deep: #16b877;
+  --c-amber: #ffc95c;
+  --c-amber-deep: #d98b16;
+  --c-cyan: #62d8ff;
+  --c-violet: #b08cff;
+  --c-rose: #ff7a8a;
+  --c-lime: #cdf564;
+
+  /* ---------- 语义令牌 ---------- */
+  --bg: var(--c-bg);
+  --surface: var(--c-surface);
+  --surface-2: var(--c-surface-2);
+  --line: var(--c-line);
+  --text: var(--c-text);
+  --text-dim: var(--c-text-dim);
+  --text-mute: var(--c-text-mute);
+  --accent: var(--c-mint);
+  --accent-alt: var(--c-amber);
+
+  /* ---------- 阴影 / 硬边发光 ---------- */
+  --shadow-hard: var(--bit) var(--bit) 0 0 rgba(0, 0, 0, 0.55);
+  --shadow-hard-sm: 2px 2px 0 0 rgba(0, 0, 0, 0.5);
+  --glow-mint: 0 0 0 1px rgba(111, 242, 176, 0.35), 0 0 24px -6px rgba(111, 242, 176, 0.45);
+  --glow-amber: 0 0 0 1px rgba(255, 201, 92, 0.35), 0 0 26px -6px rgba(255, 201, 92, 0.4);
+  --glow-cyan: 0 0 0 1px rgba(98, 216, 255, 0.3), 0 0 26px -8px rgba(98, 216, 255, 0.45);
+
+  /* ---------- 字体 ---------- */
+  --font-pixel: 'Fusion Pixel Zh_hans', 'Fusion Pixel', 'Fusion Pixel Mono', 'Pixelify Sans', 'Microsoft YaHei', monospace;
+  --font-mono: 'Cascadia Mono', 'JetBrains Mono', 'Consolas', 'Courier New', monospace;
+  --font-sans: 'Fusion Pixel Zh_hans', 'Microsoft YaHei', 'PingFang SC', system-ui, sans-serif;
+
+  --fs-hero: clamp(2.6rem, 7.2vw, 6.2rem);
+  --fs-h2: clamp(1.7rem, 3.6vw, 2.9rem);
+  --fs-h3: clamp(1.15rem, 1.8vw, 1.5rem);
+  --fs-body: clamp(0.95rem, 1.05vw, 1.06rem);
+  --fs-small: 0.82rem;
+  --fs-micro: 0.7rem;
+
+  /* ---------- 布局 ---------- */
+  --page: 1240px;
+  --page-wide: 1600px;
+  --gutter: clamp(16px, 4vw, 56px);
+  --section-y: clamp(64px, 9vw, 132px);
+  --radius: 0px; /* 像素风：永远不要圆角，除非组件显式指定 */
+
+  /* ---------- 动画节奏（stepped 是像素风的灵魂） ---------- */
+  --t-fast: 120ms;
+  --t-base: 240ms;
+  --t-slow: 420ms;
+  --ease-step: steps(4, end);
+  --ease-step-6: steps(6, end);
+  --ease-out-hard: cubic-bezier(0.2, 0.9, 0.1, 1);
+
+  /* ---------- 层级 ---------- */
+  --z-bg: 0;
+  --z-content: 1;
+  --z-sticky: 40;
+  --z-overlay: 90;
+  --z-boot: 100;
+
+  /* ---------- Pixelium 组件库覆盖 ---------- */
+  --px-font: var(--font-pixel);
+  --px-bit: 4px;
+}

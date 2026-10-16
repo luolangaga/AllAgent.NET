@@ -47,7 +47,10 @@ public record ChatRequest(
     public Guid? RoutingTurnId { get; init; }
 }
 
-public record ModelInfo(string Id, string DisplayName, int? ContextTokens = null, int? OutputTokens = null);
+public record ModelInfo(string Id, string DisplayName, int? ContextTokens = null, int? OutputTokens = null)
+{
+    public IReadOnlyList<string>? ReasoningLevels { get; init; }
+}
 
 public interface IAiProvider
 {

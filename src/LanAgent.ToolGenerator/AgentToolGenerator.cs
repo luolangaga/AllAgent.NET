@@ -68,7 +68,7 @@ public sealed class AgentToolGenerator : IIncrementalGenerator
     private static string? JsonType(ITypeSymbol type) => type.SpecialType switch
     {
         SpecialType.System_String => "string", SpecialType.System_Int32 => "integer", SpecialType.System_Boolean => "boolean",
-        _ => type is IArrayTypeSymbol array && JsonType(array.ElementType) != null ? "array" :
+        _ => type.ToDisplayString() == "System.Text.Json.JsonElement" ? "object" : type is IArrayTypeSymbol array && JsonType(array.ElementType) != null ? "array" :
             type is INamedTypeSymbol named && named.TypeKind == TypeKind.Class && named.IsRecord &&
             Properties(named).Any() && Properties(named).All(p => Description(p) != null && p.Type.SpecialType is SpecialType.System_String or SpecialType.System_Int32 or SpecialType.System_Boolean) ? "object" : null
     };
@@ -78,6 +78,7 @@ public sealed class AgentToolGenerator : IIncrementalGenerator
     {
         var result = "{\"type\":" + QuoteJson(JsonType(type)!) + ",\"description\":" + QuoteJson(description);
         if (type is IArrayTypeSymbol array) result += ",\"items\":" + Schema(array.ElementType, "Array entry");
+        else if (type.ToDisplayString() == "System.Text.Json.JsonElement") result += ",\"additionalProperties\":true";
         else if (JsonType(type) == "object")
         {
             var properties = Properties((INamedTypeSymbol)type).ToArray();

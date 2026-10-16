@@ -14,6 +14,21 @@ namespace LanAgent.Tests;
 public sealed class FullScreenTests
 {
     [Fact]
+    public async Task CancelledMouseReportCannotLeakItsTailIntoNextPrompt()
+    {
+        static ConsoleKeyInfo Key(char c) => new(c, c == '\u001b' ? ConsoleKey.Escape : ConsoleKey.A, false, false, false);
+        var bytes = new Queue<ConsoleKeyInfo>("\u001b[<0;".Select(Key));
+        var reader = new TerminalKeyReader(() => bytes.Count > 0, bytes.Dequeue);
+        using var cancelled = new CancellationTokenSource(80);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => reader.ReadAsync(cancelled.Token));
+        foreach (var c in "104;6M继续") bytes.Enqueue(Key(c));
+        Assert.Equal(default, (await reader.ReadAsync(default)).Key);
+        Assert.Equal('继', (await reader.ReadAsync(default)).Key.KeyChar);
+        Assert.Equal('续', (await reader.ReadAsync(default)).Key.KeyChar);
+        Assert.Empty(bytes);
+    }
+
+    [Fact]
     public async Task WheelScrollsTranscriptPreservesReadingPositionAndReturnsToLatest()
     {
         static ConsoleKeyInfo Key(char c) => new(c, c == '\u001b' ? ConsoleKey.Escape : ConsoleKey.A, false, false, false);

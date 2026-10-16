@@ -12,13 +12,23 @@ public sealed class SkillCatalog(DataStore store, string workspace, string dataD
 {
     public string ProjectDirectory { get; } = System.IO.Path.Combine(System.IO.Path.GetFullPath(workspace), ".lanagent", "skills");
     public string UserDirectory { get; } = System.IO.Path.Combine(System.IO.Path.GetFullPath(dataDirectory), "skills");
-    public IReadOnlyList<string> GlobalDirectories { get; } = new[] { ".claude/skills", ".codex/skills/.system", ".codex/skills", ".config/opencode/skills", ".agents/skills" }
+    public IReadOnlyList<string> GlobalDirectories { get; } = new[] { ".agents/skills" }
         .Select(relative => System.IO.Path.GetFullPath(System.IO.Path.Combine(userHome ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), relative))).ToArray();
     public IReadOnlyList<string> Diagnostics { get; private set; } = Array.Empty<string>();
     private readonly object _catalogLock = new();
     private readonly Dictionary<string, (DateTime Modified, long Length, InstructionSkill Skill)> _parsed = new(StringComparer.OrdinalIgnoreCase);
     private IReadOnlyList<InstructionSkill>? _snapshot;
     private long _refreshed;
+    private static readonly Lazy<string> BrowserInstructions = new(() =>
+    {
+        using var stream = typeof(SkillCatalog).Assembly.GetManifestResourceStream("LanAgent.Core.Skills.browser-use.SKILL.md") ?? throw new InvalidOperationException("Built-in browser skill is missing.");
+        using var reader = new StreamReader(stream);
+        var text = reader.ReadToEnd().Replace("\r\n", "\n");
+        return text[(text.IndexOf("\n---\n", 4, StringComparison.Ordinal) + 5)..].Trim();
+    });
+    public static bool IsBrowserAutomationSkill(InstructionSkill skill) =>
+        Regex.IsMatch(skill.Name, @"(^|[-:])(browser-use|agent-browser|browser|playwright|puppeteer|selenium|chrome-devtools|web-automation)([-:]|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) ||
+        Regex.IsMatch(skill.Description, @"浏览器.{0,8}(操作|自动化|控制)|(browser|web).{0,16}(automation|control)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private void Invalidate() { lock (_catalogLock) _snapshot = null; }
     public void SeedBundled()
     {
@@ -30,9 +40,7 @@ public sealed class SkillCatalog(DataStore store, string workspace, string dataD
             var assembly = typeof(SkillCatalog).Assembly;
             using var resource = assembly.GetManifestResourceStream("LanAgent.Core.Skills.computer-use.SKILL.md") ?? throw new InvalidOperationException("Built-in Computer Use skill is missing.");
             using var reader = new StreamReader(resource);
-            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(computerPath)!);
-            File.WriteAllText(computerPath, reader.ReadToEnd());
-            Invalidate();
+            SeedBundledFile("computer-use", reader.ReadToEnd());
         }
         if (store.GetSetting("skills:bundled:v1") == "seeded") return;
         foreach (var (name, description, instructions) in new[]
@@ -44,15 +52,38 @@ public sealed class SkillCatalog(DataStore store, string workspace, string dataD
             ("security-review", "检查代码中的实际安全边界问题", "Review $ARGUMENTS for concrete security defects. Trace untrusted input to sensitive operations; inspect authorization, command arguments, file boundaries, credential handling and isolation. Report reproducible findings and precise remediation. Do not invent speculative risks or run external attacks.")
         })
         {
-            if (!File.Exists(System.IO.Path.Combine(UserDirectory, name, "SKILL.md"))) Create(name, description, instructions, "user");
+            var yaml = new SerializerBuilder().Build().Serialize(new Dictionary<string, string> { ["name"] = name, ["description"] = description });
+            SeedBundledFile(name, "---\n" + yaml + "---\n\n" + instructions + "\n");
         }
         store.SetSetting("skills:bundled:v1", "seeded");
     }
+    private void SeedBundledFile(string name, string content)
+    {
+        var directory = System.IO.Path.Combine(UserDirectory, name);
+        var target = System.IO.Path.Combine(directory, "SKILL.md");
+        if (File.Exists(target)) return;
+        Directory.CreateDirectory(directory);
+        var temporary = System.IO.Path.Combine(directory, Guid.NewGuid().ToString("N") + ".tmp");
+        try
+        {
+            File.WriteAllText(temporary, content);
+            try { File.Move(temporary, target, overwrite: false); }
+            catch (IOException) when (File.Exists(target)) { /* Another host seeded it first. Keep its complete file. */ }
+            Invalidate();
+        }
+        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+    }
+
     public IReadOnlyList<InstructionSkill> List()
     {
         var snapshot = ListUnfiltered();
-        return LanAgent.Core.Extensions.AgentExtensionScope.Current?.SelectSkills(this, snapshot) ?? snapshot;
+        var selected = LanAgent.Core.Extensions.AgentExtensionScope.Current?.SelectSkills(this, snapshot);
+        return selected == null ? snapshot : ProtectBrowserSkills(selected, snapshot);
     }
+    private static IReadOnlyList<InstructionSkill> ProtectBrowserSkills(IReadOnlyList<InstructionSkill> selected, IReadOnlyList<InstructionSkill> original) =>
+        selected.Select(skill => skill.Name.Equals("browser-use", StringComparison.OrdinalIgnoreCase)
+            ? original.Single(item => item.Name == "browser-use")
+            : IsBrowserAutomationSkill(skill) ? skill with { Enabled = false } : skill).ToArray();
     internal IReadOnlyList<InstructionSkill> ListUnfiltered()
     {
         lock (_catalogLock)
@@ -62,7 +93,15 @@ public sealed class SkillCatalog(DataStore store, string workspace, string dataD
         }
     }
     /// <summary>Display-only snapshot; rendering must not wait for filesystem discovery.</summary>
-    public IReadOnlyList<InstructionSkill> CachedList => LanAgent.Core.Extensions.AgentExtensionScope.Current?.SelectSkills(this, Volatile.Read(ref _snapshot) ?? ListUnfiltered()) ?? Volatile.Read(ref _snapshot) ?? ListUnfiltered();
+    public IReadOnlyList<InstructionSkill> CachedList
+    {
+        get
+        {
+            var snapshot = Volatile.Read(ref _snapshot) ?? ListUnfiltered();
+            var selected = LanAgent.Core.Extensions.AgentExtensionScope.Current?.SelectSkills(this, snapshot);
+            return selected == null ? snapshot : ProtectBrowserSkills(selected, snapshot);
+        }
+    }
     private IReadOnlyList<InstructionSkill> Discover()
     {
         var found = new Dictionary<string, InstructionSkill>(StringComparer.OrdinalIgnoreCase);
@@ -92,6 +131,16 @@ public sealed class SkillCatalog(DataStore store, string workspace, string dataD
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { errors.Add(root + ": " + ex.Message); }
         }
+        // Keep files intact and visible to management, but exclude competing automation
+        // instructions from model discovery and skill_read. The built-in name is reserved.
+        foreach (var item in found.Values.ToArray())
+            if (IsBrowserAutomationSkill(item))
+            {
+                found[item.Name] = item with { Enabled = false };
+                errors.Add(item.Path + ": 已屏蔽外部浏览器操作技能；请使用内置 browser-use。");
+            }
+        var builtin = new InstructionSkill("browser-use", "网页操作与执行 JavaScript；内置 WebView2 或连接 Chrome/Edge，按需加载。", BrowserInstructions.Value, "builtin://browser-use", "builtin", true, true, true);
+        found[builtin.Name] = builtin with { Enabled = store.GetSetting(Setting(builtin)) != "disabled" };
         Diagnostics = errors;
         return found.Values.OrderBy(s => s.Name).ToArray();
     }
@@ -120,7 +169,12 @@ public sealed class SkillCatalog(DataStore store, string workspace, string dataD
         throw new IOException("全局技能链接层级过深：" + path);
     }
     public InstructionSkill Get(string name, bool requireEnabled = false) => List().SingleOrDefault(s => s.Name.Equals(name, StringComparison.OrdinalIgnoreCase) && (!requireEnabled || s.Enabled)) ?? throw new ArgumentException("找不到技能或技能已禁用：" + name);
-    public void Enable(string name, bool enabled) { store.SetSetting(Setting(Get(name)), enabled ? "enabled" : "disabled"); Invalidate(); }
+    public void Enable(string name, bool enabled)
+    {
+        var skill = Get(name);
+        if (enabled && skill.Scope != "builtin" && IsBrowserAutomationSkill(skill)) throw new ArgumentException("外部浏览器操作技能已屏蔽；请使用内置 browser-use。");
+        store.SetSetting(Setting(skill), enabled ? "enabled" : "disabled"); Invalidate();
+    }
     private static string Setting(InstructionSkill skill) => "skill:" + skill.Path;
     public static InstructionSkill Parse(string path, string scope)
     {
@@ -142,11 +196,12 @@ public sealed class SkillCatalog(DataStore store, string workspace, string dataD
     public static void ValidateName(string name)
     {
         if (!Regex.IsMatch(name, "^[a-z][a-z0-9-]{0,63}$", RegexOptions.CultureInvariant)) throw new ArgumentException("技能名必须是小写字母、数字或短横线，最长 64 字符。");
-        if (new[] { "help", "skills", "mcp", "model", "models", "providers", "effort", "new", "exit", "resume", "clear", "status", "plan", "permissions", "context", "compact", "history", "export", "rename", "branch", "fork", "doctor", "tools", "settings", "memory", "init", "rewind" }.Contains(name)) throw new ArgumentException("技能名与内置命令冲突。");
+        if (new[] { "help", "skills", "mcp", "model", "models", "providers", "effort", "questions", "new", "exit", "resume", "clear", "status", "plan", "permissions", "context", "compact", "history", "export", "rename", "branch", "fork", "doctor", "tools", "settings", "memory", "init", "rewind" }.Contains(name)) throw new ArgumentException("技能名与内置命令冲突。");
     }
     public InstructionSkill Create(string name, string description, string instructions, string scope = "project")
     {
         ValidateName(name);
+        if (name == "browser-use") throw new ArgumentException("browser-use 是内置保留技能名，不能覆盖。");
         if (instructions.Length is 0 or > 32000 || description.Length is 0 or > 1000) throw new ArgumentException("描述或指令长度不正确。");
         var root = scope switch { "project" => ProjectDirectory, "user" => UserDirectory, _ => throw new ArgumentException("scope 必须为 project 或 user。") };
         Directory.CreateDirectory(root);
@@ -197,6 +252,7 @@ public sealed class SkillCatalog(DataStore store, string workspace, string dataD
     public void Remove(string name)
     {
         var skill = Get(name);
+        if (skill.Scope == "builtin") throw new ArgumentException("内置技能不能删除；可以使用 skills disable 禁用。");
         File.Delete(skill.Path);
         var dir = System.IO.Path.GetDirectoryName(skill.Path)!;
         if (!Directory.EnumerateFileSystemEntries(dir).Any()) Directory.Delete(dir);
@@ -214,6 +270,7 @@ public sealed class SkillCatalog(DataStore store, string workspace, string dataD
     {
         var skill = Get(name, true);
         if (!skill.ModelInvocable) throw new ArgumentException("此技能关闭了模型调用。");
+        if (skill.Scope == "builtin") throw new ArgumentException("此内置技能没有额外支持文件；使用 skill_read 读取完整说明。");
         if (string.IsNullOrEmpty(skill.Path)) throw new ArgumentException("此插件技能没有支持文件目录。");
         var root = System.IO.Path.GetDirectoryName(skill.Path)!;
         var path = new WorkspacePolicy(root).Resolve(relative);

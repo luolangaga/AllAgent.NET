@@ -49,7 +49,7 @@ def state():
         return {}
 class Terminal:
     def __init__(self):
-        self.proc = PtyProcess.spawn([str(root / "src/LanAgent.Terminal/bin/Release/net8.0/lanagent.exe"), "chat", "--workspace", str(workspace), "--data-dir", str(data), "--resume", session], cwd=str(root), dimensions=(32, 120))
+        self.proc = PtyProcess.spawn([str(root / "src/LanAgent.Terminal/bin/Release/net10.0/lanagent.exe"), "chat", "--workspace", str(workspace), "--data-dir", str(data), "--resume", session], cwd=str(root), dimensions=(32, 120))
         self.chunks = queue.Queue()
         self.screen = pyte.Screen(120, 32)
         self.stream = pyte.Stream(self.screen)

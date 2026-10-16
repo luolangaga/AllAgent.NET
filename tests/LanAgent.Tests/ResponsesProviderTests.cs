@@ -10,6 +10,43 @@ namespace LanAgent.Tests;
 
 public sealed class ResponsesProviderTests
 {
+    [Theory]
+    [InlineData("text-done", false)]
+    [InlineData("part-done", false)]
+    [InlineData("item-done", false)]
+    [InlineData("completed", false)]
+    [InlineData("text-done", true)]
+    public async Task ReasoningSnapshotsFillMissingDeltasWithoutDuplicatingStreamedText(string shape, bool streamed)
+    {
+        var item = new JsonObject { ["type"] = "reasoning", ["id"] = "r1", ["summary"] = new JsonArray(new JsonObject { ["type"] = "summary_text", ["text"] = "检查配置\n继续分析" }) };
+        var events = streamed ? Event(new { type = "response.reasoning_summary_text.delta", output_index = 0, summary_index = 0, delta = "检查配置\n" }) : "";
+        events += shape switch
+        {
+            "text-done" => Event(new { type = "response.reasoning_summary_text.done", output_index = 0, summary_index = 0, text = "检查配置\n继续分析" }),
+            "part-done" => Event(new { type = "response.reasoning_summary_part.done", output_index = 0, summary_index = 0, part = new { type = "summary_text", text = "检查配置\n继续分析" } }),
+            "item-done" => Event(new { type = "response.output_item.done", output_index = 0, item }), _ => ""
+        };
+        events += Event(new { type = "response.completed", response = new { status = "completed", output = new JsonArray(item.DeepClone()) } });
+        using var http = new HttpClient(new Handler(_ => new(HttpStatusCode.OK) { Content = new StringContent(events, Encoding.UTF8, "text/event-stream") }));
+        var thoughts = new StringBuilder();
+        await foreach (var chunk in new ResponsesProvider(http).StreamChatAsync(new(Config(), [new("user", "fixture")])))
+            if (chunk.Type == ChunkType.ThinkingDelta) thoughts.Append(chunk.TextDelta);
+        Assert.Equal("检查配置\n继续分析\n", thoughts.ToString());
+    }
+    [Fact]
+    public async Task AccountModelEffortsAreReadFromActualCatalogMetadata()
+    {
+        using var http = new HttpClient(new Handler(_ => new(HttpStatusCode.OK)
+        {
+            Content = new StringContent("""{"models":[{"slug":"new-model","visibility":"list","supported_reasoning_levels":[{"effort":"low"},{"effort":"ultra"}]},{"slug":"fixed-model","visibility":"list","supported_reasoning_levels":[]}]}""")
+        }));
+        var models = await new ResponsesProvider(http).ListModelsAsync(Config());
+        Assert.Equal(new[] { "low", "ultra" }, models[0].ReasoningLevels);
+        Assert.Empty(models[1].ReasoningLevels!);
+        var config = Config(); config.DefaultModel = "new-model"; ModelCatalog.Remember(config, models);
+        Assert.Equal(new[] { "default", "low", "ultra" }, ReasoningSettings.Efforts(config));
+    }
+
     private static ApiConfig Config() => new() { ProviderId = "codex", Protocol = "responses", BaseUrl = "https://api.openai.com/v1", DefaultModel = "account-model", ApiKey = "fixture-token", ReasoningEffort = "high", AuthenticationContextId = "account-A" };
     private static string Event(object value) => "data: " + System.Text.Json.JsonSerializer.Serialize(value) + "\n\n";
     [Fact]

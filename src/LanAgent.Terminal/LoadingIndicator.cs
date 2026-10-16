@@ -16,4 +16,5 @@ internal static class LoadingIndicator
         Name = Names.FirstOrDefault(item => item.Equals(name, StringComparison.OrdinalIgnoreCase)) ?? throw new ArgumentException("未知加载指示样式，使用 /spinner list 查看。");
     }
     public static string Frame(long milliseconds) => Current.Frames[(int)(milliseconds / Math.Max(1, Current.Interval.TotalMilliseconds) % Current.Frames.Count)];
+    public static string DotsFrame(long milliseconds) => Spinner.Known.Dots.Frames[(int)(milliseconds / Math.Max(1, Spinner.Known.Dots.Interval.TotalMilliseconds) % Spinner.Known.Dots.Frames.Count)];
 }

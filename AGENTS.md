@@ -6,9 +6,9 @@ Projects in `LanAgent.slnx`:
 
 | Project | Stack | Purpose |
 |---|---|---|
-| `src/LanAgent.Core` | .NET 8 class lib | Models, DataStore, AI providers, bridge, skills |
-| `src/LanAgent.Terminal` | .NET 8 + Spectre.Console | Main terminal Agent host |
-| `src/LanAgent.Sandbox` | .NET 8 + Microsoft.Agents.AI.Hyperlight | Isolated microVM worker; ships in host's `sandbox/` folder |
+| `src/LanAgent.Core` | .NET 10 class lib | Models, DataStore, AI providers, bridge, skills |
+| `src/LanAgent.Terminal` | .NET 10 + Spectre.Console | Main terminal Agent host |
+| `src/LanAgent.Sandbox` | .NET 10 + Microsoft.Agents.AI.Hyperlight | Isolated microVM worker; ships in host's `sandbox/` folder |
 | `src/LanAgent.ToolGenerator` | Roslyn incremental generator | AgentTool JSON Schema and typed dispatch |
 | `tests/LanAgent.Tests` | xUnit | Tool security, agent lifecycle and actual Hyperlight tests |
 | `src/LanAgent.Desktop` | Avalonia 11.2 + WebView | Windows desktop shell; embeds React frontend |
@@ -66,7 +66,7 @@ npx tsc --noEmit
 
 ## AI Providers
 
-Agent execution uses `AgentEngine` + `CodeActProvider`. Only `execute_code` is exposed to the LLM. Register typed C# tools with `[AgentTool]` and `[Description]`; the generator emits `IAgentToolSet`. Shell command strings/templates are disabled. `run_shell` requires a host allowlist, PowerShell 7.6, and per-call approval. All I/O stays in C# host tools. Missing Python/PowerShell/microVM support must block execution. See README.md for terminal commands, permissions, migration and library embedding.
+Agent execution uses `AgentEngine` + `CodeActProvider`. Only `execute_code` is exposed to the LLM. Register typed C# tools with `[AgentTool]` and `[Description]`; the generator emits `IAgentToolSet`. Shell command strings/templates are disabled. `run_shell` requires a host allowlist, the bundled PowerShell SDK worker, and per-call approval. All I/O stays in C# host tools. Missing Python/PowerShell/microVM support must block execution. See README.md for terminal commands, permissions, migration and library embedding.
 
 Four providers in `src/LanAgent.Core/Services/AI/`:
 - `openai` → `OpenAiProvider`
@@ -81,3 +81,5 @@ All implement `IAiProvider` with streaming chat via `IAsyncEnumerable<StreamChun
 App logs go to `%APPDATA%/LanAgent/lanagent.log`. Both `MainWindow` and `BridgeDispatcher` write here. Look here for bridge call debugging.
 
 
+
+PowerShell SDK 7.6.7 is embedded in `src/LanAgent.PowerShell` (.NET 10). Hosts ship its output in `powershell/`; system PowerShell is not required. `--pwsh` / `AgentOptions.PowerShellPath` override the SDK worker path, not a system pwsh executable. The Roslyn generator intentionally remains netstandard2.0.

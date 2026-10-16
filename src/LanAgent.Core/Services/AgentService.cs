@@ -32,6 +32,8 @@ public record AgentContextUsage(int UsedTokens, int CapacityTokens, bool Estimat
 public sealed class AgentService : IAsyncDisposable
 {
     public BackgroundTasks Jobs { get; }
+    public bool IsRunning(Guid conversationId) => _conversations.ContainsKey(conversationId);
+    public BrowserUseState BrowserUse => _options.BrowserUse;
     public async ValueTask DisposeAsync()
     {
         foreach (var id in _streams.Keys) CancelStream(id);
@@ -51,7 +53,11 @@ public sealed class AgentService : IAsyncDisposable
     public AgentService(DataStore store, AiProviderFactory providerFactory, AgentOptions options)
         : this(store, providerFactory, options, null) { }
     public AgentService(DataStore store, AiProviderFactory providerFactory, AgentOptions options, McpToolService? mcp)
-    { _store = store; _factory = providerFactory; _options = options; _mcp = mcp; Jobs = options.BackgroundTasks ?? new(); }
+    {
+        _store = store; _factory = providerFactory;
+        _options = options with { Skills = options.Skills ?? new SkillCatalog(store, options.WorkspaceRoot, options.SharedDirectory) };
+        _mcp = mcp; Jobs = options.BackgroundTasks ?? new(); _options.BrowserUse.Load(store);
+    }
 
     public string StartStream(Guid conversationId, string userMessage, ApiConfig config,
         Func<string, AgentEvent, Task> onEvent, CancellationToken externalCt = default)
@@ -67,19 +73,24 @@ public sealed class AgentService : IAsyncDisposable
             {
                 // Host-owned jobs remain inspectable after the parent turn completes.
                 var children = Jobs;
-                var runtimeOptions = _options with { BackgroundTasks = Jobs };
+                var runtimeOptions = _options with { BackgroundTasks = Jobs,
+                    InstructionsProvider = () => (_options.InstructionsProvider?.Invoke() ?? ProjectInstructions.Load(_options.WorkspaceRoot)) + "\n" + _options.Skills!.Instructions +
+                        "\nAvailable child agents:\n" + string.Join("\n", new AgentRoleCatalog(_store).List().Select(r => r.Name + ": " + r.Description)) };
                 await using var runtime = await AgentRuntime.CreateAsync(runtimeOptions, source.Token);
                 if (_mcp != null) runtime.Tools.Register(new McpToolSet(_mcp));
                 if (!_options.IsSubAgent)
                     runtime.Tools.Register(new AgentDelegationTools(children, (request, token) =>
                     {
+                        token.ThrowIfCancellationRequested();
                         var role = new AgentRoleCatalog(_store).Get(request.Agent);
+                        if (role.Execution?.MaxDepth == 0) throw new InvalidOperationException("This role disables child execution.");
                         if (!role.ReadOnly) _options.Checkpoints?.MarkExternalAction();
                         var selected = SubAgentModelSelection.Resolve(config, _store.ApiConfigs,
-                            role.Model ?? _store.GetSetting("subagents:model"), role.Provider ?? _store.GetSetting("subagents:provider"));
+                            request.Model ?? role.Model ?? _store.GetSetting("subagents:model"), request.Provider ?? role.Provider ?? _store.GetSetting("subagents:provider"));
+                        selected = (role.Execution ?? new()).Apply(selected);
                         var child = new Conversation { ParentConversationId = conversationId, WorkspaceRoot = _options.WorkspaceRoot, AgentRole = role.Name, Title = request.Description, ModelId = selected.DefaultModel };
                         _store.AddConversation(child);
-                        return Task.FromResult(children.Start(request.Description, child.Id, "agent", (job, ct) => RunChildAsync(child.Id, request.Prompt, selected, token, ct), conversationId, ownerToken: token));
+                        return Task.FromResult(children.Start(request.Description, child.Id, "agent", (job, ct) => RunChildAsync(child.Id, request.Prompt, selected, ct), conversationId));
                     }));
                 var probe = await runtime.ProbeSandboxAsync(source.Token);
                 if (!probe.Ok) throw new InvalidOperationException(probe.Error);
@@ -94,16 +105,21 @@ public sealed class AgentService : IAsyncDisposable
     }
 
     private async IAsyncEnumerable<AgentEvent> RunChildAsync(Guid conversationId, string task, ApiConfig config,
-        CancellationToken parentToken, [EnumeratorCancellation] CancellationToken ct)
+        [EnumeratorCancellation] CancellationToken ct)
     {
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(parentToken, ct);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var role = new AgentRoleCatalog(_store).Get(_store.GetConversation(conversationId)?.AgentRole ?? "general");
-        var rolePolicy = new SubAgentRolePolicy(() => role.ReadOnly, _options.WorkspaceRoot, _options.ExternalDirectoryPermissions, () => role);
-        var options = _options with
+        var settings = role.Execution ?? new SubAgentExecutionSettings();
+        var bounded = settings.Apply(_options);
+        linked.CancelAfter(bounded.RunTimeout);
+        using var slot = await SubAgentConcurrency.AcquireAsync(_store, role.Name, settings.MaxConcurrent, linked.Token);
+        var rolePolicy = new SubAgentRolePolicy(() => role.ReadOnly, _options.WorkspaceRoot, _options.ExternalDirectoryPermissions, () => role, parentTools: _options.HostToolsProvider);
+        var options = settings.Apply(_options) with
         {
             BackgroundTasks = Jobs,
             IsSubAgent = true,
             HostToolsProvider = () => role.Tools,
+            ConfigurationProvider = (_, current) => settings.Apply(current),
             FullAccess = _options.FullAccess && !role.ReadOnly,
             InvocationPolicy = (tool, arguments) => rolePolicy.Validate(tool, arguments) ?? _options.InvocationPolicy?.Invoke(tool, arguments),
             InvocationAuthorization = async (tool, arguments, token) => ( _options.InvocationAuthorization == null ? null : await _options.InvocationAuthorization(tool, arguments, token)) ?? await rolePolicy.AuthorizeAsync(tool, arguments, token),
@@ -111,12 +127,14 @@ public sealed class AgentService : IAsyncDisposable
             InstallationApprover = null,
             QuestionHandler = null,
             Approver = (request, _) => ValueTask.FromResult(request.Preapproved),
-            InstructionsProvider = () => (_options.InstructionsProvider?.Invoke() ?? ProjectInstructions.Load(_options.WorkspaceRoot)) +
+            InstructionsProvider = () => (settings.IncludeProjectInstructions ? (_options.InstructionsProvider?.Invoke() ?? ProjectInstructions.Load(_options.WorkspaceRoot)) : "") +
                 "\nYou are a delegated agent. Stay within your assigned task, report evidence and limitations, and do not spawn agents or ask the user. Return missing information and permission blockers to the parent in your final response. Do not bypass host permissions.\n" + role.Instructions
         };
         await using var runtime = await AgentRuntime.CreateAsync(options, linked.Token);
         if (_mcp != null) runtime.Tools.Register(new McpToolSet(_mcp));
-        var engine = new AgentEngine(_store, _factory.GetProvider(config), runtime.CodeAct, options);
+        var childProvider = new SubAgentAiProvider(new RequestRoutingAiProvider(_factory.GetProvider), settings,
+            current => SubAgentModelSelection.Resolve(current, _store.ApiConfigs, settings.FallbackModel, settings.FallbackProvider));
+        var engine = new AgentEngine(_store, childProvider, runtime.CodeAct, options);
         await foreach (var evt in engine.RunAsync(conversationId, task, config, linked.Token)) yield return evt;
     }
 
@@ -132,3 +150,5 @@ public sealed class AgentService : IAsyncDisposable
         if (completion != null) await completion.Task.WaitAsync(ct);
     }
 }
+
+public record AgentTokenUsage(long InputTokens, long OutputTokens) : AgentEvent;

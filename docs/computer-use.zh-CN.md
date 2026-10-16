@@ -110,7 +110,7 @@ dotnet build src/LanAgent.Terminal
 dotnet test tests/LanAgent.Tests --filter FullyQualifiedName~ComputerUseTests
 ```
 
-Terminal 构建、发布及 .NET Tool 打包均包含 `computer/` Worker。Core 保持 `net8.0`，Windows Worker 为 `net8.0-windows`；库调用者可用 `AgentOptions.ComputerUse.Configure(...)`，并设置 `WorkerPath`。FlaUI Worker 需要 Windows Desktop Runtime；其他 Agent 操作不因此要求该运行时。Worker 在专用 MTA 进程中运行，启用 PerMonitorV2 DPI。
+Terminal 构建、发布及 .NET Tool 打包均包含 `computer/` Worker。Core 保持 `net10.0`，Windows Worker 为 `net10.0-windows`；库调用者可用 `AgentOptions.ComputerUse.Configure(...)`，并设置 `WorkerPath`。FlaUI Worker 需要 Windows Desktop Runtime；其他 Agent 操作不因此要求该运行时。Worker 在专用 MTA 进程中运行，启用 PerMonitorV2 DPI。
 
 测试窗口专用于验证后台 SetValue、Invoke 和状态读取，不触碰用户已打开的软件。独立 VM 模式的真实端到端验收需要已配置的独立环境。
 

@@ -7,7 +7,21 @@ namespace LanAgent.Tests;
 
 public sealed class InputInboxTests
 {
-    internal const string Png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jI1kAAAAASUVORK5CYII=";
+    internal const string Png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC";
+    [Fact]
+    public async Task PlainInputSteersAndExplicitQueueWaitsBehindIt()
+    {
+        using var workspace = new TestWorkspace(); using var store = new DataStore(Path.Combine(workspace.Root, "data"));
+        var session = new Conversation(); store.AddConversation(session);
+        var inbox = new InputInbox(store, workspace.Root) { Session = session.Id };
+        await inbox.CommandAsync("/queue add next task", "");
+        var guidance = await inbox.EnqueueAsync("correct current task");
+        Assert.Equal("steer", guidance.Delivery);
+        Assert.Equal(guidance.Id, inbox.Next!.Id);
+        Assert.Equal("queue", inbox.Pending.Single(item => item.Id != guidance.Id).Delivery);
+        Assert.Equal("next task", inbox.Pending.Single(item => item.Delivery == "queue").Draft);
+    }
+
     [Fact]
     public void RestartPreservesImagesAndStepPromotionSeparatesQueuesFromSteers()
     {

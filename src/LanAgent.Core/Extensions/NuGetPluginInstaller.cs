@@ -15,7 +15,7 @@ public sealed class NuGetPluginInstaller(string dataDirectory, HttpClient? http 
 {
     private readonly HttpClient _http = http ?? new HttpClient { Timeout = TimeSpan.FromSeconds(45) };
     private readonly string _root = Path.Combine(Path.GetFullPath(dataDirectory), "plugins");
-    private static readonly NuGetFramework Target = NuGetFramework.ParseFolder("net8.0");
+    private static readonly NuGetFramework Target = NuGetFramework.ParseFolder("net10.0");
     private async Task<string> ResourceAsync(string type, CancellationToken ct)
     {
         using var doc = JsonDocument.Parse(await _http.GetStringAsync(source, ct));

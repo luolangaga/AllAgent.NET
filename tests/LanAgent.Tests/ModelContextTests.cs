@@ -12,6 +12,15 @@ namespace LanAgent.Tests;
 
 public sealed class ModelContextTests
 {
+    [Fact]
+    public void CodexPresetIsAvailableOfflineAndManualCapacityWinsOverDiscovery()
+    {
+        var config = new ApiConfig { ProviderId = "codex", DefaultModel = "gpt-6.1-sol" };
+        Assert.Equal(1050000, ModelContext.Capacity(config));
+        config.ModelLimits[config.DefaultModel] = new(1000000, 128000);
+        config.ModelContextWindows[config.DefaultModel] = 500000;
+        Assert.Equal(500000, ModelContext.Capacity(config));
+    }
     [Theory]
     [InlineData("100k", 100000)]
     [InlineData("200k", 200000)]

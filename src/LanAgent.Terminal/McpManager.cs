@@ -33,8 +33,9 @@ internal sealed class McpManager(DataStore store, McpToolService service, Termin
         var action = words.FirstOrDefault() ?? (ui.Interactive && !ui.Json ? "panel" : "list");
         if (action == "panel")
         {
-            List(); var choice = ManagementUi.Choose("MCP 管理", "返回", "添加", "编辑", "连接/重连", "断开", "查看工具", "启用", "禁用", "删除", "导入", "导出");
+            List(); var choice = ManagementUi.Choose("MCP 管理", "返回", "商店", "添加", "编辑", "连接/重连", "断开", "查看工具", "启用", "禁用", "删除", "导入", "导出");
             if (choice == "返回") return;
+            if (choice == "商店") { await ToolStorePage.Mcp(store, ui, [], ct); return; }
             action = choice switch { "添加" => "add", "编辑" => "edit", "连接/重连" => "connect", "断开" => "disconnect", "查看工具" => "tools", "启用" => "enable", "禁用" => "disable", "删除" => "remove", "导入" => "import", _ => "export" };
             if (action is "import" or "export") words = new[] { action, await ManagementUi.Text("JSON 文件路径") };
             else if (action != "add")
@@ -44,6 +45,7 @@ internal sealed class McpManager(DataStore store, McpToolService service, Termin
                 words = new[] { action, selected.Id };
             }
         }
+        if (action is "store" or "search") { await ToolStorePage.Mcp(store, ui, words.Skip(1).ToArray(), ct); return; }
         if (action == "list") { List(); return; }
         if (action == "add")
         {

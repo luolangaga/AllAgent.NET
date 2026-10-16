@@ -28,7 +28,7 @@ public static class ProviderCatalog
     };
     public static ProviderPreset? Find(string id) => All.FirstOrDefault(p => p.Id.Equals(id, StringComparison.OrdinalIgnoreCase)) ?? ModelCatalog.Providers.FirstOrDefault(p => p.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
     public static string ProtocolFor(ApiConfig config) => string.IsNullOrWhiteSpace(config.Protocol) ? Find(config.ProviderId)?.Protocol ?? config.ProviderId : config.Protocol;
-    public static string ReasoningFor(ApiConfig config) => config.ReasoningProtocol == "auto" ? Find(config.ProviderId)?.ReasoningProtocol ?? "none" : config.ReasoningProtocol;
+    public static string ReasoningFor(ApiConfig config) => ReasoningPolicy.Protocol(config);
     public static ApiConfig ResolveCredentials(ApiConfig config)
     {
         var copy = System.Text.Json.JsonSerializer.Deserialize<ApiConfig>(System.Text.Json.JsonSerializer.Serialize(config))!;

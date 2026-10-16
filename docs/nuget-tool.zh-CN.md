@@ -1,6 +1,6 @@
 # LanAgent .NET Tool
 
-Computer Use：`lanagent computer on|off|status`，聊天内 `/computer on|off|status` 控制总开关。AI 使用 `computer_mode` 自动选择三种模式，内置 `/computer-use` 技能指导操作；默认关闭，软件测试优先后台控件点击与文本输入。Worker 随工具包分发，需要 Windows .NET 8 Desktop Runtime。完整后台键鼠需独立 Windows 会话/虚拟机中的 Worker 和安全隧道，未配置时会明确报错。
+Computer Use：`lanagent computer on|off|status`，聊天内 `/computer on|off|status` 控制总开关。AI 使用 `computer_mode` 自动选择三种模式，内置 `/computer-use` 技能指导操作；默认关闭，软件测试优先后台控件点击与文本输入。Worker 随工具包分发，需要 Windows .NET 10 Desktop Runtime。完整后台键鼠需独立 Windows 会话/虚拟机中的 Worker 和安全隧道，未配置时会明确报错。
 
 LanAgent 的终端 AI Agent，安装后的命令为 `lanagent`。
 
@@ -8,7 +8,7 @@ LanAgent 的终端 AI Agent，安装后的命令为 `lanagent`。
 
 ## 环境要求
 
-目前 Agent 执行支持 Windows x64，需要 .NET 8 或更高版本运行时、硬件虚拟化和 Windows Hypervisor Platform。工具已启用主版本向前滚动，因此安装了较新 .NET 运行时的电脑也可启动它。安装工具仍需 .NET SDK 提供 `dotnet tool` 命令。执行前检查 PowerShell 7.6.x，缺少时提示通过 winget 安装，安装成功后要求重启 LanAgent。工具包自带 sandbox worker、Hyperlight 原生组件和 Python guest；宿主 Python 用于共享 pip 库，检查可执行性和 3.10–3.14 版本范围；缺少或版本不符时提示通过 winget 安装 Python 3.13，成功后要求重启软件。React 前端源码构建需要 Node.js 与 npm；终端代理执行不依赖 Node.js。
+目前 Agent 执行支持 Windows x64，需要 .NET 10 或更高版本运行时；优先使用 Hyperlight（需要硬件虚拟化和 Windows Hypervisor Platform），启动失败自动使用 Monty 软件沙箱（无需虚拟化，首次安装需要联网）。工具已启用主版本向前滚动，因此安装了较新 .NET 运行时的电脑也可启动它。安装工具仍需 .NET SDK 提供 `dotnet tool` 命令。工具包内嵌 PowerShell SDK 7.6.7，通过独立 worker 调用，无需安装系统 PowerShell。执行前自检 worker，缺失时需修复工具包。工具包自带 sandbox worker、Hyperlight 原生组件和 Python guest；宿主 Python 用于沙箱运行支持，检查可执行性和 3.10–3.14 版本范围；缺少或版本不符时提示通过 winget 安装 Python 3.13，成功后要求重启软件。React 前端源码构建需要 Node.js 与 npm；终端代理执行不依赖 Node.js。
 
 ## 安装与使用
 

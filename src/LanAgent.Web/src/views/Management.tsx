@@ -12,6 +12,7 @@ import { useMcpServersStore } from '../stores/mcpServers'
 import { useSettingsStore } from '../stores/settings'
 import { invoke } from '../bridge'
 import type { ApiConfig, McpServerConfig } from '../types'
+import { AgentRoles } from './AgentRoles'
 
 type Props = { report: (error: unknown) => void }
 function useAction(report: Props['report']) {
@@ -97,8 +98,10 @@ export function Preferences({ report }: Props) {
   const action = useAction(report)
   const [saved, setSaved] = useState(false)
   return <Page eyebrow="YOUR WORKSPACE" title="按你的习惯，开始工作。" description="调整外观和默认模型，设置会保存在桌面后端。" action={<Button loading={action.busy} icon={saved ? <CheckCircle2 size={16} /> : <Settings2 size={16} />} onClick={() => void action.run(() => settings.save()).then(ok => { setSaved(ok); setTimeout(() => setSaved(false), 2000) })}>{saved ? '已保存' : '保存设置'}</Button>}>
+    <div className="settings-group"><h3>Browser Use</h3><div className="setting-row"><div><strong>浏览器操作</strong><p>默认开启，内置窗口使用系统 WebView2 Runtime。保存设置后生效；关闭会中止操作。</p></div><Switch checked={settings.browserUseEnabled} onCheckedChange={v => { settings.browserUseEnabled = v }} aria-label="Browser Use" /></div><Picker label="浏览器模式" value={settings.browserUseMode} onChange={v => { settings.browserUseMode = v as 'builtin' | 'chromium' }} options={[{ value: 'builtin', label: '内置浏览器 · 使用时自动打开窗口' }, { value: 'chromium', label: '外置 Chromium · 手动连接' }]} />{settings.browserUseMode === 'chromium' && <><p>终端输入 /browser connect 获取逐步连接向导；输入 /browser tutorial 查看详细教程。外置浏览器需手动启动并连接 CDP 地址。</p><Field label="本机 CDP 地址（例如 http://127.0.0.1:9222）" value={settings.browserCdpUrl} onChange={v => { settings.browserCdpUrl = v }} /><Field label="浏览器路径（用于手动启动，连接请填写 CDP）" value={settings.browserExecutablePath} onChange={v => { settings.browserExecutablePath = v }} /></>}</div>
     <div className="settings-group"><h3>外观</h3><div className="setting-row"><div><strong>主题</strong><p>浅色、深色，或跟随系统外观。</p></div><div className="setting-control"><Picker label="主题" value={settings.theme} onChange={v => { settings.theme = v as typeof settings.theme }} options={[{ value: 'light', label: '浅色' }, { value: 'dark', label: '深色' }, { value: 'system', label: '跟随系统' }]} /></div></div></div>
     <div className="settings-group"><h3>语言偏好</h3><div className="setting-control"><Picker label="语言偏好" value={settings.language} onChange={v => { settings.language = v as typeof settings.language }} options={[{ value: 'zh', label: '中文' }, { value: 'en', label: 'English' }]} /></div></div><div className="settings-group"><h3>模型默认值</h3><Field label="默认提供商" value={settings.defaultProviderId} onChange={v => { settings.defaultProviderId = v }} /><Field label="默认模型" value={settings.defaultModel} onChange={v => { settings.defaultModel = v }} /><div className="setting-row"><div><strong>流式输出</strong><p>保存后由后端应用此偏好。</p></div><Switch checked={settings.streamingEnabled} onCheckedChange={v => { settings.streamingEnabled = v }} aria-label="流式输出" /></div></div>
+    <AgentRoles report={report} />
     <div className="about-strip"><div className="brand-symbol"><Blocks size={20} /></div><div><strong>LanAgent</strong><p>本地 Agent 工作空间 · 界面由 Iconiq UI 构建</p></div><Badge>React + .NET</Badge></div>
   </Page>
 }

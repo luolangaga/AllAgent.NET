@@ -20,13 +20,14 @@ public record TaskParams(string Id);
 public record SkillDto(Guid Id, string Name, string Description, string ParametersJson, string? CommandTemplate, string Type, bool IsEnabled);
 public record ApiConfigDto(Guid Id, string ProviderId, string DisplayName, string BaseUrl, string ApiKey, string DefaultModel, double Temperature, int MaxTokens, bool IsEnabled, string? ExtraHeadersJson, bool ThinkingEnabled, int ThinkingBudget);
 public record McpServerConfigDto(string Id, string Name, string Command, string Arguments, bool IsEnabled, DateTime CreatedAt);
-public record SettingsDto(string Theme, string Language, string DefaultModel, bool StreamingEnabled, string DefaultProviderId);
+public record SettingsDto(string Theme, string Language, string DefaultModel, bool StreamingEnabled, string DefaultProviderId, bool BrowserUseEnabled = true, string BrowserUseMode = "builtin", string BrowserExecutablePath = "", string BrowserCdpUrl = "");
 
 // Request params
 public record CreateConversationParams(string Title = "New Conversation");
 public record RenameConversationParams(Guid Id, string Title);
 public record DeleteConversationParams(Guid Id);
 public record GetMessagesParams(Guid ConversationId);
+public record SetTodosParams(Guid ConversationId, List<TodoItem> Todos);
 public record StartStreamParams(Guid ConversationId, string Message, Guid ApiConfigId, bool ThinkingEnabled = false, int ThinkingBudget = 8000);
 public record CancelStreamParams(string StreamId);
 public record ImportSkillParams(string Json);
@@ -36,7 +37,7 @@ public record DeleteSkillParams(Guid Id);
 public record SaveApiConfigParams(Guid? Id, string ProviderId, string DisplayName, string BaseUrl, string ApiKey, string DefaultModel, double Temperature, int MaxTokens, bool IsEnabled, string? ExtraHeadersJson, bool ThinkingEnabled = false, int ThinkingBudget = 8000);
 public record DeleteApiConfigParams(Guid Id);
 public record TestApiConfigParams(Guid Id);
-public record SaveSettingsParams(string Theme, string Language, string DefaultModel, bool StreamingEnabled, string DefaultProviderId);
+public record SaveSettingsParams(string Theme, string Language, string DefaultModel, bool StreamingEnabled, string DefaultProviderId, bool BrowserUseEnabled = true, string BrowserUseMode = "builtin", string BrowserExecutablePath = "", string BrowserCdpUrl = "");
 public record SaveMcpServerConfigParams(string? Id, string Name, string Command, string Arguments, bool IsEnabled);
 public record DeleteMcpServerConfigParams(string Id);
 public record ConnectMcpServerParams(string Id);
@@ -74,6 +75,12 @@ public class BridgeHandlerRegistrar
         _dispatcher.Register<RenameConversationParams, bool>("conversations.rename", RenameConversationAsync);
         _dispatcher.Register<DeleteConversationParams, bool>("conversations.delete", DeleteConversationAsync);
         _dispatcher.Register<GetMessagesParams, List<MessageDto>>("conversations.getMessages", GetMessagesAsync);
+        _dispatcher.Register<GetMessagesParams, IReadOnlyList<TodoItem>>("todos.get", (p, ct) => Task.FromResult(_store.GetTodos(p.ConversationId)));
+        _dispatcher.Register<SetTodosParams, IReadOnlyList<TodoItem>>("todos.set", (p, ct) =>
+        {
+            if (_agentService.IsRunning(p.ConversationId)) throw new InvalidOperationException("请先停止当前生成再编辑 TODO。");
+            return Task.FromResult(_store.SetTodos(p.ConversationId, p.Todos));
+        });
 
         // Chat streaming
         _dispatcher.Register<StartStreamParams, string>("chat.startStream", StartStreamAsync);
@@ -95,6 +102,12 @@ public class BridgeHandlerRegistrar
         _dispatcher.Register<TestApiConfigParams, bool>("apiConfigs.test", TestApiConfigAsync);
 
         // Settings
+        _dispatcher.Register<IReadOnlyList<AgentRoleDefinition>>("agents.list", ct => Task.FromResult(new AgentRoleCatalog(_store).List()));
+        _dispatcher.Register<ImportSkillParams, bool>("agents.import", (p, ct) =>
+        {
+            new AgentRoleCatalog(_store).Import(p.Json);
+            return Task.FromResult(true);
+        });
         _dispatcher.Register<SettingsDto>("settings.get", (ct) => GetSettingsAsync(ct));
         _dispatcher.Register<SaveSettingsParams, bool>("settings.save", SaveSettingsAsync);
 
@@ -399,12 +412,17 @@ private Task<SettingsDto> GetSettingsAsync(CancellationToken ct)
             settings.GetValueOrDefault("language", "zh"),
             settings.GetValueOrDefault("defaultModel", ""),
             settings.GetValueOrDefault("streamingEnabled", "true") == "true",
-            settings.GetValueOrDefault("defaultProviderId", "")
+            settings.GetValueOrDefault("defaultProviderId", ""),
+            _agentService.BrowserUse.Snapshot().Configuration.Enabled,
+            _agentService.BrowserUse.Snapshot().Configuration.Mode,
+            _agentService.BrowserUse.Snapshot().Configuration.ExecutablePath,
+            _agentService.BrowserUse.Snapshot().Configuration.CdpUrl
         ));
     }
 
     private Task<bool> SaveSettingsAsync(SaveSettingsParams p, CancellationToken ct)
     {
+        _agentService.BrowserUse.Save(_store, new(p.BrowserUseEnabled, p.BrowserUseMode, p.BrowserExecutablePath, p.BrowserCdpUrl));
         _store.SetSetting("theme", p.Theme);
         _store.SetSetting("language", p.Language);
         _store.SetSetting("defaultModel", p.DefaultModel);

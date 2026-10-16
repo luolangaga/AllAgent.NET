@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using LanAgent.Core.Tools;
 
 namespace LanAgent.Core.Runtime;
@@ -46,16 +45,17 @@ public sealed class EnvironmentDoctor
             catch (Exception ex) when (ex is not OperationCanceledException) { }
         }
         if (pythonPath == null) problems.Add("共享 pip 库需要可执行的 Python 3.10–3.14；缺少或版本不符时将通过 winget 安装 Python 3.13。");
-        var powershell = pwsh ?? _find("pwsh.exe") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "PowerShell", "7", "pwsh.exe");
+        var powershell = pwsh ?? Path.Combine(AppContext.BaseDirectory, "powershell", "LanAgent.PowerShell.exe");
         string? powershellPath = null;
         try
         {
-            var output = await _run(BoundedProcess.StartInfo(powershell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.ToString()"]), TimeSpan.FromSeconds(10), ct);
-            if (output.ExitCode == 0 && Version.TryParse(output.Stdout.Trim(), out var version) && version.Major == 7 && version.Minor == 6)
+            var output = await _run(BoundedProcess.StartInfo(powershell, ["--probe"]), TimeSpan.FromSeconds(30), ct);
+            using var probe = JsonDocument.Parse(output.Stdout);
+            if (output.ExitCode == 0 && probe.RootElement.GetProperty("runtime").GetString() == "LanAgent.PowerShell.SDK")
                 powershellPath = Path.GetFullPath(powershell);
         }
         catch (Exception ex) when (ex is not OperationCanceledException) { }
-        if (powershellPath == null) problems.Add("未安装可用的 PowerShell 7.6。将通过 winget 安装 PowerShell 7.6，安装完成后请重启 LanAgent。");
+        if (powershellPath == null) problems.Add("随包 PowerShell SDK worker 不可用，请修复或重新安装 LanAgent；无需安装系统 PowerShell。");
         return new(pythonPath, powershellPath, problems);
     }
 
@@ -64,21 +64,15 @@ public sealed class EnvironmentDoctor
     {
         var environment = await CheckAsync(python, pwsh, ct);
         if (environment.Ready) return environment;
+        if (environment.PowerShell == null) throw new InvalidOperationException(string.Join("; ", environment.Problems));
         var installed = new List<string>();
-        foreach (var package in new[] { environment.Python == null ? "Python.Python.3.13" : null, environment.PowerShell == null ? "Microsoft.PowerShell" : null }.Where(package => package != null))
+        foreach (var package in new[] { environment.Python == null ? "Python.Python.3.13" : null }.Where(package => package != null))
         {
-            var name = package == "Microsoft.PowerShell" ? "PowerShell 7.6" : "Python 3.13";
+            var name = "Python 3.13";
             if (!await confirmInstall($"将安装 {name}，并通过 winget 安装，安装完成之后请关闭并重新启动 LanAgent。", ct))
                 throw new InvalidOperationException("安装未获同意，Agent 保持停用。");
             var winget = _find("winget.exe") ?? throw new InvalidOperationException("未找到 winget。请安装 App Installer 后重试。");
             var installArgs = new List<string> { "install", "--id", package!, "--exact", "--source", "winget", "--silent", "--accept-source-agreements", "--accept-package-agreements" };
-            if (package == "Microsoft.PowerShell")
-            {
-                var available = await _run(BoundedProcess.StartInfo(winget, ["show", "--id", package, "--exact", "--source", "winget", "--versions", "--accept-source-agreements"]), TimeSpan.FromSeconds(60), ct);
-                var version = Regex.Matches(available.Stdout, @"(?m)^\s*(7\.6\.\d+)\s*$").Select(m => Version.Parse(m.Groups[1].Value)).OrderByDescending(v => v).FirstOrDefault();
-                if (available.ExitCode != 0 || version == null) throw new InvalidOperationException("winget 未提供 PowerShell 7.6.x。请手动安装指定版本；Agent 保持停用。");
-                installArgs.AddRange(["--version", version.ToString()]);
-            }
             var result = await _run(BoundedProcess.StartInfo(winget, installArgs), TimeSpan.FromMinutes(10), ct);
             if (result.ExitCode != 0) throw new InvalidOperationException($"winget 安装 {name} 失败：{ToolResult.Clip(result.Stderr + result.Stdout)}");
             installed.Add(name);

@@ -19,7 +19,7 @@ public sealed class ImageEngineTests
     {
         using var workspace = new TestWorkspace(); using var store = new DataStore(Path.Combine(workspace.Root, "screenshot-data"));
         var session = new Conversation(); store.AddConversation(session);
-        var image = ImageAttachment.FromBytes("window.png", Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jI1kAAAAASUVORK5CYII="));
+        var image = ImageAttachment.FromBytes("window.png", Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC"));
         var provider = new ScreenshotProvider(); await using var runtime = await AgentRuntime.CreateAsync(workspace.Options);
         runtime.Tools.Register(new ScreenshotTool(image));
         var engine = new AgentEngine(store, provider, runtime.CodeAct, workspace.Options);
@@ -39,7 +39,7 @@ public sealed class ImageEngineTests
     {
         using var workspace = new TestWorkspace(); using var store = new DataStore(Path.Combine(workspace.Root, "image-data"));
         var session = new Conversation(); store.AddConversation(session);
-        var image = ImageAttachment.FromBytes("pixel.png", Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jI1kAAAAASUVORK5CYII="));
+        var image = ImageAttachment.FromBytes("pixel.png", Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC"));
         await File.WriteAllBytesAsync(Path.Combine(workspace.Root, "pixel.png"), Convert.FromBase64String(image.Base64));
         var provider = new ScreenshotProvider("print(call_tool('file_read', path='pixel.png'))");
         await using var runtime = await AgentRuntime.CreateAsync(workspace.Options);
@@ -69,7 +69,7 @@ public sealed class ImageEngineTests
     {
         using var workspace = new TestWorkspace(); using var store = new DataStore(Path.Combine(workspace.Root, "data"));
         var session = new Conversation(); store.AddConversation(session);
-        var image = ImageAttachment.FromBytes("pixel.png", Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jI1kAAAAASUVORK5CYII="));
+        var image = ImageAttachment.FromBytes("pixel.png", Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC"));
         var provider = new Provider(); await using var runtime = await AgentRuntime.CreateAsync(workspace.Options);
         var engine = new AgentEngine(store, provider, runtime.CodeAct, workspace.Options);
         var config = new ApiConfig { DefaultModel = "fixture" };

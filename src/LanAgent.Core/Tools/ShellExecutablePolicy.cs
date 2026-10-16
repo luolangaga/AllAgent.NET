@@ -18,7 +18,7 @@ public static class ShellExecutablePolicy
 
     /// <summary>Resolves an installed program for execution. Explicit aliases are preapproved; all other programs need a per-call approval.</summary>
     public static bool TryResolveForExecution(IReadOnlyDictionary<string, string> allowlist, string requested,
-        string? trustedPowerShell, out string executable, out bool preapproved)
+        out string executable, out bool preapproved)
     {
         executable = "";
         preapproved = false;
@@ -29,13 +29,6 @@ public static class ShellExecutablePolicy
         {
             executable = Path.GetFullPath(candidates[0]);
             preapproved = true;
-            return true;
-        }
-
-        // EnvironmentDoctor may have found PowerShell 7.6 by its standard install path even when PATH is stale.
-        if (trustedPowerShell != null && (requested.Equals("pwsh", StringComparison.OrdinalIgnoreCase) || requested.Equals("pwsh.exe", StringComparison.OrdinalIgnoreCase)) && IsValid(trustedPowerShell))
-        {
-            executable = Path.GetFullPath(trustedPowerShell);
             return true;
         }
 

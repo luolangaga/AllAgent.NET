@@ -103,15 +103,30 @@ export async function invoke<T = unknown>(method: string, params?: unknown): Pro
 }
 
 // Mock data for development without the C# backend
+let mockAgentRoles: unknown[] = [{ name: 'general', description: '通用实现和研究', instructions: 'Complete the delegated task.', readOnly: false, execution: { maxConcurrent: 6, maxDepth: 1, failurePolicy: 'return' } }]
+const mockTodos = new Map<string, unknown[]>()
 function getMockResponse(method: string, _params?: unknown): unknown {
   switch (method) {
     case 'conversations.list': return []
     case 'conversations.create': return { id: crypto.randomUUID(), title: 'New Conversation', modelId: '', providerId: '', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
     case 'conversations.getMessages': return []
+    case 'todos.get': return structuredClone(mockTodos.get((_params as { conversationId: string }).conversationId) ?? [])
+    case 'todos.set': {
+      const p = _params as { conversationId: string; todos: unknown[] }
+      mockTodos.set(p.conversationId, structuredClone(p.todos))
+      return structuredClone(p.todos)
+    }
     case 'skills.list': return []
     case 'mcpServers.list': return []
     case 'apiConfigs.list': return []
-    case 'settings.get': return { theme: 'system', language: 'zh', defaultModel: '', streamingEnabled: true, defaultProviderId: '' }
+    case 'agents.list': return structuredClone(mockAgentRoles)
+    case 'agents.import': {
+      const parsed: unknown = JSON.parse((_params as { json: string }).json)
+      if (!Array.isArray(parsed)) throw new Error('角色配置必须为数组')
+      mockAgentRoles = parsed
+      return true
+    }
+    case 'settings.get': return { browserUseEnabled: true, browserUseMode: 'builtin', browserExecutablePath: '', browserCdpUrl: '', theme: 'system', language: 'zh', defaultModel: '', streamingEnabled: true, defaultProviderId: '' }
     case 'chat.startStream': throw new Error('浏览器预览无法执行 Agent，请在桌面应用中发送消息。')
     default: throw new Error(`浏览器预览不支持 ${method}，请连接桌面后端。`)
   }

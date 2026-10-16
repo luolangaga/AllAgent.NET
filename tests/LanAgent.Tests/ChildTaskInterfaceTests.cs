@@ -64,7 +64,7 @@ public sealed class ChildTaskInterfaceTests
             var console = new TestConsole(); console.Profile.Width = 120; console.Write(view);
             Assert.Contains("CHILD-REQUEST", console.Output); Assert.Contains("EARLIER-REPLY", console.Output);
             Assert.Contains("LIVE-REPLY", console.Output); Assert.Contains("LIVE-THOUGHT", console.Output);
-            Assert.Contains("visible.txt", console.Output); Assert.Contains("(2 行)", console.Output);
+            Assert.Contains("visible.txt", console.Output); Assert.Contains("（2行）", console.Output);
             var block = new CodeExecutionBlock("parent-code", "call_tool('start_agent')")
             { TaskLookup = tasks.Get, TaskTranscript = _ => view };
             block.Start(new("start", "start_agent", "{}"));

@@ -11,6 +11,7 @@ public sealed record BackgroundTaskInfo(string Id, string Title, Guid SessionId,
     public string? FinalOutput { get; init; }
     public string? OwnerId { get; init; }
     public Guid? ParentSessionId { get; init; }
+    public string? ParentToolCallId { get; init; }
     public bool NotifyParent { get; init; }
     public bool NotificationDelivered { get; init; }
     public string? CurrentStep { get; init; }
@@ -78,6 +79,22 @@ public sealed class BackgroundTasks : IAsyncDisposable
     public IReadOnlyList<BackgroundTaskInfo> List { get { lock (_sync) return (_readOnly ? ReadRecords() : _jobs.Values.Select(j => j.Info)).OrderByDescending(j => j.CreatedAt).ToArray(); } }
     public static bool IsActive(BackgroundTaskState state) => state is BackgroundTaskState.Queued or BackgroundTaskState.Running or BackgroundTaskState.AwaitingAnswer or BackgroundTaskState.AwaitingApproval or BackgroundTaskState.Cancelling;
     public bool Active { get { lock (_sync) return _jobs.Values.Any(j => IsActive(j.Info.State)); } }
+    public bool IsSessionRunning(Guid session)
+    {
+        lock (_sync) return _jobs.Values.Any(j => j.Info.SessionId == session && IsActive(j.Info.State) && !j.Task.IsCompleted);
+    }
+    /// <summary>Accept direct chat input under the completion lock so it cannot miss the final inbox drain.</summary>
+    public bool TryPostInput(Guid session, Action admit)
+    {
+        lock (_sync)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_readOnly) throw new InvalidOperationException("任务快照只读。");
+            if (!IsSessionRunning(session)) return false;
+            admit();
+            return true;
+        }
+    }
     private Running Find(string selector)
     { lock (_sync) return _jobs.Values.SingleOrDefault(j => j.Info.Id.StartsWith(selector, StringComparison.OrdinalIgnoreCase)) ?? throw new ArgumentException("任务 ID 未唯一匹配。"); }
     public BackgroundTaskInfo Get(string id) { lock (_sync) return _readOnly ? List.Single(j => j.Id.StartsWith(id, StringComparison.OrdinalIgnoreCase)) : Find(id).Info; }
@@ -112,7 +129,7 @@ public sealed class BackgroundTasks : IAsyncDisposable
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (_readOnly) throw new InvalidOperationException("任务快照只读。");
             var id = Guid.NewGuid().ToString("N"); var now = DateTimeOffset.UtcNow;
-            var job = new Running(new(id, ToolResult.Clip(title, 120), session, kind, _slots == null ? BackgroundTaskState.Running : BackgroundTaskState.Queued, now, now) { ParentSessionId = parentSession, OwnerId = _ownerId }) { AllowsSteer = continueAfterStop != null, Cancellation = CancellationTokenSource.CreateLinkedTokenSource(ownerToken) }; _jobs.Add(id, job); Save();
+            var job = new Running(new(id, ToolResult.Clip(title, 120), session, kind, _slots == null ? BackgroundTaskState.Running : BackgroundTaskState.Queued, now, now) { ParentSessionId = parentSession, ParentToolCallId = LanAgent.Core.Runtime.AgentExecutionScope.ToolCallId, OwnerId = _ownerId }) { AllowsSteer = continueAfterStop != null, Cancellation = CancellationTokenSource.CreateLinkedTokenSource(ownerToken) }; _jobs.Add(id, job); Save();
             job.Task = Task.Run(async () =>
             {
                 var acquired = false;
@@ -237,7 +254,11 @@ public sealed class BackgroundTasks : IAsyncDisposable
         string[] ids;
         lock (_sync) ids = _jobs.Values.Where(j => j.Info.SessionId == session && IsActive(j.Info.State)).Select(j => j.Info.Id).ToArray();
         foreach (var id in ids) Cancel(id);
-        await Task.WhenAll(ids.Select(id => WaitAsync(id, ct)));
+        try { await Task.WhenAll(ids.Select(id => WaitAsync(id, ct))).WaitAsync(TimeSpan.FromSeconds(5), ct); }
+        catch (TimeoutException)
+        {
+            throw new TimeoutException("旧任务未在 5 秒内退出；已返回输入界面。任务仍处于取消中，不能同时写入该会话。可用 /tasks 查看，或切换到其他会话。任务：" + string.Join(", ", ids));
+        }
     }
     public async Task<BackgroundTaskInfo> WaitAsync(string id, CancellationToken ct = default) { var job = Find(id); await job.Task.WaitAsync(ct); return Get(id); }
     public void NotifyParentOnCompletion(string id)

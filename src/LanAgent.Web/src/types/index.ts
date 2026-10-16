@@ -1,5 +1,11 @@
 // Shared TypeScript types for the frontend
 
+export interface TodoItem {
+  id: string
+  content: string
+  status: 'pending' | 'in_progress' | 'completed'
+}
+
 export interface Conversation {
   id: string
   title: string
@@ -62,6 +68,10 @@ export interface ApiConfig {
 }
 
 export interface AppSettings {
+  browserUseEnabled: boolean
+  browserUseMode: 'builtin' | 'chromium'
+  browserExecutablePath: string
+  browserCdpUrl: string
   theme: 'light' | 'dark' | 'system'
   language: 'zh' | 'en'
   defaultModel: string

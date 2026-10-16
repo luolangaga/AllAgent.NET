@@ -6,16 +6,19 @@ namespace LanAgent.Core.Tools;
 
 public partial class SystemTools
 {
-    [AgentTool("file_read"), Description("Read text by 1-based line number, or attach a PNG/JPEG/GIF/WebP image. Text returns complete lines within 2000-line/20000-byte budgets and nextOffset for continuation. Oversized single lines support column_offset pagination. External paths require directory approval.")]
+    [AgentTool("file_read"), Description("Read text by 1-based line number, or attach a PNG/JPEG/GIF/WebP image. Text returns complete lines within configured line/byte budgets and nextOffset for continuation. Oversized single lines support column_offset pagination. External paths require directory approval.")]
     public async Task<ToolResult> ReadAsync([Description("Relative or absolute file path")] string path,
         [Description("Starting line number, 1-based")] int offset = 1,
         [Description("Positive requested line count; large requests are paginated by the output budget")] int limit = ToolOutputWindow.MaxLines,
         CancellationToken ct = default,
-        [Description("Character offset within an oversized single line, zero-based; use nextColumnOffset to continue")] int column_offset = 0)
+        [Description("Character offset within an oversized single line, zero-based; use nextColumnOffset to continue")] int column_offset = 0,
+        [Description("Requested byte budget, 256 or more up to the configured host limit; 0 uses the host limit")] int max_bytes = 0)
     {
         ct.ThrowIfCancellationRequested();
         if (offset < 1 || limit < 1 || column_offset < 0)
             return ToolResult.Failure("offset is a positive 1-based line number, limit must be positive, and column_offset must be nonnegative.");
+        if (max_bytes < 0 || max_bytes is > 0 and < 256 || max_bytes > fileReadMaxBytes) return ToolResult.Failure($"max_bytes must be 0 (host default) or 256–{fileReadMaxBytes}.");
+        var byteLimit = max_bytes == 0 ? fileReadMaxBytes : max_bytes;
         var target = workspace.Resolve(path);
         if (!File.Exists(target)) return ToolResult.Failure("Read path must be an existing file.");
         await using (var probe = File.OpenRead(target))
@@ -24,7 +27,7 @@ public partial class SystemTools
             if (count == 12 && IsImage(header))
             {
                 var attachment = await ImageAttachment.ReadAsync(target, ct);
-                return ToolResult.Success(new { path, mediaType = attachment.MediaType, image = true, note = "Image attached to the next model request." }) with { Images = [attachment] };
+                return ToolResult.Success(new { path, mediaType = attachment.MediaType, image = true, note = "Image attached to the next model request.", processingNote = attachment.ProcessingNote }) with { Images = [attachment] };
             }
         }
         using var reader = new StreamReader(target, new UTF8Encoding(false, true), true);
@@ -45,15 +48,15 @@ public partial class SystemTools
             }
             var bytes = Encoding.UTF8.GetByteCount(line);
             var jsonBytes = ToolOutputWindow.JsonBytes(line);
-            if (outputLines == Math.Min(limit, ToolOutputWindow.MaxLines)) { truncatedBy = "lines"; stopped = true; continue; }
-            if (bytes + outputBytes + (outputLines > 0 ? 1 : 0) > ToolOutputWindow.MaxBytes ||
-                jsonBytes + outputJsonBytes + (outputLines > 0 ? 2 : 0) > ToolOutputWindow.MaxBytes)
+            if (outputLines == Math.Min(limit, fileReadMaxLines)) { truncatedBy = "lines"; stopped = true; continue; }
+            if (bytes + outputBytes + (outputLines > 0 ? 1 : 0) > byteLimit ||
+                jsonBytes + outputJsonBytes + (outputLines > 0 ? 2 : 0) > byteLimit)
             {
                 truncatedBy = "bytes"; stopped = true;
                 if (outputLines == 0)
                 {
                     firstLineExceedsLimit = true;
-                    var fragment = ToolOutputWindow.JsonHead(line);
+                    var fragment = ToolOutputWindow.JsonHead(line, byteLimit);
                     selected.Append(fragment); outputBytes = Encoding.UTF8.GetByteCount(fragment); outputLines = 1;
                     nextColumnOffset = column_offset + fragment.Length; nextOffset = offset;
                 }
@@ -71,7 +74,7 @@ public partial class SystemTools
         var notice = nextColumnOffset != null ? $"Line {offset} exceeds the byte budget. Continue with offset={offset}, column_offset={nextColumnOffset}." :
             truncated ? $"Continue with offset={nextOffset} (line number)." : "End of file.";
         return ToolResult.Success(new { path, content = selected.ToString(), offset, nextOffset, totalLines = lineNumber, outputLines, outputBytes,
-            nextColumnOffset, firstLineExceedsLimit, truncatedBy, notice }, truncated);
+            nextColumnOffset, firstLineExceedsLimit, truncatedBy, notice, byteLimit, lineLimit = Math.Min(limit, fileReadMaxLines), remainingLines = Math.Max(0, lineNumber - nextOffset + 1) }, truncated);
     }
 
     private static bool IsImage(byte[] header) =>

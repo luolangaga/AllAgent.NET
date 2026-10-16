@@ -6,13 +6,14 @@ namespace LanAgent.Core.Services;
 
 public sealed record AgentPermissionRule(string Action, string Resource, string Effect);
 public sealed record AgentRoleDefinition(string Name, string Description, string Instructions, bool ReadOnly = false, string? Model = null, string? Provider = null,
-    IReadOnlyList<AgentPermissionRule>? Permissions = null, IReadOnlyList<string>? Tools = null);
+    IReadOnlyList<AgentPermissionRule>? Permissions = null, IReadOnlyList<string>? Tools = null,
+    SubAgentExecutionSettings? Execution = null);
 
 /// <summary>Persisted role instructions and defaults; roles cannot extend the parent's permissions.</summary>
 public sealed class AgentRoleCatalog(DataStore store)
 {
     private const string Key = "agents:roles";
-    private static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, PropertyNameCaseInsensitive = true };
+    private static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, PropertyNameCaseInsensitive = true, UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow };
     private static readonly AgentRoleDefinition[] Builtins = [
         new("general", "Implementation and research", "You are General: implement and research the delegated task using the parent's host permission mode."),
         new("explore", "Read-only codebase search and analysis", "You are Explore: search and analyze only. Return absolute file paths and evidence. Do not create, modify, delete, move or copy files.", true),
@@ -43,6 +44,7 @@ public sealed class AgentRoleCatalog(DataStore store)
         }
     }
     public AgentRoleDefinition Get(string name) => List().SingleOrDefault(role => role.Name == name) ?? throw new ArgumentException("Unknown agent role: " + name);
+    public static void Validate(string json) => Read(json);
     public void Import(string json)
     {
         var incoming = Read(json);
@@ -70,6 +72,7 @@ public sealed class AgentRoleCatalog(DataStore store)
             throw new ArgumentException("Agent 角色数量超限或名称重复。");
         foreach (var role in roles)
         {
+            role.Execution?.Validate();
             if (role.Name == null || !Regex.IsMatch(role.Name, "^[a-z][a-z0-9_-]{0,63}\\z") || string.IsNullOrWhiteSpace(role.Description) || role.Description.Length > 120 || string.IsNullOrWhiteSpace(role.Instructions) || role.Instructions.Length > 32000 || role.Model?.Length > 256 || role.Provider?.Length > 256)
                 throw new ArgumentException("Agent 名称、说明、指令或模型配置无效。");
             if (role.Name is "explore" or "investigate" or "review" && !role.ReadOnly) throw new ArgumentException("调查与审查角色的只读限制不能通过配置取消。");
@@ -78,6 +81,6 @@ public sealed class AgentRoleCatalog(DataStore store)
             if (role.Permissions is { } rules && (rules.Count > 256 || rules.Any(rule => rule == null || string.IsNullOrWhiteSpace(rule.Action) || rule.Action.Length > 256 || string.IsNullOrWhiteSpace(rule.Resource) || rule.Resource.Length > 4096 || rule.Effect is not ("allow" or "deny" or "ask"))))
                 throw new ArgumentException("Agent 权限规则必须包含 action、resource 和 allow/deny/ask effect，最多 256 条。");
         }
-        return roles.Select(role => role with { Permissions = role.Permissions == null ? null : Array.AsReadOnly(role.Permissions.ToArray()), Tools = role.Tools == null ? null : Array.AsReadOnly(role.Tools.ToArray()) }).ToArray();
+        return roles.Select(role => role with { Execution = role.Execution == null ? null : role.Execution with { Skills = role.Execution.Skills == null ? null : Array.AsReadOnly(role.Execution.Skills.ToArray()) }, Permissions = role.Permissions == null ? null : Array.AsReadOnly(role.Permissions.ToArray()), Tools = role.Tools == null ? null : Array.AsReadOnly(role.Tools.ToArray()) }).ToArray();
     }
 }

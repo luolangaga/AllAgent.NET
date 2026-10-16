@@ -47,6 +47,8 @@ public interface IAgentToolApprovalPolicy
     ToolApprovalPolicy GetApprovalPolicy(string name, JsonElement arguments);
 }
 
+public sealed record ToolOutputTruncation(int OriginalJsonCharacters, int RetainedJsonCharacters, int RemovedJsonCharacters);
+
 public sealed record ToolResult(bool Ok, object? Data = null, string? Error = null, bool Truncated = false)
 {
     [System.Text.Json.Serialization.JsonIgnore]
@@ -55,6 +57,8 @@ public sealed record ToolResult(bool Ok, object? Data = null, string? Error = nu
     {
         Encoder = System.Text.Encodings.Web.JavaScriptEncoder.Create(System.Text.Unicode.UnicodeRanges.All)
     };
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public ToolOutputTruncation? OutputTruncation { get; init; }
     public const int MaxOutputCharacters = 20_000;
     public static ToolResult Success(object? data, bool truncated = false) => new(true, data, Truncated: truncated);
     public static ToolResult Failure(string error) => new(false, Error: Clip(error));

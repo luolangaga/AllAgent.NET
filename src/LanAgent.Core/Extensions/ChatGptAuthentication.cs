@@ -8,12 +8,14 @@ using LanAgent.Core.Models;
 namespace LanAgent.Core.Extensions;
 
 public sealed record ChatGptAccount(string ClientId, string Subject, string? Email);
-internal sealed record ChatGptRegistration(ChatGptAccount Account, string HostId, string? IdToken, string[] Scopes);
+internal sealed record ChatGptRegistration(ChatGptAccount Account, string HostId, string? IdToken, string[] Scopes, bool CodexNative = false, string? WorkspaceId = null);
 internal sealed record ChatGptAccountIndex(string? ActiveClientId, ChatGptAccount[] Accounts);
 
-/// <summary>Public-client Sign in with ChatGPT for open-source, locally hosted agents.</summary>
+/// <summary>Codex native PKCE login; retains legacy direct-plan credentials for existing accounts.</summary>
 public sealed class ChatGptAuthentication : IAuthenticationProvider
 {
+    internal const string NativeClientId = "app_EMoamEEZ73f0CkXaXp7hrann";
+    public const string CodexEndpoint = "https://chatgpt.com/backend-api/codex";
     private const string Issuer = "https://auth.openai.com";
     private const string Resource = "https://api.openai.com/v1";
     private const string TokenEndpoint = Issuer + "/api/accounts/oauth/token";
@@ -37,8 +39,8 @@ public sealed class ChatGptAuthentication : IAuthenticationProvider
     public string? LoginInstructions { get; private set; }
     public void ValidateModelConfiguration(ApiConfig config)
     {
-        if (config.Protocol != "responses" || !Uri.TryCreate(config.BaseUrl, UriKind.Absolute, out var uri) || uri.AbsoluteUri.TrimEnd('/') != Resource || !string.IsNullOrEmpty(config.ExtraHeadersJson))
-            throw new InvalidOperationException("ChatGPT 账号必须使用官方 https://api.openai.com/v1 Responses 接口，不能向自定义地址或附加认证头发送令牌。");
+        if (config.Protocol != "responses" || !Uri.TryCreate(config.BaseUrl, UriKind.Absolute, out var uri) || (uri.AbsoluteUri.TrimEnd('/') != Resource && uri.AbsoluteUri.TrimEnd('/') != CodexEndpoint) || !string.IsNullOrEmpty(config.ExtraHeadersJson))
+            throw new InvalidOperationException("ChatGPT 账号必须使用官方 Responses 或 Codex 接口，不能向自定义地址或附加认证头发送令牌。");
     }
     private static string Key(string clientId) => "codex-registration:" + clientId;
     private async Task<ChatGptAccountIndex> IndexAsync(CancellationToken ct) =>
@@ -56,47 +58,61 @@ public sealed class ChatGptAuthentication : IAuthenticationProvider
     public Task LoginAsync(Func<Uri, CancellationToken, Task> openBrowser, CancellationToken ct) => LoginAsync(openBrowser, false, ct);
     public async Task LoginAsync(Func<Uri, CancellationToken, Task> openBrowser, bool newAccount, CancellationToken ct)
     {
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct); deadline.CancelAfter(TimeSpan.FromMinutes(5));
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(TimeSpan.FromMinutes(5));
         using var lease = await _vault.AcquireAsync(IndexKey, deadline.Token);
         var index = await IndexAsync(deadline.Token);
-        var previous = !newAccount && index.ActiveClientId is { } active ? await _vault.ReadAsync(Key(active), deadline.Token) : null;
-        var registration = previous == null ? null : Registration(previous);
-        var clientId = registration?.Account.ClientId ?? "dynamic_agent_client";
-        var state = Base64(RandomNumberGenerator.GetBytes(32)); var nonce = Base64(RandomNumberGenerator.GetBytes(32)); var verifier = Base64(RandomNumberGenerator.GetBytes(32));
-        var listener = new TcpListener(IPAddress.Loopback, 0); listener.Start();
+        var listener = new TcpListener(IPAddress.Loopback, 1455);
+        try { listener.Start(); }
+        catch (SocketException)
+        {
+            listener = new TcpListener(IPAddress.Loopback, 1457);
+            try { listener.Start(); }
+            catch (SocketException) { throw new InvalidOperationException("Codex 登录回调端口 1455/1457 被占用，请关闭其他登录窗口后重试。"); }
+        }
         try
         {
             var redirect = $"http://127.0.0.1:{((IPEndPoint)listener.LocalEndpoint).Port}/auth/callback";
+            var state = Base64(RandomNumberGenerator.GetBytes(32));
+            var nonce = Base64(RandomNumberGenerator.GetBytes(32));
+            var verifier = Base64(RandomNumberGenerator.GetBytes(32));
             var fields = new Dictionary<string, string>
             {
-                ["client_id"] = clientId, ["ext_agent_host_id"] = _hostId, ["response_type"] = "code", ["redirect_uri"] = redirect,
-                ["scope"] = "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct", ["resource"] = Resource,
-                ["state"] = state, ["nonce"] = nonce, ["code_challenge_method"] = "S256", ["code_challenge"] = Base64(SHA256.HashData(Encoding.ASCII.GetBytes(verifier)))
+                ["client_id"] = NativeClientId, ["response_type"] = "code", ["redirect_uri"] = redirect,
+                ["scope"] = "openid profile email offline_access", ["state"] = state, ["nonce"] = nonce,
+                ["code_challenge_method"] = "S256", ["code_challenge"] = Base64(SHA256.HashData(Encoding.ASCII.GetBytes(verifier))),
+                ["id_token_add_organizations"] = "true", ["codex_cli_simplified_flow"] = "true", ["originator"] = "lanagent"
             };
-            if (registration == null) fields["agent_name_hint"] = "LanAgent";
-            else if (registration.IdToken is { Length: > 0 } hint) fields["id_token_hint"] = hint;
-            LoginInstructions = "在浏览器中选择 ChatGPT 账号并授权 LanAgent";
-            await openBrowser(new Uri(Issuer + "/api/accounts/authorize?" + string.Join('&', fields.Select(p => Uri.EscapeDataString(p.Key) + "=" + Uri.EscapeDataString(p.Value)))), deadline.Token);
+            LoginInstructions = "在浏览器中完成 Codex 账号授权；模型和额度将使用该账号及工作区。";
+            await openBrowser(new Uri(Issuer + "/oauth/authorize?" + string.Join('&', fields.Select(p => Uri.EscapeDataString(p.Key) + "=" + Uri.EscapeDataString(p.Value)))), deadline.Token);
             var callback = await CallbackAsync(listener, redirect, state, deadline.Token);
-            if (callback.TryGetValue("error", out var error)) throw new InvalidOperationException("ChatGPT 授权未完成：" + error);
-            if (!callback.TryGetValue("code", out var code) || string.IsNullOrWhiteSpace(code)) throw new InvalidDataException("ChatGPT 回调缺少授权码。");
-            if (registration == null)
+            if (callback.ContainsKey("error")) throw new InvalidOperationException("Codex 授权未完成，旧凭据未修改。");
+            if (!callback.TryGetValue("code", out var code) || string.IsNullOrWhiteSpace(code)) throw new InvalidDataException("Codex 回调缺少授权码。");
+            using var response = await PostAsync(Issuer + "/oauth/token", new()
             {
-                clientId = callback.GetValueOrDefault("client_id") ?? "";
-                if (string.IsNullOrWhiteSpace(clientId) || clientId == "dynamic_agent_client" || clientId.Any(char.IsControl)) throw new InvalidDataException("ChatGPT 尚未返回注册后的 Client ID。");
-            }
-            else if (callback.TryGetValue("client_id", out var supplied) && supplied != clientId) throw new InvalidDataException("ChatGPT 回调与所选账号的 Client ID 不匹配。");
-            using var token = await PostAsync(TokenEndpoint, new() { ["grant_type"] = "authorization_code", ["client_id"] = clientId, ["code"] = code, ["code_verifier"] = verifier, ["redirect_uri"] = redirect, ["resource"] = Resource }, deadline.Token);
-            var identity = await ValidateIdentityAsync(Required(token.RootElement, "id_token"), clientId, nonce, deadline.Token);
-            var account = new ChatGptAccount(clientId, Required(identity, "sub"), identity.TryGetProperty("email", out var email) ? email.GetString() : null);
-            if (registration != null && registration.Account.Subject != account.Subject) throw new InvalidDataException("ChatGPT 返回的身份不属于所选账号，旧凭据未修改。");
-            var existing = index.Accounts.FirstOrDefault(a => a.ClientId == clientId);
-            if (existing != null && existing.Subject != account.Subject) throw new InvalidDataException("ChatGPT 注册身份冲突，旧凭据未修改。");
-            var saved = Credentials(token.RootElement, new(account, _hostId, Required(token.RootElement, "id_token"), []));
-            await _vault.SaveAsync(Key(clientId), saved, deadline.Token);
-            await SaveIndexAsync(new(clientId, index.Accounts.Where(a => a.ClientId != clientId).Append(account).ToArray()), deadline.Token);
+                ["grant_type"] = "authorization_code", ["client_id"] = NativeClientId, ["code"] = code,
+                ["redirect_uri"] = redirect, ["code_verifier"] = verifier
+            }, deadline.Token);
+            var identity = await ValidateIdentityAsync(Required(response.RootElement, "id_token"), NativeClientId, nonce, deadline.Token);
+            var workspace = Required(identity.GetProperty("https://api.openai.com/auth"), "chatgpt_account_id");
+            var subject = Required(identity, "sub");
+            // Native OAuth uses one public client; keep each user/workspace in its own vault slot.
+            var key = "native-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(subject + "\0" + workspace)));
+            var account = new ChatGptAccount(key, subject, identity.TryGetProperty("email", out var email) ? email.GetString() : null);
+            var registration = new ChatGptRegistration(account, _hostId, Required(response.RootElement, "id_token"), [], true, workspace);
+            var tokens = NativeCredentials(response.RootElement, registration);
+            await _vault.SaveAsync(Key(key), tokens, deadline.Token);
+            await SaveIndexAsync(new(key, index.Accounts.Where(a => a.ClientId != key).Append(account).ToArray()), deadline.Token);
         }
         finally { listener.Stop(); }
+    }
+    private static OAuthTokens NativeCredentials(JsonElement response, ChatGptRegistration registration, string? previousRefresh = null)
+    {
+        var expiry = response.TryGetProperty("expires_in", out var expires) ? expires.GetInt32() : 3600;
+        if (expiry <= 0 || expiry > 864000) throw new InvalidDataException("Codex 令牌有效期无效。");
+        var refresh = response.TryGetProperty("refresh_token", out var token) ? token.GetString() : previousRefresh;
+        if (string.IsNullOrWhiteSpace(refresh)) throw new InvalidDataException("Codex 缺少续期凭据。");
+        return new(Required(response, "access_token"), refresh, DateTimeOffset.UtcNow.AddSeconds(expiry), JsonSerializer.Serialize(registration));
     }
     public async Task<string?> GetAccessTokenAsync(CancellationToken ct) => (await GetCredentialAsync(ct))?.AccessToken;
     public async Task<AuthenticationCredential?> GetCredentialAsync(CancellationToken ct)
@@ -107,21 +123,46 @@ public sealed class ChatGptAuthentication : IAuthenticationProvider
         var saved = await _vault.ReadAsync(Key(index.ActiveClientId), ct);
         if (saved == null || string.IsNullOrEmpty(saved.AccessToken)) return null;
         var registration = Registration(saved);
-        if (!registration.Scopes.Contains("chatgpt.tokens.use.direct")) throw new InvalidOperationException("未授予 ChatGPT 模型使用权限，请重新 /login codex。");
+        if (!registration.CodexNative && !registration.Scopes.Contains("chatgpt.tokens.use.direct")) throw new InvalidOperationException("未授予 ChatGPT 模型使用权限，请重新 /login codex。");
         var contextId = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(registration.Account.ClientId + "\0" + registration.Account.Subject)));
-        if (saved.ExpiresAt > DateTimeOffset.UtcNow.AddSeconds(30)) return new(saved.AccessToken, contextId);
+        if (saved.ExpiresAt > DateTimeOffset.UtcNow.AddSeconds(30)) return Credential(saved.AccessToken, contextId, registration);
         if (saved.RefreshToken == null) return null;
-        using var response = await PostAsync(TokenEndpoint, new() { ["grant_type"] = "refresh_token", ["client_id"] = registration.Account.ClientId, ["refresh_token"] = saved.RefreshToken, ["resource"] = Resource }, ct);
+        var refreshFields = new Dictionary<string, string> { ["grant_type"] = "refresh_token", ["client_id"] = registration.CodexNative ? NativeClientId : registration.Account.ClientId, ["refresh_token"] = saved.RefreshToken };
+        if (!registration.CodexNative) refreshFields["resource"] = Resource;
+        using var response = await PostAsync(registration.CodexNative ? Issuer + "/oauth/token" : TokenEndpoint, refreshFields, ct);
         if (response.RootElement.TryGetProperty("id_token", out var idToken))
         {
-            var identity = await ValidateIdentityAsync(idToken.GetString()!, registration.Account.ClientId, null, ct);
+            var identity = await ValidateIdentityAsync(idToken.GetString()!, registration.CodexNative ? NativeClientId : registration.Account.ClientId, null, ct);
             if (Required(identity, "sub") != registration.Account.Subject) throw new InvalidDataException("刷新后的 ChatGPT 身份不匹配。");
+            if (registration.CodexNative && Required(identity.GetProperty("https://api.openai.com/auth"), "chatgpt_account_id") != registration.WorkspaceId)
+                throw new InvalidDataException("刷新后的 Codex 工作区不匹配。");
             registration = registration with { IdToken = idToken.GetString() };
         }
-        var next = Credentials(response.RootElement, registration);
+        var next = registration.CodexNative ? NativeCredentials(response.RootElement, registration, saved.RefreshToken) : Credentials(response.RootElement, registration);
         await _vault.SaveAsync(Key(registration.Account.ClientId), next, ct);
-        return new(next.AccessToken, contextId);
+        return Credential(next.AccessToken, contextId, registration);
     }
+    private static AuthenticationCredential Credential(string token, string context, ChatGptRegistration registration) =>
+        new(token, context) { InferenceBaseUrl = registration.CodexNative ? CodexEndpoint : Resource, AccountId = registration.CodexNative ? registration.WorkspaceId : null };
+    public ModelFooterProvider FooterProvider => new("Codex 额度",
+        model => model.AuthenticationProviderId == Id,
+        async (model, ct) =>
+        {
+            var credential = await GetCredentialAsync(ct);
+            if (credential == null) return [new("Codex 额度", "未登录")];
+            if (credential.InferenceBaseUrl != CodexEndpoint) return [new("Codex 额度", "需重新 /login codex 授权")];
+            using var request = new HttpRequestMessage(HttpMethod.Get, "https://chatgpt.com/backend-api/wham/usage");
+            if (credential.AccountId is { } workspace) request.Headers.Add("ChatGPT-Account-Id", workspace);
+            request.Headers.Authorization = new("Bearer", credential.AccessToken);
+            request.Headers.UserAgent.ParseAdd("LanAgent/1.0");
+            using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+            if (!response.IsSuccessStatusCode)
+                return [new("Codex 额度", response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden
+                    ? "当前授权无法读取" : "查询失败 HTTP " + (int)response.StatusCode)];
+            using var json = await ReadAsync(response, ct);
+            return CodexQuota.Parse(json.RootElement, model.ModelId);
+        });
+
     public async Task<AuthenticationStatus> GetStatusAsync(CancellationToken ct)
     {
         var index = await IndexAsync(ct); var account = index.Accounts.FirstOrDefault(a => a.ClientId == index.ActiveClientId);
@@ -141,8 +182,8 @@ public sealed class ChatGptAuthentication : IAuthenticationProvider
             if (tokens.RefreshToken != null)
             {
                 using var metadata = await GetAsync(Issuer + "/.well-known/openid-configuration", ct);
-                var endpoint = SameIssuerEndpoint(Required(metadata.RootElement, "revocation_endpoint"));
-                using var request = new HttpRequestMessage(HttpMethod.Post, endpoint) { Content = new FormUrlEncodedContent(new Dictionary<string, string> { ["token"] = tokens.RefreshToken, ["token_type_hint"] = "refresh_token", ["client_id"] = registration.Account.ClientId }) };
+                var endpoint = registration.CodexNative ? Issuer + "/oauth/revoke" : SameIssuerEndpoint(Required(metadata.RootElement, "revocation_endpoint"));
+                using var request = new HttpRequestMessage(HttpMethod.Post, endpoint) { Content = new FormUrlEncodedContent(new Dictionary<string, string> { ["token"] = tokens.RefreshToken, ["token_type_hint"] = "refresh_token", ["client_id"] = registration.CodexNative ? NativeClientId : registration.Account.ClientId }) };
                 using var response = await _http.SendAsync(request, ct);
                 if (response.StatusCode != HttpStatusCode.OK) throw new InvalidOperationException("未确认服务端会话撤销。");
             }

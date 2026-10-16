@@ -74,6 +74,22 @@ public sealed class TerminalInteractionTests
         else Assert.Equal("custom answer", answer);
         Assert.DoesNotContain("其他回答 ›", console.Output);
     }
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task EmbeddedQuestionRendersInHostWithoutWritingToConsole(bool multiple)
+    {
+        var console = new TestConsole();
+        var keys = new Queue<ConsoleKeyInfo>("custom answer".Select(c => new ConsoleKeyInfo(c, ConsoleKey.A, false, false, false)));
+        keys.Enqueue(new ConsoleKeyInfo('\r', ConsoleKey.Enter, false, false, false));
+        var reader = new TerminalKeyReader(() => keys.Count > 0, keys.Dequeue);
+        var frames = new List<IRenderable>();
+        var answer = await TerminalQuestionPrompt.AskAsync(console, reader,
+            new("Your answer?", [], multiple), default, frames.Add);
+        Assert.Equal(multiple ? "[\"custom answer\"]" : "custom answer", answer);
+        Assert.NotEmpty(frames);
+        Assert.Equal("", console.Output);
+    }
     private static TerminalKeyReader Reader(string bytes, Func<string?>? clipboard = null)
     {
         var keys = new Queue<ConsoleKeyInfo>(bytes.Select(c => new ConsoleKeyInfo(c, c == '\u001b' ? ConsoleKey.Escape : ConsoleKey.A, false, false, false)));

@@ -28,7 +28,7 @@ for index in range(18):
         "createdAt": f"2026-10-11T01:{index:02d}:01Z"})
 (output / "lanagent.json").write_text(json.dumps({"conversations": [{"id": session, "title": "Timeline fixture", "messages": messages}],
     "apiConfigs": [], "skills": [], "appSettings": {}, "mcpServerConfigs": []}), encoding="utf-8")
-proc = PtyProcess.spawn([str(root / "src/LanAgent.Terminal/bin/Release/net8.0/lanagent.exe"), "chat", "--workspace", str(root),
+proc = PtyProcess.spawn([str(root / "src/LanAgent.Terminal/bin/Release/net10.0/lanagent.exe"), "chat", "--workspace", str(root),
     "--data-dir", str(output), "--resume", session], cwd=str(root), dimensions=(30, 120))
 chunks, raw = queue.Queue(), []
 screen = pyte.Screen(120, 30)

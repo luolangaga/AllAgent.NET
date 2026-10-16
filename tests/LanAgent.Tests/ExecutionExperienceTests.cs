@@ -23,7 +23,7 @@ public sealed class ExecutionExperienceTests
         block.Complete(new("host", "start_agent", ToolResult.Success(new { taskId = "child" }).ToJson()));
         var firstVersion = block.Version;
         var console = new TestConsole(); console.Profile.Width = 100; console.Write(block);
-        Assert.Contains("子代理任务", console.Output); Assert.Contains("正在运行命令", console.Output); Assert.Contains("代码 ›", console.Output); Assert.Contains("(1 行)", console.Output);
+        Assert.Contains("子代理任务", console.Output); Assert.Contains("正在运行命令", console.Output); Assert.Contains("代码 ›", console.Output); Assert.Contains("（1行）", console.Output);
         task = task with { State = BackgroundTaskState.Completed, Output = "构建成功", UpdatedAt = DateTimeOffset.UtcNow.AddSeconds(1) };
         Assert.NotEqual(firstVersion, block.Version);
         var details = new TestConsole(); details.Profile.Width = 100; details.Write(block.Details(0, 0));

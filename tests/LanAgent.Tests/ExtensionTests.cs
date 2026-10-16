@@ -17,8 +17,8 @@ public sealed class ExtensionTests
         using var memory = new MemoryStream();
         using (var archive = new ZipArchive(memory, ZipArchiveMode.Create, true))
         {
-            var nuspec = archive.CreateEntry("example.nuspec"); using (var writer = new StreamWriter(nuspec.Open())) writer.Write($"<package><metadata><id>LanAgent.SamplePlugin</id><version>1.0.0</version><authors>fixture</authors><description>fixture</description><tags>{tags}</tags>{(dependency ? "<dependencies><group targetFramework=\"net8.0\"><dependency id=\"Fixture.Dependency\" version=\"[1.0.0]\" /></group></dependencies>" : "")}</metadata></package>");
-            var dll = archive.CreateEntry("lib/net8.0/LanAgent.SamplePlugin.dll"); using (var stream = dll.Open()) stream.Write(File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "sample-plugin", "LanAgent.SamplePlugin.dll")));
+            var nuspec = archive.CreateEntry("example.nuspec"); using (var writer = new StreamWriter(nuspec.Open())) writer.Write($"<package><metadata><id>LanAgent.SamplePlugin</id><version>1.0.0</version><authors>fixture</authors><description>fixture</description><tags>{tags}</tags>{(dependency ? "<dependencies><group targetFramework=\"net10.0\"><dependency id=\"Fixture.Dependency\" version=\"[1.0.0]\" /></group></dependencies>" : "")}</metadata></package>");
+            var dll = archive.CreateEntry("lib/net10.0/LanAgent.SamplePlugin.dll"); using (var stream = dll.Open()) stream.Write(File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "sample-plugin", "LanAgent.SamplePlugin.dll")));
             var manifest = archive.CreateEntry(manifestPath); using (var writer = new StreamWriter(manifest.Open())) writer.Write(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "sample-plugin", "lanagent-plugin.json")));
         }
         return memory.ToArray();
@@ -101,7 +101,7 @@ public sealed class ExtensionTests
         using (var zip = new ZipArchive(dependency, ZipArchiveMode.Create, true))
         {
             using (var writer = new StreamWriter(zip.CreateEntry("dep.nuspec").Open())) writer.Write("<package><metadata><id>Fixture.Dependency</id><version>1.0.0</version><authors>fixture</authors><description>dependency</description></metadata></package>");
-            using (var writer = new StreamWriter(zip.CreateEntry("lib/net8.0/dependency-proof.txt").Open())) writer.Write("dependency proof");
+            using (var writer = new StreamWriter(zip.CreateEntry("lib/net10.0/dependency-proof.txt").Open())) writer.Write("dependency proof");
             using (var writer = new StreamWriter(zip.CreateEntry("build/attack.targets").Open())) writer.Write("must not execute or extract");
         }
         using var http = new HttpClient(new BinaryHandler(request => request.RequestUri!.AbsolutePath switch

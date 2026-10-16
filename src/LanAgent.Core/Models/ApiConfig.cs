@@ -23,6 +23,8 @@ public class ApiConfig
     public List<string> Models { get; set; } = new();
     public string ReasoningProtocol { get; set; } = "auto";
     public Dictionary<string, string> ModelReasoningEfforts { get; set; } = new(StringComparer.Ordinal);
+    public Dictionary<string, int> ModelThinkingBudgets { get; set; } = new(StringComparer.Ordinal);
+    public Dictionary<string, List<string>> ModelReasoningLevels { get; set; } = new(StringComparer.Ordinal);
     public string ReasoningEffort { get; set; } = "default";
     public string? ApiKeyEnvironmentVariable { get; set; }
     public string? AuthenticationProviderId { get; set; }

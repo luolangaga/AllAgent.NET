@@ -30,7 +30,7 @@ internal sealed class ModelManager(DataStore store, TerminalUi ui, TerminalArgum
         if (value == null)
         {
             ManagementUi.Interactive(ui);
-            value = ManagementUi.Choose("模型上下文容量 · " + config.DefaultModel + " · 当前 " + ModelContext.Format(ModelContext.Capacity(config)), "auto", "自定义");
+            value = ManagementUi.Choose("模型上下文容量 · " + config.DefaultModel + " · 当前 " + ModelContext.Format(ModelContext.Capacity(config)), "auto", "32k", "64k", "128k", "200k", "256k", "400k", "500k", "1M", "1050k", "自定义");
             if (value == "自定义") value = await ManagementUi.Text("上下文 Token 容量（如 131072 / 256k / 1.5M）", ModelContext.Capacity(config).ToString());
         }
         if (value == "auto") config.ModelContextWindows.Remove(config.DefaultModel);
@@ -117,7 +117,7 @@ internal sealed class ModelManager(DataStore store, TerminalUi ui, TerminalArgum
         if (original == null)
         {
             var preset = presetOverride ?? ManagementUi.Choose("选择提供商（地址和协议均可修改）", ProviderCatalog.All, p => p.Name);
-            c = new() { ProviderId = preset.Id, DisplayName = preset.Name, Protocol = preset.Protocol, BaseUrl = preset.BaseUrl, ReasoningProtocol = preset.ReasoningProtocol, AuthenticationProviderId = preset.Id == "codex" ? "codex" : null, MaxTokens = 16384 };
+            c = new() { ProviderId = preset.Id, DisplayName = preset.Name, Protocol = preset.Protocol, BaseUrl = preset.BaseUrl, ReasoningProtocol = "auto", AuthenticationProviderId = preset.Id == "codex" ? "codex" : null, MaxTokens = 16384 };
         }
         else c = original;
         if (c.ProviderId == "custom") c.DisplayName = await ManagementUi.Text("配置名称", c.DisplayName);
@@ -155,6 +155,7 @@ internal sealed class ModelManager(DataStore store, TerminalUi ui, TerminalArgum
         }
         if (c.Models.Count == 0)
             c.Models = ParseModels(await ManagementUi.Text("模型 ID（接口未提供列表）", c.DefaultModel));
+        ReasoningSettings.RememberForModel(c);
         c.DefaultModel = ManagementUi.Choose("选择模型（自动应用上下文与输出限制）", c.Models.ToArray());
         ReasoningSettings.RestoreForModel(c);
         Validate(c); return c;
@@ -163,6 +164,44 @@ internal sealed class ModelManager(DataStore store, TerminalUi ui, TerminalArgum
     {
         if (store.ApiConfigs.Count == 0) throw new ArgumentException("暂无配置，请先添加。");
         return ManagementUi.Choose("选择配置", store.ApiConfigs, c => c.DisplayName);
+    }
+    internal async Task<ApiConfig[]> AvailableConfigsAsync(CancellationToken ct = default)
+    {
+        var accounts = new Dictionary<string, bool>(StringComparer.Ordinal);
+        var available = new List<ApiConfig>();
+        foreach (var config in store.ApiConfigs.Where(config => config.IsEnabled))
+        {
+            if (config.AuthenticationProviderId is { Length: > 0 } id)
+            {
+                if (!accounts.TryGetValue(id, out var loggedIn))
+                {
+                    try
+                    {
+                        var account = authentication?.Invoke(id);
+                        var status = account == null ? null : await account.GetStatusAsync(ct);
+                        loggedIn = status is { LoggedIn: true, ModelConnectionAvailable: true };
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException) { loggedIn = false; }
+                    accounts[id] = loggedIn;
+                }
+                if (loggedIn) available.Add(config);
+            }
+            else if (!string.IsNullOrWhiteSpace(config.ApiKeyEnvironmentVariable)
+                ? !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(config.ApiKeyEnvironmentVariable))
+                : !string.IsNullOrWhiteSpace(config.ApiKey) || Uri.TryCreate(config.BaseUrl, UriKind.Absolute, out var uri) && uri.IsLoopback)
+                available.Add(config);
+        }
+        return available.ToArray();
+    }
+    internal static string ProviderGroup(ApiConfig config) => config.ProviderId is "" or "custom"
+        ? config.DisplayName : ProviderCatalog.Find(config.ProviderId)?.Name ?? config.DisplayName;
+    internal static string ProviderColor(ApiConfig config)
+    {
+        string[] palette = ["#7dcfff", "#bb9af7", "#9ece6a", "#e0af68", "#f7768e", "#73daca", "#ff9e64"];
+        var key = ProviderGroup(config);
+        uint hash = 0;
+        foreach (var ch in key) hash = unchecked(hash * 31 + ch);
+        return palette[hash % palette.Length];
     }
     public async Task<ApiConfig> SelectAsync(string? selector = null, string? model = null, bool forceSelection = false)
     {
@@ -178,16 +217,19 @@ internal sealed class ModelManager(DataStore store, TerminalUi ui, TerminalArgum
         }
         else
         {
-            var available = store.ApiConfigs.Where(c => c.IsEnabled).ToArray();
-            if (available.Length == 0) { await AddCustomAsync(); available = store.ApiConfigs.Where(c => c.IsEnabled).ToArray(); }
+            var available = await ManagementUi.Busy("检查提供商登录状态", AvailableConfigsAsync);
+            if (available.Length == 0) throw new ArgumentException("暂无已登录或已配置密钥的提供商，请先使用 /login 登录或添加配置。");
             var remembered = available.FirstOrDefault(item => item.Id.ToString() == store.GetSetting("terminal:lastConfig"));
             if (forceSelection && ui.Interactive && !ui.Json)
             {
                 var choices = available.SelectMany(provider => (provider.Models.Count > 0 ? provider.Models : [provider.DefaultModel])
-                    .Where(id => !string.IsNullOrWhiteSpace(id)).Select(id => (Provider: provider, Model: id))).ToArray();
+                    .Where(id => !string.IsNullOrWhiteSpace(id)).Distinct(StringComparer.Ordinal).Select(id => (Provider: provider, Model: id))).ToArray();
                 if (choices.Length == 0) throw new ArgumentException("尚未配置模型，请先添加。");
-                var ordered = choices.OrderByDescending(choice => choice.Provider.Id == remembered?.Id && choice.Model == remembered.DefaultModel).ToArray();
-                var choice = ManagementUi.Choose("选择模型", ordered, choice => choice.Provider.DisplayName + " · " + choice.Model);
+                var ordered = choices.GroupBy(choice => ProviderGroup(choice.Provider))
+                    .OrderByDescending(group => group.Any(choice => choice.Provider.Id == remembered?.Id))
+                    .SelectMany(group => group.OrderByDescending(choice => choice.Provider.Id == remembered?.Id && choice.Model == remembered.DefaultModel)).ToArray();
+                var choice = ManagementUi.Choose("选择模型", ordered, choice => choice.Model + " · " + choice.Provider.DisplayName,
+                    choice => ProviderGroup(choice.Provider), choice => ProviderColor(choice.Provider));
                 c = choice.Provider; model = choice.Model;
             }
             else if (remembered != null) c = remembered;
@@ -196,13 +238,14 @@ internal sealed class ModelManager(DataStore store, TerminalUi ui, TerminalArgum
         }
         if (!c.IsEnabled) throw new ArgumentException("此提供商已禁用。");
         c = ManagementUi.Clone(c);
+        ReasoningSettings.RememberForModel(c);
         if (model != null) c.DefaultModel = model;
         else if (ui.Interactive && !ui.Json && c.Models.Count > 1 && (forceSelection || string.IsNullOrWhiteSpace(c.DefaultModel))) c.DefaultModel = ManagementUi.Choose("选择模型", c.Models.ToArray());
         if (string.IsNullOrWhiteSpace(c.DefaultModel)) c.DefaultModel = c.Models.FirstOrDefault() ?? throw new ArgumentException("此提供商尚未配置模型。");
-        ReasoningSettings.RestoreForModel(c);
-        if (cli.Get("effort") is { } effort) ReasoningSettings.SetEffort(c, effort);
-        if (cli.Get("budget") is { }) c.ThinkingBudget = cli.Number("budget", c.ThinkingBudget);
         if (cli.Get("max-tokens") is { }) c.MaxTokens = cli.Number("max-tokens", c.MaxTokens);
+        ReasoningSettings.RestoreForModel(c);
+        if (cli.Get("effort") != null || cli.Get("budget") != null)
+            ReasoningSettings.Configure(c, cli.Get("effort") ?? c.ReasoningEffort, cli.Get("budget") == null ? null : cli.Number("budget", c.ThinkingBudget));
         if (cli.Get("context-window") is { } capacity) c.ModelContextWindows[c.DefaultModel] = ModelContext.Parse(capacity);
         ui.SetModelContext(c);
         if (store.ApiConfigs.Any(item => item.Id == c.Id))

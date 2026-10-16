@@ -14,7 +14,7 @@ output = root / "artifacts/qa/image-draft" / uuid.uuid4().hex
 output.mkdir(parents=True)
 image = output / "pasted image.png"
 image.write_bytes(base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jI1kAAAAASUVORK5CYII="))
-proc = PtyProcess.spawn([str(root / "src/LanAgent.Terminal/bin/Release/net8.0/lanagent.exe"),
+proc = PtyProcess.spawn([str(root / "src/LanAgent.Terminal/bin/Release/net10.0/lanagent.exe"),
     "chat", "--workspace", str(root), "--data-dir", str(output)], cwd=str(root), dimensions=(30, 120))
 chunks = queue.Queue()
 raw = []

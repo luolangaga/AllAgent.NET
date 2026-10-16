@@ -62,9 +62,10 @@ public class GeminiProvider : IAiProvider
         var nativeParts = new JsonArray();
         string? finalReason = null;
 
-        while (!reader.EndOfStream && !ct.IsCancellationRequested)
+        while (!ct.IsCancellationRequested)
         {
             var line = await reader.ReadLineAsync(ct);
+            if (line == null) break;
             if (string.IsNullOrWhiteSpace(line)) continue;
             if (!line.StartsWith("data: ")) continue;
 

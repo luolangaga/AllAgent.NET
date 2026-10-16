@@ -33,6 +33,8 @@ public interface IAuthenticationProvider
 
 public sealed record AuthenticationCredential(string AccessToken, string? ContextId = null)
 {
+    public string? InferenceBaseUrl { get; init; }
+    public string? AccountId { get; init; }
     internal static async Task<AuthenticationCredential?> FromTokenAsync(IAuthenticationProvider provider, CancellationToken ct) =>
         await provider.GetAccessTokenAsync(ct) is { } token ? new(token) : null;
 }
@@ -57,6 +59,8 @@ public sealed class PluginContext(string dataDirectory, IReadOnlyDictionary<Type
     public T GetService<T>() where T : class => services?.TryGetValue(typeof(T), out var service) == true ? (T)service : throw new InvalidOperationException("此宿主未提供服务：" + typeof(T).Name);
     internal List<IAgentToolSet> Tools { get; } = [];
     internal List<IAiProvider> Providers { get; } = [];
+    internal List<ModelFooterProvider> FooterProviders { get; } = [];
+    public void AddModelFooter(ModelFooterProvider provider) => FooterProviders.Add(provider);
     internal List<PluginCommand> Commands { get; } = [];
     internal List<AgentHook> Hooks { get; } = [];
     internal List<AgentTurnExtension> TurnExtensions { get; } = [];
@@ -70,3 +74,10 @@ public sealed class PluginContext(string dataDirectory, IReadOnlyDictionary<Type
     public void AddRequestExtension(AgentRequestExtension extension) => RequestExtensions.Add(extension);
     public void AddAuthentication(IAuthenticationProvider authentication) => Authentication.Add(authentication);
 }
+
+/// <summary>Model-scoped plain-text footer contribution. Fetch runs off the render thread; never return secrets.</summary>
+public sealed record ModelFooterContext(string ProviderId, string ModelId, string? AuthenticationProviderId);
+public sealed record ModelFooterItem(string Label, string Value);
+public sealed record ModelFooterProvider(string Id,
+    Func<ModelFooterContext, bool> Matches,
+    Func<ModelFooterContext, CancellationToken, Task<IReadOnlyList<ModelFooterItem>>> FetchAsync);

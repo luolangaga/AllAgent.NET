@@ -1,6 +1,58 @@
 <Project>
+  <Target Name="CollectEmbeddedPowerShell" BeforeTargets="GetCopyToOutputDirectoryItems;ComputeFilesToPublish;_GetPackageFiles" Condition="'$(CopyEmbeddedPowerShell)' == 'true'">
+    <MSBuild Projects="$(MSBuildThisFileDirectory)src/LanAgent.PowerShell/LanAgent.PowerShell.csproj" Targets="GetTargetPath" Properties="Configuration=$(Configuration);RuntimeIdentifier=$(RuntimeIdentifier)" RemoveProperties="TargetFramework">
+      <Output TaskParameter="TargetOutputs" ItemName="EmbeddedPowerShellTarget" />
+    </MSBuild>
+    <PropertyGroup><EmbeddedPowerShellDirectory>@(EmbeddedPowerShellTarget->'%(RootDir)%(Directory)')</EmbeddedPowerShellDirectory></PropertyGroup>
+    <Error Condition="!Exists('$(EmbeddedPowerShellDirectory)LanAgent.PowerShell.dll')" Text="Bundled PowerShell SDK worker is missing." />
+    <ItemGroup>
+      <EmbeddedPowerShellFiles Include="$(EmbeddedPowerShellDirectory)**/*" />
+      <Content Include="@(EmbeddedPowerShellFiles)">
+        <Link>powershell/%(RecursiveDir)%(Filename)%(Extension)</Link>
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+        <Pack Condition="'$(MSBuildProjectName)' == 'LanAgent.Core'">true</Pack>
+        <Pack Condition="'$(MSBuildProjectName)' != 'LanAgent.Core'">false</Pack>
+        <BuildAction>None</BuildAction>
+        <PackagePath>contentFiles/any/$(TargetFramework)/powershell/%(RecursiveDir)%(Filename)%(Extension)</PackagePath>
+        <PackageCopyToOutput>true</PackageCopyToOutput>
+      </Content>
+    </ItemGroup>
+  </Target>
+  <Target Name="CopyEmbeddedPowerShellFiles" AfterTargets="Build" DependsOnTargets="CollectEmbeddedPowerShell" Condition="'$(CopyEmbeddedPowerShell)' == 'true'">
+    <Copy SourceFiles="@(EmbeddedPowerShellFiles)" DestinationFiles="@(EmbeddedPowerShellFiles->'$(OutDir)powershell/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="PublishEmbeddedPowerShellFiles" AfterTargets="ComputeFilesToPublish" DependsOnTargets="CollectEmbeddedPowerShell" Condition="'$(CopyEmbeddedPowerShell)' == 'true'">
+    <ItemGroup>
+      <ResolvedFileToPublish Include="@(EmbeddedPowerShellFiles)">
+        <RelativePath>powershell/%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+        <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+  <Target Name="CopyBrowserWorkerFiles" AfterTargets="Build" Condition="'$(CopyBrowserWorker)' == 'true'">
+    <MSBuild Projects="$(MSBuildThisFileDirectory)src/LanAgent.Browser/LanAgent.Browser.csproj" Targets="GetTargetPath" Properties="Configuration=$(Configuration);RuntimeIdentifier=$(RuntimeIdentifier)" RemoveProperties="TargetFramework">
+      <Output TaskParameter="TargetOutputs" ItemName="BrowserWorkerTarget" />
+    </MSBuild>
+    <PropertyGroup><BrowserWorkerBuildDirectory>@(BrowserWorkerTarget->'%(RootDir)%(Directory)')</BrowserWorkerBuildDirectory></PropertyGroup>
+    <Error Condition="'$(BrowserWorkerBuildDirectory)' == '' or !Exists('$(BrowserWorkerBuildDirectory)LanAgent.Browser.dll')" Text="WebView2 browser worker is missing; build its project before copying." />
+    <ItemGroup><BrowserWorkerFiles Include="$(BrowserWorkerBuildDirectory)**/*" /></ItemGroup>
+    <Copy SourceFiles="@(BrowserWorkerFiles)" DestinationFiles="@(BrowserWorkerFiles->'$(OutDir)browser/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="IncludeBrowserWorkerPublishFiles" AfterTargets="ComputeFilesToPublish" Condition="'$(CopyBrowserWorker)' == 'true'">
+    <PropertyGroup><BrowserWorkerPublishDirectory>$(MSBuildProjectDirectory)/obj/$(Configuration)/$(TargetFramework)/browser-publish/</BrowserWorkerPublishDirectory></PropertyGroup>
+    <MSBuild Projects="$(MSBuildThisFileDirectory)src/LanAgent.Browser/LanAgent.Browser.csproj" Targets="Publish" RemoveProperties="TargetFramework" Properties="TargetFramework=net10.0-windows;Configuration=$(Configuration);PublishDir=$(BrowserWorkerPublishDirectory);CopyBrowserWorker=false;PublishSingleFile=false;SelfContained=$(SelfContained);RuntimeIdentifier=$(RuntimeIdentifier)" />
+    <ItemGroup>
+      <BrowserWorkerPublishFiles Include="$(BrowserWorkerPublishDirectory)**/*" />
+      <ResolvedFileToPublish Include="@(BrowserWorkerPublishFiles)">
+        <RelativePath>browser/%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
   <Target Name="CopyComputerWorkerFiles" AfterTargets="Build" Condition="'$(CopyComputerWorker)' == 'true'">
-    <MSBuild Projects="$(MSBuildThisFileDirectory)src/LanAgent.ComputerUse/LanAgent.ComputerUse.csproj" Targets="GetTargetPath" Properties="Configuration=$(Configuration);RuntimeIdentifier=$(RuntimeIdentifier)">
+    <MSBuild Projects="$(MSBuildThisFileDirectory)src/LanAgent.ComputerUse/LanAgent.ComputerUse.csproj" Targets="GetTargetPath" Properties="Configuration=$(Configuration);RuntimeIdentifier=$(RuntimeIdentifier)" RemoveProperties="TargetFramework">
       <Output TaskParameter="TargetOutputs" ItemName="ComputerWorkerTarget" />
     </MSBuild>
     <PropertyGroup><ComputerWorkerBuildDirectory>@(ComputerWorkerTarget->'%(RootDir)%(Directory)')</ComputerWorkerBuildDirectory></PropertyGroup>
@@ -13,7 +65,7 @@
   </Target>
   <Target Name="IncludeComputerWorkerPublishFiles" AfterTargets="ComputeFilesToPublish" Condition="'$(CopyComputerWorker)' == 'true'">
     <PropertyGroup><ComputerWorkerPublishDirectory>$(MSBuildProjectDirectory)/obj/$(Configuration)/$(TargetFramework)/computer-publish/</ComputerWorkerPublishDirectory></PropertyGroup>
-    <MSBuild Projects="$(MSBuildThisFileDirectory)src/LanAgent.ComputerUse/LanAgent.ComputerUse.csproj" Targets="Publish" Properties="Configuration=$(Configuration);PublishDir=$(ComputerWorkerPublishDirectory);CopyComputerWorker=false;PublishSingleFile=false;SelfContained=$(SelfContained);RuntimeIdentifier=$(RuntimeIdentifier)" />
+    <MSBuild Projects="$(MSBuildThisFileDirectory)src/LanAgent.ComputerUse/LanAgent.ComputerUse.csproj" Targets="Publish" RemoveProperties="TargetFramework" Properties="TargetFramework=net10.0-windows;Configuration=$(Configuration);PublishDir=$(ComputerWorkerPublishDirectory);CopyComputerWorker=false;PublishSingleFile=false;SelfContained=$(SelfContained);RuntimeIdentifier=$(RuntimeIdentifier)" />
     <ItemGroup>
       <ComputerWorkerPublishFiles Include="$(ComputerWorkerPublishDirectory)**/*" Exclude="$(ComputerWorkerPublishDirectory)pi/**/*" />
       <ResolvedFileToPublish Include="@(ComputerWorkerPublishFiles)">
@@ -23,7 +75,7 @@
     </ItemGroup>
   </Target>
   <Target Name="CopyAgentSandboxFiles" AfterTargets="Build" Condition="'$(CopyAgentSandbox)' == 'true'">
-    <MSBuild Projects="$(MSBuildThisFileDirectory)src/LanAgent.Sandbox/LanAgent.Sandbox.csproj" Targets="GetTargetPath" Properties="Configuration=$(Configuration);RuntimeIdentifier=$(RuntimeIdentifier)">
+    <MSBuild Projects="$(MSBuildThisFileDirectory)src/LanAgent.Sandbox/LanAgent.Sandbox.csproj" Targets="GetTargetPath" Properties="Configuration=$(Configuration);RuntimeIdentifier=$(RuntimeIdentifier)" RemoveProperties="TargetFramework">
       <Output TaskParameter="TargetOutputs" ItemName="AgentSandboxTarget" />
     </MSBuild>
     <PropertyGroup>

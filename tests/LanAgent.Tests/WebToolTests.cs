@@ -16,37 +16,28 @@ public sealed class WebToolTests
         new(status) { Content = new StringContent(body, Encoding.UTF8, media) };
 
     [Fact]
-    public async Task SearchMapsDaemonContractAndIsAvailableThroughGeneratedDispatch()
+    public async Task SearchNeverCallsLegacyHttpService()
     {
-        using var client = new HttpClient(new Handler(async request =>
-        {
-            Assert.Equal("http://127.0.0.1:3210/search", request.RequestUri!.AbsoluteUri);
-            Assert.Equal(HttpMethod.Post, request.Method);
-            var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync()).RootElement;
-            Assert.Equal("test query", body.GetProperty("query").GetString());
-            Assert.Equal(3, body.GetProperty("limit").GetInt32());
-            Assert.Equal("bing", body.GetProperty("engines")[0].GetString());
-            return Response("{\"status\":\"ok\",\"data\":{\"results\":[{\"title\":\"Title\",\"url\":\"https://example.com\"}]}}");
-        }));
+        using var client = new HttpClient(new Handler(_ => throw new Exception("Legacy HTTP search called")));
         var tools = new WebTools("http://127.0.0.1:3210", client, client);
-        var registry = new ToolRegistry(); registry.Register(tools);
-        Assert.All(tools.Definitions, d => Assert.Equal(ToolRisk.Read, d.Risk));
-        var result = await registry.CallAsync("web_search", JsonSerializer.SerializeToElement(new { query = "test query", limit = 3, engines = new[] { "bing" } }), default);
-        Assert.True(result.Ok);
-        Assert.Contains("https://example.com", result.ToJson());
-        Assert.Contains("untrusted", result.ToJson());
+        var result = await tools.SearchAsync("query");
+        Assert.False(result.Ok);
+        Assert.Contains("Browser search is unavailable", result.Error);
     }
 
     [Fact]
-    public async Task SearchReportsUpstreamErrorAndCapsBody()
+    public async Task SearchRespectsDisabledBrowserAndValidatesEngine()
     {
-        using var client = new HttpClient(new Handler(_ => Task.FromResult(Response("{\"status\":\"error\",\"error\":{\"code\":\"browser_unavailable\"}}"))));
-        Assert.Contains("browser_unavailable", (await new WebTools("http://127.0.0.1:3210", client, client).SearchAsync("query")).Error);
-        using var partial = new HttpClient(new Handler(_ => Task.FromResult(Response("{\"status\":\"ok\",\"data\":{\"totalResults\":0,\"results\":[],\"partialFailures\":[{\"engine\":\"bing\",\"message\":\"redirect failed\"}]}}"))));
-        var failure = await new WebTools("http://127.0.0.1:3210", partial, partial).SearchAsync("query");
-        Assert.False(failure.Ok); Assert.Contains("redirect failed", failure.Error);
-        using var large = new HttpClient(new Handler(_ => Task.FromResult(Response(new string('x', 70_000)))));
-        Assert.Contains("too large", (await new WebTools("http://127.0.0.1:3210", large, large).SearchAsync("query")).Error);
+        var state = new BrowserUseState();
+        state.Configure(new BrowserUseConfiguration(Enabled: false));
+        await using var browser = new BrowserUseTools(state);
+        var tools = new WebTools(browser);
+        var registry = new ToolRegistry(); registry.Register(tools);
+        var result = await registry.CallAsync("web_search", JsonSerializer.SerializeToElement(new { query = "test query" }), default);
+        Assert.False(result.Ok);
+        Assert.Contains("disabled", result.Error);
+        Assert.False((await tools.SearchAsync("query", engines: ["bad"])).Ok);
+        Assert.False((await tools.SearchAsync("query", engines: ["bing", "google"])).Ok);
     }
 
     [Fact]
@@ -109,7 +100,7 @@ public sealed class WebToolTests
         Assert.False((await tools.SearchAsync("query", 11)).Ok);
         Assert.False((await tools.FetchAsync("http://127.0.0.1")).Ok);
         Assert.False((await tools.FetchAsync("https://example.com", 999)).Ok);
-        Assert.Throws<ArgumentException>(() => new WebTools("http://example.com", client, client));
+
     }
 
     [Fact]

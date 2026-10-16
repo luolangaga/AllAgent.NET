@@ -31,8 +31,10 @@ public static class ModelDiscovery
             {
                 var id = protocol == "gemini" ? item?["name"]?.GetValue<string>()?.Replace("models/", "") : item?["id"]?.GetValue<string>();
                 if (!string.IsNullOrWhiteSpace(id)) models.Add(new(id, item?["display_name"]?.GetValue<string>() ?? item?["displayName"]?.GetValue<string>() ?? id,
-                    (int?)(item?["inputTokenLimit"] ?? item?["context_length"] ?? item?["context_window"]),
-                    (int?)(item?["outputTokenLimit"] ?? item?["top_provider"]?["max_completion_tokens"] ?? item?["max_output_tokens"])));
+                    (int?)(item?["inputTokenLimit"] ?? item?["context_length"] ?? item?["context_window"] ?? item?["limit"]?["context"]),
+                    (int?)(item?["outputTokenLimit"] ?? item?["top_provider"]?["max_completion_tokens"] ?? item?["max_output_tokens"] ?? item?["limit"]?["output"]))
+                    { ReasoningLevels = item?["reasoning"] is JsonObject reasoning && reasoning["supported_efforts"] is JsonArray levels
+                        ? levels.Select(level => level?.GetValue<string>()).Where(level => !string.IsNullOrWhiteSpace(level)).Select(level => level!).ToArray() : null });
             }
             var token = node?["nextPageToken"]?.GetValue<string>();
             var last = node?["last_id"]?.GetValue<string>();

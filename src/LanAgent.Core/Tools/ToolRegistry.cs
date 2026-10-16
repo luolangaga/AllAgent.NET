@@ -1,7 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 
 namespace LanAgent.Core.Tools;
 
@@ -11,6 +10,8 @@ public sealed class ToolRegistry
     private readonly ToolApprover? _approver;
     private readonly string? _auditPath;
     private readonly SemaphoreSlim _auditLock = new(1, 1);
+    private readonly int _maxResultCharacters;
+    private readonly int _maxStreamCharacters;
     private readonly object _sync = new();
     private readonly LanAgent.Core.Extensions.HookPipeline? _hooks;
     private readonly Func<AgentToolDescriptor, JsonElement, ToolResult?>? _invocationPolicy;
@@ -18,8 +19,11 @@ public sealed class ToolRegistry
 
     public ToolRegistry(ToolApprover? approver = null, string? auditPath = null, LanAgent.Core.Extensions.HookPipeline? hooks = null,
         Func<AgentToolDescriptor, JsonElement, ToolResult?>? invocationPolicy = null,
-        Func<AgentToolDescriptor, JsonElement, CancellationToken, ValueTask<ToolResult?>>? invocationAuthorization = null)
-    { _approver = approver; _auditPath = auditPath; _hooks = hooks; _invocationPolicy = invocationPolicy; _invocationAuthorization = invocationAuthorization; }
+        Func<AgentToolDescriptor, JsonElement, CancellationToken, ValueTask<ToolResult?>>? invocationAuthorization = null, int maxResultCharacters = 64_000, int maxStreamCharacters = 20_000)
+    {
+        if (maxResultCharacters < 4096 || maxResultCharacters > 4_000_000 || maxStreamCharacters < 1 || maxStreamCharacters > maxResultCharacters) throw new ArgumentOutOfRangeException(nameof(maxResultCharacters));
+        _maxResultCharacters = maxResultCharacters; _maxStreamCharacters = maxStreamCharacters; _approver = approver; _auditPath = auditPath; _hooks = hooks; _invocationPolicy = invocationPolicy; _invocationAuthorization = invocationAuthorization;
+    }
     public IReadOnlyList<AgentToolDescriptor> Definitions { get { lock (_sync) return _tools.Values.Select(t => t.Definition).Where(t => LanAgent.Core.Extensions.AgentExtensionScope.Current?.Allows(this, t.Name) != false).OrderBy(t => t.Name, StringComparer.Ordinal).ToArray(); } }
     public void Register(IAgentToolSet tools)
     {
@@ -98,29 +102,13 @@ public sealed class ToolRegistry
         catch (OperationCanceledException) { await AuditAsync(id, name, args, "cancelled", false, CancellationToken.None); throw; }
         catch (Exception ex) when (ex is ArgumentException or JsonException or IOException or UnauthorizedAccessException or InvalidOperationException or TimeoutException or System.ComponentModel.Win32Exception)
         { result = ToolResult.Failure(ex.Message); }
-        // Enforce stdout budgets on plugin tool sets as well as built-in tools.
-        var normalized = JsonNode.Parse(result.ToJson()); var clipped = false;
-        void ClipStreams(JsonNode? node)
-        {
-            if (node is JsonObject obj) foreach (var property in obj.ToArray())
-            {
-                    if (property.Key.Equals("stdout", StringComparison.OrdinalIgnoreCase) || property.Key.Equals("stderr", StringComparison.OrdinalIgnoreCase))
-                {
-                    if (property.Value is JsonValue value && value.TryGetValue<string>(out var stream) && stream.Length > ToolResult.MaxOutputCharacters) { obj[property.Key] = ToolResult.Clip(stream); clipped = true; }
-                }
-                else ClipStreams(property.Value);
-            }
-            else if (node is JsonArray array) foreach (var child in array) ClipStreams(child);
-        }
-        ClipStreams(normalized?["data"]);
-        if (clipped) result = result with { Data = normalized!["data"]?.Deserialize<JsonElement>(), Truncated = true };
-        // Enforce aggregate result budget on custom tool sets too.
-        if (result.ToJson().Length > 64000)
-            result = ToolResult.Success(new { summary = ToolResult.Clip(result.ToJson(), 2000), originalOk = result.Ok }, true) with { Ok = result.Ok, Error = result.Error == null ? null : ToolResult.Clip(result.Error, 2000) };
+        result = LimitResult(result);
         await AuditAsync(id, name, args, "completed", result.Ok, ct);
         if (_hooks != null) await _hooks.NotifyAsync(new(LanAgent.Core.Extensions.HookStage.AfterTool, ToolName: name, Ok: result.Ok), ct);
         return result;
     }
+
+    internal ToolResult LimitResult(ToolResult result) => ToolResultBudget.Apply(result, _maxResultCharacters, _maxStreamCharacters);
 
     private async Task AuditAsync(string id, string name, JsonElement args, string phase, bool? ok, CancellationToken ct)
     {

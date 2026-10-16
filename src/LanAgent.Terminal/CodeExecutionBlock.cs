@@ -69,25 +69,40 @@ internal sealed class CodeExecutionBlock(string id, string code, bool reasoning 
 {
     private static int _nextMarker;
     private readonly Dictionary<int, Color> _markers = [];
+    private readonly Dictionary<string, int> _childMarkers = [];
+    private readonly Dictionary<int, (int Span, int Selected)> _childTargets = [];
     private IRenderable? _content;
     private int _version;
     private int _taskVersion;
     public Func<string, BackgroundTaskInfo?>? TaskLookup { get; set; }
+    public Func<string, IReadOnlyList<BackgroundTaskInfo>>? InvocationTasks { get; set; }
     public Func<BackgroundTaskInfo, IRenderable>? TaskTranscript { get; set; }
+    public Func<BackgroundTaskInfo, IRenderable>? TaskPreview { get; set; }
+    public Action? RefreshDetails { get; set; }
     public int Version
     {
         get
         {
+            RefreshDetails?.Invoke();
             var hash = new HashCode();
-            foreach (var call in Invocations) if (TaskInfo(call) is { } task) { hash.Add(task.UpdatedAt); hash.Add(task.State); }
+            foreach (var call in Invocations) foreach (var task in TasksFor(call)) { hash.Add(task.Id); hash.Add(task.UpdatedAt); hash.Add(task.State); }
             var current = hash.ToHashCode();
             if (current != _taskVersion) { _taskVersion = current; _content = null; Interlocked.Increment(ref _version); }
-            return Volatile.Read(ref _version);
+            return HashCode.Combine(Volatile.Read(ref _version), !IsReasoning && (Ok == null || Invocations.Any(call => TasksFor(call).Any(task => BackgroundTasks.IsActive(task.State)))) ? Environment.TickCount64 / 80 : 0);
         }
     }
     public bool UseMarkers { get; set; }
     public IReadOnlyDictionary<int, Color> Markers => _markers;
+    internal (int Span, int Selected) InspectionTarget(int marker) => _childTargets.TryGetValue(marker, out var target) ? target : (marker, 0);
+    private int ChildMarker(ToolInvocation call, BackgroundTaskInfo task)
+    {
+        var key = call.Id + ":" + task.Id;
+        if (!_childMarkers.TryGetValue(key, out var marker)) _childMarkers[key] = marker = Spans.Count + _childMarkers.Count;
+        _childTargets[marker] = (call.SpanIndex, DetailEntries(call.SpanIndex).FindIndex(entry => entry.Call == call && entry.Task?.Id == task.Id));
+        return marker;
+    }
     public bool IsReasoning { get; } = reasoning;
+    public bool IsChildTranscript { get; set; }
     public string Id { get; } = id;
     public string TraceId { get; } = Guid.NewGuid().ToString("N");
     public string Code { get; } = TerminalSafeText.Clean(code.Replace("\r\n", "\n").Replace('\r', '\n'));
@@ -107,6 +122,7 @@ internal sealed class CodeExecutionBlock(string id, string code, bool reasoning 
     }
     public void Start(ToolCallStarted call)
     {
+        if (Invocations.Any(invocation => invocation.Id == call.Id)) return;
         var candidates = Spans.Select((span, index) => (span, index)).Where(pair => pair.span.Name == call.ToolName).ToArray();
         var index = candidates.FirstOrDefault(pair => Invocations.All(invocation => invocation.SpanIndex != pair.index), (null!, -1)).index;
         if (index < 0 && candidates.Length > 0) index = candidates[^1].index;
@@ -123,18 +139,21 @@ internal sealed class CodeExecutionBlock(string id, string code, bool reasoning 
     }
     public IRenderable Details(int span, int selected)
     {
+        RefreshDetails?.Invoke();
         if (IsReasoning) return new Rows(new Text("模型返回的思考内容", new Style(Color.Grey)), new Text(Code));
+        var entries = DetailEntries(span);
         var calls = span < 0 ? Invocations : Invocations.Where(invocation => invocation.SpanIndex == span).ToList();
         var rows = new List<IRenderable>();
         if (span < 0) rows.Add(new Rows(new Text("调度代码（Python）", new Style(Color.Grey)), new PythonCodeText(this)));
         if (span < 0 && calls.Count > 0 && Result != null) rows.Add(new Text("Python 执行结果\n" + Pretty(Result)));
         if (calls.Count > 0)
         {
-            var call = calls[Math.Clamp(selected, 0, calls.Count - 1)];
+            var entry = entries[Math.Clamp(selected, 0, entries.Count - 1)];
+            var call = entry.Call;
             rows.Add(new Text(call.Name + " · " + State(call.Ok) + $" · {Math.Clamp(selected, 0, calls.Count - 1) + 1}/{calls.Count}", new Style(call.Ok == false ? Color.Red : Color.Green)));
-            if (TaskInfo(call) is { } task)
+            if (entry.Task is { } task)
             {
-                if (IsChildTask(task) && TaskTranscript != null) return TaskTranscript(task);
+                if (span >= 0 && IsChildTask(task) && TaskTranscript != null) return new Rows(new Text($"子代理 {Math.Clamp(selected, 0, entries.Count - 1) + 1}/{entries.Count} · ←→ 切换", new Style(Color.Grey)), TaskTranscript(task));
                 rows.Add(new Text(TerminalSafeText.Clean(task.Title + "\n状态 · " + TaskState(task.State) + "\n当前步骤 · " + (task.CurrentStep ?? "等待执行"))));
                 rows.Add(new Text(TerminalSafeText.Clean(string.Join('\n', task.Steps))));
                 rows.Add(new Text(TerminalSafeText.Clean("输出 / 结果\n" + task.Output + (task.Error == null ? "" : "\n错误 · " + task.Error))));
@@ -159,8 +178,40 @@ internal sealed class CodeExecutionBlock(string id, string code, bool reasoning 
     }
     internal BackgroundTaskInfo? SelectedTask(int span, int selected)
     {
-        var calls = span < 0 ? Invocations : Invocations.Where(call => call.SpanIndex == span).ToList();
-        return calls.Count == 0 ? null : TaskInfo(calls[Math.Clamp(selected, 0, calls.Count - 1)]);
+        var entries = DetailEntries(span);
+        return span < 0 || entries.Count == 0 ? null : entries[Math.Clamp(selected, 0, entries.Count - 1)].Task;
+    }
+    internal int DetailCount(int span) => DetailEntries(span).Count;
+    private List<(ToolInvocation Call, BackgroundTaskInfo? Task)> DetailEntries(int span)
+    {
+        var entries = new List<(ToolInvocation, BackgroundTaskInfo?)>();
+        foreach (var call in Invocations.Where(call => span < 0 || call.SpanIndex == span))
+        {
+            var tasks = TasksFor(call);
+            if (tasks.Count == 0) entries.Add((call, null));
+            else foreach (var task in tasks) entries.Add((call, task));
+        }
+        return entries;
+    }
+    private IReadOnlyList<BackgroundTaskInfo> TasksFor(ToolInvocation call)
+    {
+        if (InvocationTasks?.Invoke(call.Id) is { Count: > 0 } live) return live;
+        var tasks = new List<BackgroundTaskInfo>();
+        if (call.Result != null && TaskLookup != null)
+        {
+            using var json = JsonDocument.Parse(call.Result);
+            if (json.RootElement.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Object &&
+                data.TryGetProperty("results", out var results) && results.ValueKind == JsonValueKind.Array)
+                foreach (var result in results.EnumerateArray())
+                    if (result.TryGetProperty("taskId", out var id) && id.ValueKind == JsonValueKind.String && Lookup(id.GetString()!) is { } task) tasks.Add(task);
+        }
+        if (tasks.Count == 0 && TaskInfo(call) is { } single) tasks.Add(single);
+        return tasks;
+    }
+    private BackgroundTaskInfo? Lookup(string id)
+    {
+        try { return TaskLookup?.Invoke(id); }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException) { return null; }
     }
     private static string Pretty(string json)
     {
@@ -217,6 +268,7 @@ internal sealed class CodeExecutionBlock(string id, string code, bool reasoning 
     };
     internal static string ToolSubject(string name, string argsJson, string fallback)
     {
+        if (name == "browser") return BrowserPresentation.Title(argsJson);
         using var doc = JsonDocument.Parse(argsJson); var args = doc.RootElement;
         string Get(string key, string defaultValue = "") => args.TryGetProperty(key, out var v) ? v.ToString() : defaultValue;
         if (name is "file_search" or "file_glob" or "grep" or "find") return "\"" + Get("pattern") + "\" in " + Get("path", ".");
@@ -236,11 +288,21 @@ internal sealed class CodeExecutionBlock(string id, string code, bool reasoning 
         return [fallback];
     }
     private IRenderable Content() => _content ??= BuildContent();
+    internal IRenderable LatestToolPreview()
+    {
+        var call = Invocations.Last();
+        var rows = new List<IRenderable> { new Text(TerminalSafeText.Clean(ToolBadge(call.Name) + " · " + TerminalUi.ToolLabel(call.Name, call.Args)), new Style(Color.Grey)) };
+        if (Diff(call) is { } diff) rows.Add(DiffRows(diff, 4));
+        else foreach (var line in OutputLines(call, call.Result == null ? "正在执行…" : TerminalUi.ResultSummary(JsonSerializer.Deserialize<JsonElement>(call.Result), false, call.Name)).Take(4))
+            rows.Add(new Text(TerminalSafeText.Clean(line), new Style(call.Ok == false ? Color.Red : Color.Grey)));
+        return new Rows(rows);
+    }
     private IRenderable BuildContent()
     {
         var rows = new List<IRenderable> { new MarkedThinkingLine(this, IsReasoning ? "思考 › " : "代码 › ") };
         if (IsReasoning) return new Rows(rows);
         if (Invocations.Count == 0) rows.Add(new Text(Ok == null ? "正在计算或准备操作…" : "计算与处理已结束 · 点击查看代码和结果", TraceStyle(-1, Color.Grey)));
+        if (Invocations.Count == 0 && Ok == null) rows.Add(new ToolRunningLine("正在执行工具…"));
         foreach (var (call, index) in Invocations.Select((call, index) => (call, index)))
         {
             var colour = call.Ok == false ? Color.Red : call.Ok == true ? Color.Green : Color.Cyan1;
@@ -252,21 +314,42 @@ internal sealed class CodeExecutionBlock(string id, string code, bool reasoning 
                 using var result = JsonDocument.Parse(call.Result);
                 preview = call.Ok == false ? result.RootElement.TryGetProperty("error", out var error) ? error.GetString() ?? "操作失败" : "操作失败" : TerminalUi.ResultSummary(result.RootElement, false, call.Name);
             }
-            var task = TaskInfo(call);
+            var linkedTasks = TasksFor(call);
+            var task = linkedTasks.FirstOrDefault();
             if (call.Name is "shell_status" or "agent_status" or "wait_agent")
             {
                 var status = call.Ok == false ? "查询失败 · " + preview : task == null ? State(call.Ok) : TaskState(task.State);
                 rows.Add(new Text($"{index + 1}. 查询已有任务 {task?.Id[..Math.Min(8, task.Id.Length)] ?? ""} · {status}", TraceStyle(call.SpanIndex, call.Ok == false ? Color.Red : Color.Grey)));
+                if (call.Ok == null) rows.Add(new ToolRunningLine());
                 continue;
             }
             if (task != null) colour = task.State is BackgroundTaskState.Failed or BackgroundTaskState.Interrupted ? Color.Red : task.State == BackgroundTaskState.Completed ? Color.Green : Color.Cyan1;
-            var body = new List<IRenderable> { new Markup($"[bold white on #5943ad] {ToolBadge(call.Name)} [/] [grey]{Markup.Escape("[" + TerminalSafeText.Clean(ToolSubject(call.Name, call.Args, label)) + "]")}[/]" , TraceStyle(call.SpanIndex, colour)) };
+            var badge = call.Name == "browser" ? BrowserPresentation.Badge(call.Args) : ToolBadge(call.Name);
+            var badgeColour = call.Name != "browser" ? "#5943ad" : badge is "PAGE" or "FIND" or "SHOT" ? "#275d8c" : badge is "TYPE" ? "#26705c" : "#875122";
+            var body = new List<IRenderable> { new Markup($"[bold white on {badgeColour}] {badge} [/] [grey]{Markup.Escape("[" + TerminalSafeText.Clean(ToolSubject(call.Name, call.Args, label)) + "]")}[/]" , TraceStyle(call.SpanIndex, colour)) };
             if (task != null)
             {
-                body.Add(new Text(TerminalSafeText.Clean(task.Title), TraceStyle(call.SpanIndex, Color.Default)));
-                var progress = task.CurrentStep ?? (task.State == BackgroundTaskState.Queued ? "等待执行" : TaskState(task.State));
-                body.Add(new Text(TerminalSafeText.Clean(progress) + " · 点击查看进度与结果", TraceStyle(call.SpanIndex, Color.Grey)));
+                foreach (var linked in linkedTasks)
+                {
+                    var marker = ChildMarker(call, linked);
+                    var active = BackgroundTasks.IsActive(linked.State);
+                    var childColour = linked.State is BackgroundTaskState.Failed or BackgroundTaskState.Interrupted ? Color.Red : active ? Color.Cyan1 : Color.Green;
+                    var childRows = new List<IRenderable>
+                    {
+                        new AgentSummaryLine(linked.Id[..Math.Min(8, linked.Id.Length)] + " · " + TaskState(linked.State), new Style(childColour)),
+                        new AgentSummaryLine(linked.Title, new Style(Color.Default))
+                    };
+                    var progress = BackgroundTasks.IsActive(linked.State) ? linked.CurrentStep ?? TaskState(linked.State) : TaskState(linked.State);
+                    if (active) childRows.Add(new AgentSummaryLine(progress, new Style(Color.Grey)));
+                    if (TaskPreview != null && IsChildTask(linked)) childRows.Add(new TextViewport(TaskPreview(linked), active ? 4 : 3, 0));
+                    childRows.Add(new Text("点击查看完整执行消息与结果", new Style(Color.Grey)));
+                    body.Add(new MarkedTaskPreview(this, marker, new Panel(new Rows(childRows))
+                        .Border(BoxBorder.Rounded).BorderStyle(new Style(childColour)).Expand()));
+                    body.Add(new Text(""));
+                }
             }
+            else if (call.Name is "todo_read" or "todo_write" && call.Ok == true)
+                body.Add(new Text(TerminalSafeText.Clean(preview), TraceStyle(call.SpanIndex, Color.Default)));
             else if (Diff(call) is { } diff) body.Add(new TextViewport(DiffRows(diff, 8, call.SpanIndex), 10, 0));
             else
             {
@@ -274,6 +357,7 @@ internal sealed class CodeExecutionBlock(string id, string code, bool reasoning 
                 foreach (var line in output.Take(3)) body.Add(new Text("  │ " + TerminalSafeText.Clean(line), TraceStyle(call.SpanIndex, call.Ok == false ? Color.Red : Color.Grey)));
                 if (output.Length > 3) body.Add(new Text($"  └ … +{output.Length - 3} lines [点击 / Ctrl+E 展开]", TraceStyle(call.SpanIndex, Color.Grey)));
             }
+            if (task == null && call.Ok == null) body.Add(new ToolRunningLine());
             rows.Add(new Rows(body));
             rows.Add(new Text(""));
         }
@@ -297,7 +381,36 @@ internal sealed class CodeExecutionBlock(string id, string code, bool reasoning 
         return new Rows(rows);
     }
     public Measurement Measure(RenderOptions options, int maxWidth) => Content().Measure(options, maxWidth);
+    internal bool DelegationFinished
+    {
+        get
+        {
+            var children = Invocations.Where(call => call.Name is "subagent" or "start_agent").SelectMany(TasksFor).ToArray();
+            return children.Length > 0 && children.All(task => !BackgroundTasks.IsActive(task.State));
+        }
+    }
     public IEnumerable<Segment> Render(RenderOptions options, int maxWidth) => Content().Render(options, maxWidth);
+}
+
+/// <summary>Keep long delegation prompts from consuming the entire batch preview.</summary>
+internal sealed class AgentSummaryLine(string text, Style style) : IRenderable
+{
+    public Measurement Measure(RenderOptions options, int maxWidth) => new(1, maxWidth);
+    public IEnumerable<Segment> Render(RenderOptions options, int maxWidth)
+    {
+        var line = new Segment(TerminalSafeText.Clean(text).Replace('\r', ' ').Replace('\n', ' ').Replace('\t', ' '), style);
+        if (line.CellCount() <= maxWidth) return [line];
+        return Segment.Truncate([line], Math.Max(0, maxWidth - 1)).Append(new Segment("…", style));
+    }
+}
+
+internal sealed class MarkedTaskPreview(CodeExecutionBlock block, int span, IRenderable content) : IRenderable
+{
+    public Measurement Measure(RenderOptions options, int maxWidth) => content.Measure(options, maxWidth);
+    public IEnumerable<Segment> Render(RenderOptions options, int maxWidth) => content.Render(options, maxWidth).Select(segment =>
+        block.UseMarkers && !segment.IsLineBreak
+            ? new Segment(segment.Text, new Style(segment.Style.Foreground, block.TraceStyle(span, Color.Default).Background, segment.Style.Decoration))
+            : segment);
 }
 
 internal sealed class PythonCodeText(CodeExecutionBlock execution) : IRenderable
@@ -322,6 +435,13 @@ internal sealed class PythonCodeText(CodeExecutionBlock execution) : IRenderable
             yield return Segment.LineBreak;
         }
     }
+}
+
+internal sealed class ToolRunningLine(string label = "正在执行工具…") : IRenderable
+{
+    public Measurement Measure(RenderOptions options, int maxWidth) => new(1, maxWidth);
+    public IEnumerable<Segment> Render(RenderOptions options, int maxWidth) => Segment.Truncate(
+        [new Segment("  " + LoadingIndicator.DotsFrame(Environment.TickCount64) + " " + label, new Style(Color.Cyan1))], maxWidth);
 }
 
 internal sealed class MarkedThinkingLine(CodeExecutionBlock block, string prefix) : IRenderable

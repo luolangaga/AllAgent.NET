@@ -16,6 +16,7 @@ internal sealed class TerminalKeyReader
     private readonly Func<string?> _clipboard;
     private readonly bool _native;
     private TerminalInput? _deferred;
+    private bool _discardMouseTail;
     public bool HasInput
     {
         get
@@ -103,6 +104,18 @@ internal sealed class TerminalKeyReader
     }
     private async Task<TerminalInput> ReadOneAsync(CancellationToken ct)
     {
+        // A cancelled prompt may have consumed only the start of an SGR report.
+        // Keep ownership of its remaining bytes across prompt cancellation.
+        if (_discardMouseTail)
+        {
+            while (true)
+            {
+                while (!_available()) { ct.ThrowIfCancellationRequested(); await Task.Delay(2, ct); }
+                var tail = ReadKey().KeyChar;
+                if (tail is 'M' or 'm') { _discardMouseTail = false; return new(default); }
+                if (!(char.IsAsciiDigit(tail) || tail is ';')) { _discardMouseTail = false; return await KeyInput(new ConsoleKeyInfo(tail, (ConsoleKey)0, false, false, false), ct); }
+            }
+        }
         if (_pending.TryDequeue(out var pending)) return pending;
         while (!HasInput) { ct.ThrowIfCancellationRequested(); await Task.Delay(16, ct); }
         if (_pending.TryDequeue(out var mouse)) return mouse;
@@ -134,12 +147,14 @@ internal sealed class TerminalKeyReader
         }
         if (prefix.ToString() == "\u001b[<")
         {
+            _discardMouseTail = true;
             while (prefix.Length < 40 && DateTime.UtcNow < deadline)
             {
                 if (!_available()) { await Task.Delay(2, ct); continue; }
                 var next = ReadKey(); consumed.Add(next); prefix.Append(next.KeyChar);
                 if (next.KeyChar is 'M' or 'm')
                 {
+                    _discardMouseTail = false;
                     var parts = prefix.ToString()[3..^1].Split(';');
                     if (parts.Length == 3 && int.TryParse(parts[0], out var button) && int.TryParse(parts[1], out var x) && int.TryParse(parts[2], out var y))
                     {
@@ -150,6 +165,7 @@ internal sealed class TerminalKeyReader
                     break;
                 }
             }
+            return new(default);
         }
         while (prefix.Length >= 3 && prefix.Length < 32 && prefix[^1] is not (>= '@' and <= '~') && DateTime.UtcNow < deadline)
         {

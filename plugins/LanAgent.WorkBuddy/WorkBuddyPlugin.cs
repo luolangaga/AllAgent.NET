@@ -19,6 +19,9 @@ public sealed class WorkBuddyPlugin : ILanAgentPlugin
         {
             var account = new WorkBuddyAccount(context.DataDirectory, international);
             accounts.Add(account);
+            context.AddModelFooter(new(account.Id,
+                model => model.AuthenticationProviderId == account.Id || model.ProviderId == account.Id,
+                async (_, ct) => new ModelFooterItem[] { new("", await account.QuotaAsync(ct)) }));
             context.AddAuthentication(account);
             context.AddProvider(account.ModelProvider);
             context.AddCommand(new(account.Id + "-quota", "查询 WorkBuddy 账号额度", async (_, ct) => await account.QuotaAsync(ct)));

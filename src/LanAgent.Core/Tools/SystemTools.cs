@@ -5,13 +5,13 @@ using LanAgent.Core.Runtime;
 
 namespace LanAgent.Core.Tools;
 
-public partial class SystemTools(WorkspacePolicy workspace, RuntimeEnvironment environment, IReadOnlyDictionary<string, string> shellAllowlist, LanAgent.Core.Services.WorkspaceCheckpoints? checkpoints = null, ExternalDirectoryPermissions? permissions = null, LanAgent.Core.Services.BackgroundTasks? jobs = null) : IAgentToolPreflight, IAgentToolAccess, IAgentToolApprovalPolicy
+public partial class SystemTools(WorkspacePolicy workspace, RuntimeEnvironment environment, IReadOnlyDictionary<string, string> shellAllowlist, LanAgent.Core.Services.WorkspaceCheckpoints? checkpoints = null, ExternalDirectoryPermissions? permissions = null, LanAgent.Core.Services.BackgroundTasks? jobs = null, int fileReadMaxBytes = 20_000, int fileReadMaxLines = 2_000, string? powerShellModuleDirectory = null) : IAgentToolPreflight, IAgentToolAccess, IAgentToolApprovalPolicy
 {
     public ToolApprovalPolicy GetApprovalPolicy(string name, JsonElement arguments)
     {
         if (name != "run_shell") return new();
         var exe = ToolArguments.Get<string>(arguments, "exe");
-        return ShellExecutablePolicy.TryResolveForExecution(shellAllowlist, exe, environment.PowerShell, out var resolved, out var preapproved)
+        return ShellExecutablePolicy.TryResolveForExecution(shellAllowlist, exe, out var resolved, out var preapproved)
             ? new(!preapproved, resolved)
             : new();
     }
@@ -38,9 +38,11 @@ public partial class SystemTools(WorkspacePolicy workspace, RuntimeEnvironment e
             if (name is "file_read" or "file_write" or "file_edit" or "file_search" or "file_glob" or "list_directory") workspace.ResolveForApproval(ToolArguments.Get(arguments, "path", "."));
             return null;
         }
-        if (!environment.Ready) return ToolResult.Failure("Python and PowerShell 7.6 must pass environment checks first.");
+        if (!environment.Ready) return ToolResult.Failure(
+            $"Runtime environment checks failed: Python={(environment.Python == null ? "missing or unsupported" : "ready")}; embedded PowerShell SDK={(environment.PowerShell == null ? "missing or unsupported" : "ready")}. Run doctor for diagnostics. "
+            + string.Join("; ", environment.Problems));
         var exe = ToolArguments.Get<string>(arguments, "exe");
-        if (!ShellExecutablePolicy.TryResolveForExecution(shellAllowlist, exe, environment.PowerShell, out _, out _))
+        if (!ShellExecutablePolicy.TryResolveForExecution(shellAllowlist, exe, out _, out _))
             return ToolResult.Failure("Executable '" + exe + "' was not found on PATH or at an absolute path. Installed executables outside the trusted aliases can run after a one-time approval; configure --allow-shell alias=absolute-path to trust one without prompting.");
         var args = ToolArguments.Get<string[]>(arguments, "args", []);
         var timeout = ToolArguments.Get(arguments, "timeout_seconds", 0);
@@ -109,7 +111,7 @@ public partial class SystemTools(WorkspacePolicy workspace, RuntimeEnvironment e
         var bom = bytes.AsSpan().StartsWith(new byte[] { 0xef, 0xbb, 0xbf });
         string content;
         try { content = new UTF8Encoding(false, true).GetString(bytes, bom ? 3 : 0, bytes.Length - (bom ? 3 : 0)); }
-        catch (DecoderFallbackException) { return ToolResult.Failure("file_edit supports UTF-8 text only; the file was not modified."); }
+        catch (DecoderFallbackException) { return ToolResult.Failure("file_edit supports UTF-8 text only; the file was not modified. Convert a copy from its original encoding (for example GBK or UTF-16) to UTF-8, verify the text, then retry."); }
         if (content.Contains('\0')) return ToolResult.Failure("File contains NUL bytes and is not supported UTF-8 text; no edit applied.");
         var applied = TextFileEdits.Apply(content, edits);
         if (applied.Error != null) return ToolResult.Failure(applied.Error);
@@ -148,7 +150,7 @@ public partial class SystemTools(WorkspacePolicy workspace, RuntimeEnvironment e
         }, hasMore));
     }
 
-    [AgentTool("run_shell", Risk = ToolRisk.Execute), Description("Run an installed executable by name or absolute path with literal arguments through the PowerShell 7.6 host. Trusted aliases run directly; other installed executables require one-time approval. No command-string interpolation.")]
+    [AgentTool("run_shell", Risk = ToolRisk.Execute), Description("Run an installed executable by name or absolute path with literal arguments through the embedded PowerShell SDK host. Trusted aliases run directly; other installed executables require one-time approval. No command-string interpolation.")]
     public async Task<ToolResult> RunShellAsync([Description("Installed executable name on PATH or fully qualified executable path; untrusted programs require per-call approval")] string exe,
         [Description("Literal argument array; each item is passed separately")] string[] args,
         [Description("Relative or absolute working directory; external paths require directory approval")] string working_directory = ".",
@@ -157,10 +159,11 @@ public partial class SystemTools(WorkspacePolicy workspace, RuntimeEnvironment e
     {
         var rejected = ValidateInvocation("run_shell", JsonSerializer.SerializeToElement(new { exe, args, working_directory, timeout_seconds, background }));
         if (rejected != null) return rejected;
-        if (!ShellExecutablePolicy.TryResolveForExecution(shellAllowlist, exe, environment.PowerShell, out var executable, out _)) return ToolResult.Failure("Executable is no longer available at the resolved path.");
+        if (!ShellExecutablePolicy.TryResolveForExecution(shellAllowlist, exe, out var executable, out _)) return ToolResult.Failure("Executable is no longer available at the resolved path.");
         var payload = Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { exe = executable, args })));
         // Constant trusted PowerShell source; user arguments are decoded as data.
-        var info = BoundedProcess.StartInfo(environment.PowerShell!, ["-NoLogo", "-NoProfile", "-NonInteractive", "-CommandWithArgs", RuntimeScripts.Read("run_shell.ps1"), payload], workspace.Resolve(working_directory));
+        var info = BoundedProcess.StartInfo(environment.PowerShell!, ["--execute", payload], workspace.Resolve(working_directory));
+        if (powerShellModuleDirectory != null) info.Environment["LANAGENT_PS_MODULE_ROOT"] = powerShellModuleDirectory;
         info.RedirectStandardInput = true;
         checkpoints?.MarkExternalAction();
         if (background)

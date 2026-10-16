@@ -27,9 +27,11 @@ public static class SubAgentModelSelection
         if (!selected.IsEnabled) throw new ArgumentException("The selected child provider is disabled.");
         var clone = JsonSerializer.Deserialize<ApiConfig>(JsonSerializer.Serialize(selected))!;
         clone.AuthenticationContextId = selected.AuthenticationContextId;
+        AI.ReasoningSettings.RememberForModel(clone);
         if (!string.IsNullOrWhiteSpace(model)) clone.DefaultModel = model.Trim();
         if (string.IsNullOrWhiteSpace(clone.DefaultModel)) throw new ArgumentException("Select a child model before delegating.");
         if (clone.DefaultModel.Length > 256) throw new ArgumentException("Child model ID exceeds 256 characters.");
+        AI.ReasoningSettings.RestoreForModel(clone);
         return clone;
     }
 }

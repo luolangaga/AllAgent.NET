@@ -11,12 +11,12 @@ public sealed class AgentDelegationTools(BackgroundTasks tasks, Func<SubAgentReq
         {"type":"object","additionalProperties":false,"properties":{
           "agent":{"type":"string","description":"Configured agent name for single mode"},
           "task":{"type":"string","description":"Self-contained delegated task for single mode"},
-          "tasks":{"type":"array","maxItems":8,"description":"Parallel tasks; at most 8, concurrency 4","items":{"type":"object","additionalProperties":false,"properties":{"agent":{"type":"string"},"task":{"type":"string"}},"required":["agent","task"]}},
+          "tasks":{"type":"array","maxItems":8,"description":"Parallel tasks; at most 8, concurrency 6","items":{"type":"object","additionalProperties":false,"properties":{"agent":{"type":"string"},"task":{"type":"string"}},"required":["agent","task"]}},
           "chain":{"type":"array","description":"Sequential tasks; {previous} in task inserts the preceding result","items":{"type":"object","additionalProperties":false,"properties":{"agent":{"type":"string"},"task":{"type":"string"}},"required":["agent","task"]}}
         }}
         """);
     public IReadOnlyList<AgentToolDescriptor> Definitions { get; } = [new("subagent",
-        "Delegate isolated tasks. Provide exactly one mode: agent+task, tasks (parallel, max 8/concurrency 4), or chain (sequential with {previous}). Inherits dispatch model and permissions. Returns final results, errors and exit codes. Children cannot ask the user or delegate. Cancellation stops and joins every launched child. Missing information is returned to the parent.", Schema, ToolRisk.Read)];
+        "After inspecting enough context to define bounded tasks and separate edit scopes, delegate substantial independent work when the benefit exceeds startup and integration cost. Keep small tasks and the critical dependent path with the parent. Batch independent module investigations, implementations with separate edit scopes, or research tasks together. Use ordinary parallel tool calls for short operations; handle small dependent work directly. Across roles at most 6 children run concurrently. Provide exactly one mode: agent+task, tasks (parallel, max 8/concurrency 6), or chain (sequential with {previous}). Inherits dispatch model and permissions. Returns final results, errors and exit codes. Children cannot ask the user or delegate. Cancelling the parent stops dispatch and waiting; already admitted children continue in the background and notify the parent when finished. Explicit task cancellation stops a child. Missing information is returned to the parent.", Schema, ToolRisk.Read)];
 
     public async ValueTask<ToolResult> InvokeAsync(string name, JsonElement arguments, CancellationToken ct)
     {
@@ -46,7 +46,7 @@ public sealed class AgentDelegationTools(BackgroundTasks tasks, Func<SubAgentReq
         {
             if (parallel)
             {
-                using var slots = new SemaphoreSlim(4);
+                using var slots = new SemaphoreSlim(6);
                 await Task.WhenAll(items.Select(async (item, index) =>
                 {
                     await slots.WaitAsync(batch.Token);
@@ -67,13 +67,16 @@ public sealed class AgentDelegationTools(BackgroundTasks tasks, Func<SubAgentReq
         }
         finally
         {
-            // Even a failing launcher must not leave sibling work running behind a finished call.
+            // Stop dispatch/waiting only. Admitted jobs have an independent lifetime.
             batch.Cancel();
-            foreach (var id in started) tasks.Cancel(id);
-            await Task.WhenAll(started.Select(id => tasks.WaitAsync(id)));
+            foreach (var id in started)
+                if (ct.IsCancellationRequested || results.Any(result => result == null) || BackgroundTasks.IsActive(tasks.Get(id).State))
+                    tasks.NotifyParentOnCompletion(id);
         }
         var completed = results.Where(result => result != null).ToArray();
         var failed = completed.Any(result => result.ExitCode != 0);
+        var failedTaskIds = completed.Where(result => result.ExitCode != 0).Select(result => result.TaskId).ToArray();
+        var succeeded = completed.Count(result => result.ExitCode == 0);
         var outputLimit = 16000;
         ToolResult response;
         do
@@ -84,8 +87,9 @@ public sealed class AgentDelegationTools(BackgroundTasks tasks, Func<SubAgentReq
                 OutputTruncated = result.Output.Length > outputLimit || (result.Error?.Length ?? 0) > Math.Min(outputLimit, 2000)
             }).ToArray();
             response = new(!failed, new { mode = parallel ? "parallel" : chain ? "chain" : "single", results = bounded,
-                taskId = completed.Length == 1 ? completed[0].TaskId : null },
-                failed ? "A delegated task failed, was cancelled or needs parent input. Inspect results; subsequent chain steps were not executed." : null,
+                taskId = completed.Length == 1 ? completed[0].TaskId : null, failed = failedTaskIds, succeeded },
+                failed ? $"Delegated tasks failed, were cancelled or need parent input: {string.Join(", ", failedTaskIds)}. Succeeded: {succeeded}. results still contains successful outputs; do not rerun successful tasks." +
+                    (chain ? " Subsequent chain steps were not executed." : "") : null,
                 bounded.Any(result => result.OutputTruncated));
             outputLimit /= 2;
         } while (response.ToJson().Length > 60000 && outputLimit >= 128);

@@ -11,7 +11,7 @@ import pyte
 from winpty import PtyProcess
 
 root = Path(__file__).resolve().parents[1]
-executable = os.environ.get("LANAGENT_QA_EXECUTABLE", str(root / "src/LanAgent.Terminal/bin/Release/net8.0/lanagent.exe"))
+executable = os.environ.get("LANAGENT_QA_EXECUTABLE", str(root / "src/LanAgent.Terminal/bin/Release/net10.0/lanagent.exe"))
 output = root / "artifacts/qa/agent-permissions" / uuid.uuid4().hex
 workspace = output / "workspace"
 workspace.mkdir(parents=True)

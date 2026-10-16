@@ -31,7 +31,8 @@ try
     using var guidance = new HyperlightExecuteCodeFunction(options);
     options.Tools = visibleTools
         .Concat([new TransportFunction("_lan_stdout", transport), new TransportFunction("_lan_chunk", transport),
-            new TransportFunction("_lan_upload", transport), new TransportFunction("_lan_diagnostic", transport), new DispatchFunction(tools, transport)]);
+            new TransportFunction("_lan_upload", transport), new TransportFunction("_lan_diagnostic", transport),
+            new SleepFunction(), new DispatchFunction(tools, transport)]);
     // No host input mounts and no outbound domains. Microsoft's function manages warm snapshot/restore.
     using var execute = new HyperlightExecuteCodeFunction(options);
     // The SDK initializes the native VM lazily on its first invocation. Do not tell the
@@ -56,7 +57,13 @@ try
         var guarded = GuestPythonLibraries.Prelude + """
             import json as _lan_json
             _lan_host_call_tool = call_tool
-            def call_tool(tool_name, **parameters):
+            def call_tool(tool_name, /, arguments=None, **parameters):
+                if arguments is not None:
+                    if not isinstance(arguments, dict):
+                        raise TypeError('call_tool second argument must be a dict')
+                    if any(key in parameters for key in arguments):
+                        raise TypeError('Duplicate tool argument')
+                    parameters = {**arguments, **parameters}
                 if tool_name.startswith('_lan_'):
                     raise ValueError('Reserved transport function')
                 _lan_payload = _lan_json.dumps(parameters)
@@ -70,6 +77,28 @@ try
                     return _lan_json.loads(''.join(_lan_fragments))
                 return _lan_reply['result']
             _lan_remaining = 20000
+            # The guest's native sleep enters Tokio without an active reactor.
+            # Wait in a private synchronous callback on the VM's owning thread.
+            # The parent still enforces CodeTimeout by terminating this worker.
+            import time as _lan_time
+            def _lan_sleep(seconds, /):
+                if not isinstance(seconds, (int, float)):
+                    try:
+                        seconds = seconds.__index__()
+                    except AttributeError:
+                        raise TypeError('sleep requires a real number') from None
+                seconds = float(seconds)
+                if seconds != seconds:
+                    raise ValueError('Invalid value NaN')
+                if seconds == float('inf') or seconds == float('-inf'):
+                    raise OverflowError('timestamp out of range')
+                if seconds < 0:
+                    raise ValueError('sleep length must be non-negative')
+                while seconds > 0:
+                    interval = min(seconds, 60.0)
+                    _lan_host_call_tool('_lan_sleep', seconds=interval)
+                    seconds -= interval
+            _lan_time.sleep = _lan_sleep
             def print(*values, sep=' ', end='\n'):
                 global _lan_remaining
                 if _lan_remaining <= 0:
@@ -147,6 +176,26 @@ sealed class HostFunction(AgentToolDescriptor tool, GuestTransport transport) : 
     }
 }
 
+sealed class SleepFunction : AIFunction
+{
+    public override string Name => "_lan_sleep";
+    public override string Description => "Private trusted guest sleep transport.";
+    public override JsonElement JsonSchema => JsonSerializer.SerializeToElement(new
+    {
+        type = "object", properties = new { seconds = new { type = "number" } }, required = new[] { "seconds" }
+    });
+    protected override ValueTask<object?> InvokeCoreAsync(AIFunctionArguments arguments, CancellationToken cancellationToken)
+    {
+        var seconds = JsonSerializer.SerializeToElement(arguments["seconds"]).GetDouble();
+        if (!double.IsFinite(seconds) || seconds is < 0 or > 60)
+            throw new ArgumentOutOfRangeException(nameof(arguments));
+        cancellationToken.ThrowIfCancellationRequested();
+        if (cancellationToken.WaitHandle.WaitOne(TimeSpan.FromSeconds(seconds)))
+            cancellationToken.ThrowIfCancellationRequested();
+        return new(new { slept = true });
+    }
+}
+
 /// <summary>Bridges the native SDK's fixed 16 KiB shared buffers without reducing the public output budgets.</summary>
 sealed class GuestTransport
 {
@@ -183,7 +232,7 @@ sealed class GuestTransport
     public object Wrap(JsonElement result)
     {
         _result = result.GetRawText();
-        if (_result.Length > 64000) throw new InvalidDataException("Host tool response exceeds its transport budget.");
+        if (_result.Length > 4_000_000) throw new InvalidDataException("Host tool response exceeds its transport budget.");
         if (Encoding.UTF8.GetByteCount(_result) <= 6000) return new { result = result.Clone() };
         return new { _lan_parts = (_result.Length + FragmentCharacters - 1) / FragmentCharacters };
     }

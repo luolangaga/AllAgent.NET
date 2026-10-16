@@ -26,7 +26,7 @@ public sealed class SkillPromptReferenceTests
         var catalog = new SkillCatalog(store, w.Root, Path.Combine(w.Root, "data"), w.Root);
         catalog.Create("fixture", "fixture", "Use @openai/codex. Task: $ARGUMENTS");
         await File.WriteAllTextAsync(Path.Combine(w.Root, "some file.txt"), "FILE-PROOF @another-missing.txt");
-        await File.WriteAllBytesAsync(Path.Combine(w.Root, "pixel.png"), Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jI1kAAAAASUVORK5CYII="));
+        await File.WriteAllBytesAsync(Path.Combine(w.Root, "pixel.png"), Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC"));
         var prompt = await PromptReferences.ExpandSkillAsync(catalog, "fixture", "Review @\"some file.txt\" @pixel.png", w.Root);
         Assert.Contains("FILE-PROOF @another-missing.txt", prompt.Text); Assert.Contains("@openai/codex", prompt.Text);
         Assert.Single(prompt.Images);

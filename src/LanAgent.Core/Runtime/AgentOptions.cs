@@ -2,9 +2,13 @@ using LanAgent.Core.Tools;
 
 namespace LanAgent.Core.Runtime;
 
+public enum SandboxMode { Auto, Hyperlight, Monty }
+
 public sealed record AgentOptions
 {
+    public SandboxMode SandboxMode { get; init; } = SandboxMode.Auto;
     public ComputerUseState ComputerUse { get; init; } = new();
+    public BrowserUseState BrowserUse { get; init; } = new();
     public LanAgent.Core.Services.BackgroundTasks? BackgroundTasks { get; init; }
     public bool IsSubAgent { get; init; }
     public string? WebSearchBaseUrl { get; init; }
@@ -14,25 +18,29 @@ public sealed record AgentOptions
     public LanAgent.Core.Services.WorkspaceCheckpoints? Checkpoints { get; init; }
     public Func<AgentQuestion, CancellationToken, Task<string?>>? QuestionHandler { get; init; }
     public Func<string>? InstructionsProvider { get; init; }
-    /// <summary>Author profile is host metadata; children never update it. Disable for private sessions.</summary>
-    public bool EnableMemory { get; init; } = true;
-    public string AuthorProfileDirectory { get; init; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "LanAgent");
-    /// <summary>Live host mode check (e.g. plan mode) before automatic memory writes.</summary>
-    public Func<bool>? MemoryUpdatesAllowed { get; init; }
-    public TimeSpan AuthorProfileUpdateInterval { get; init; } = TimeSpan.FromMinutes(10);
-    public int AuthorProfileBatchTurns { get; init; } = 3;
+    public string SharedDirectory { get; init; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "LanAgent");
     public Func<IReadOnlyList<string>?>? HostToolsProvider { get; init; }
     /// <summary>Resolve a stable configuration snapshot at each model-step boundary.</summary>
     public Func<Guid, LanAgent.Core.Models.ApiConfig, LanAgent.Core.Models.ApiConfig>? ConfigurationProvider { get; init; }
     public string WorkspaceRoot { get; init; } = Environment.CurrentDirectory;
     public string? PythonPath { get; init; }
+    /// <summary>Optional path to the bundled LanAgent.PowerShell SDK worker, not system pwsh.</summary>
     public string? PowerShellPath { get; init; }
+    /// <summary>Allow provisioning the pinned Monty fallback when Hyperlight cannot start.</summary>
+    public bool AllowSandboxInstallation { get; init; } = true;
     public string SandboxWorkerPath { get; init; } = Path.Combine(AppContext.BaseDirectory, "sandbox", "LanAgent.Sandbox.exe");
     public string? PythonGuestPath { get; init; } = Environment.GetEnvironmentVariable("HYPERLIGHT_PYTHON_GUEST_PATH");
-    /// <summary>Skip host tool approvals; Python always remains in Hyperlight.</summary>
+    /// <summary>Skip host tool approvals; Python always remains in the selected sandbox.</summary>
     public bool FullAccess { get; init; } = true;
     public LanAgent.Core.Services.PythonPackageEnvironment? PythonLibraries { get; init; }
     public ExternalDirectoryPermissions ExternalDirectoryPermissions { get; init; } = new();
+    public int FileReadMaxBytes { get; init; } = 20_000;
+    public int FileReadMaxLines { get; init; } = 2_000;
+    public int MaxCodeCharacters { get; init; } = 32_000;
+    public int MaxToolResultCharacters { get; init; } = 64_000;
+    public int MaxToolStreamCharacters { get; init; } = 20_000;
+    /// <summary>Opt in to replaying a request after output or usage has arrived; replay may incur additional charges.</summary>
+    public bool RetryAfterModelOutput { get; init; }
     public int MaxToolCalls { get; init; } = int.MaxValue;
     public int MaxModelRetries { get; init; } = 5;
     public TimeSpan ModelRetryDelay { get; init; } = TimeSpan.FromSeconds(2);
@@ -51,7 +59,12 @@ public sealed record AgentOptions
 
     internal void Validate()
     {
-        if (AuthorProfileUpdateInterval <= TimeSpan.Zero || AuthorProfileBatchTurns < 1 || MaxToolCalls < 1 || MaxModelRetries < 0 || MaxModelRetries > 20 || ModelRetryDelay < TimeSpan.Zero || MaxContextCharacters < 8000 ||
+        if (!Enum.IsDefined(SandboxMode)) throw new ArgumentException("Invalid sandbox mode.");
+        if (FileReadMaxBytes < 256 || FileReadMaxBytes > 1_000_000 || FileReadMaxLines < 1 ||
+            MaxCodeCharacters < 1 || MaxCodeCharacters > 128_000 || MaxToolResultCharacters < 4096 || MaxToolResultCharacters > 4_000_000 ||
+            MaxToolStreamCharacters < 1 || MaxToolStreamCharacters > MaxToolResultCharacters)
+            throw new ArgumentException("Invalid tool output limits.");
+        if (MaxToolCalls < 1 || MaxModelRetries < 0 || MaxModelRetries > 20 || ModelRetryDelay < TimeSpan.Zero || MaxContextCharacters < 8000 ||
             RunTimeout != Timeout.InfiniteTimeSpan && RunTimeout <= TimeSpan.Zero || CodeTimeout <= TimeSpan.Zero || SandboxStartupTimeout <= TimeSpan.Zero)
             throw new ArgumentException("Invalid agent execution limits.");
         if (!Directory.Exists(WorkspaceRoot)) throw new DirectoryNotFoundException(WorkspaceRoot);

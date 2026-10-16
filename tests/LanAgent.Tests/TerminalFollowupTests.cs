@@ -19,11 +19,11 @@ public sealed class TerminalFollowupTests
         var source = Path.Combine(w.Root, "installed", "linked-skill"); Directory.CreateDirectory(source);
         await File.WriteAllTextAsync(Path.Combine(source, "SKILL.md"), "---\nname: linked-skill\ndescription: linked fixture\n---\nLINKED-PROOF");
         await File.WriteAllTextAsync(Path.Combine(source, "reference.txt"), "REFERENCE-PROOF");
-        var global = Path.Combine(w.Root, "home", ".claude", "skills"); Directory.CreateDirectory(global);
+        var global = Path.Combine(w.Root, "home", ".agents", "skills"); Directory.CreateDirectory(global);
         var link = Path.Combine(global, "linked-skill");
         if (OperatingSystem.IsWindows())
         {
-            var info = BoundedProcess.StartInfo(w.Pwsh, ["-NoProfile", "-NonInteractive", "-Command",
+            var info = BoundedProcess.StartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe"), ["-NoProfile", "-NonInteractive", "-Command",
                 $"New-Item -ItemType Junction -Path '{link.Replace("'", "''")}' -Target '{source.Replace("'", "''")}' | Out-Null"]);
             var result = await BoundedProcess.RunAsync(info, TimeSpan.FromSeconds(10), default);
             Assert.Equal(0, result.ExitCode);
@@ -51,8 +51,16 @@ public sealed class TerminalFollowupTests
         }
         Skill("home/.agents/skills/global-example", "global-example", new string('中', 40000));
         Skill("home/.codex/skills/.system/system-example", "system-example", "SYSTEM-PROOF");
+        Skill("home/.codex/skills/codex-example", "codex-example", "CODEX-PROOF");
+        Skill("home/.codex/skills/.system/internal-example", "internal-example", "INTERNAL-PROOF");
+        Skill("home/.claude/skills/claude-example", "claude-example", "CLAUDE-PROOF");
+        Skill("home/.config/opencode/skills/opencode-example", "opencode-example", "OPENCODE-PROOF");
         Skill(".lanagent/skills/system-example", "system-example", "PROJECT-PROOF");
         var catalog = new SkillCatalog(store, w.Root, Path.Combine(w.Root, "data"), Path.Combine(w.Root, "home"));
+        Assert.Equal(new[] { "global-example", "system-example" }, catalog.List().Where(skill => skill.Scope != "builtin").Select(skill => skill.Name));
+        Assert.Single(catalog.GlobalDirectories);
+        Assert.Equal(Path.Combine(w.Root, "home", ".agents", "skills"), catalog.GlobalDirectories[0]);
+        Assert.DoesNotContain(catalog.List(), skill => skill.Path.Contains(".codex"));
         Assert.Equal("global", catalog.Get("global-example").Scope);
         Assert.Equal("PROJECT-PROOF", catalog.Get("system-example").Instructions);
         Assert.Empty(catalog.Diagnostics); Assert.Same(catalog.List(), catalog.List());
@@ -94,7 +102,7 @@ public sealed class TerminalFollowupTests
         block.Start(new("status", "shell_status", "{\"id\":\"fixture-id\"}"));
         block.Complete(new("status", "shell_status", ToolResult.Success(task).ToJson()));
         var console = new TestConsole(); console.Profile.Width = 100; console.Write(block);
-        Assert.Contains("(2 行)", console.Output); Assert.Contains("查询已有任务", console.Output);
+        Assert.Contains("（2行）", console.Output); Assert.Contains("查询已有任务", console.Output);
         Assert.Equal(1, console.Output.Split("查询已有任务").Length - 1); Assert.Contains("fixture-", console.Output);
         Assert.DoesNotContain("执行步骤", console.Output);
         Assert.DoesNotContain("DUPLICATE-PROOF", console.Output); Assert.DoesNotContain("后台命令", console.Output);

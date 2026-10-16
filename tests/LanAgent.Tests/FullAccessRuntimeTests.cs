@@ -67,5 +67,20 @@ public sealed class FullAccessRuntimeTests
         Assert.Equal("file_read", summary.GetProperty("failureNames")[0].GetString());
     }
 
+    [Fact]
+    public async Task ParallelFileReadsWorkThroughActualSandbox()
+    {
+        using var workspace = new TestWorkspace();
+        await File.WriteAllTextAsync(Path.Combine(workspace.Root, "a.txt"), "alpha");
+        await File.WriteAllTextAsync(Path.Combine(workspace.Root, "b.txt"), "beta");
+        await using var runtime = await AgentRuntime.CreateAsync(workspace.Options with { FullAccess = true });
+        var result = await Execute(runtime, "r = call_tool('parallel', calls=[{'name':'file_read','arguments':{'path':'a.txt'}}, {'name':'file_read','arguments':{'path':'b.txt'}}])\nassert r['ok'], r['error']\nfor item in r['data']['results']:\n    print(item['data']['content'])");
+        Assert.True(result.Ok, result.ToJson());
+        var data = JsonSerializer.SerializeToElement(result.Data);
+        Assert.Contains("alpha", data.GetProperty("stdout").GetString());
+        Assert.Contains("beta", data.GetProperty("stdout").GetString());
+        Assert.Equal(2, data.GetProperty("hostCallSummary").GetProperty("total").GetInt32());
+    }
+
     private static Task<ToolResult> Execute(AgentRuntime runtime, string code) => runtime.CodeAct.ExecuteAsync("execute_code", JsonSerializer.SerializeToElement(new { code }), runtime.CodeAct.CallToolAsync, default);
 }

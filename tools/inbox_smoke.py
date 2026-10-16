@@ -46,7 +46,7 @@ session, config = str(uuid.uuid4()), str(uuid.uuid4())
 image = output / "correction.png"
 png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jI1kAAAAASUVORK5CYII="
 image.write_bytes(base64.b64decode(png))
-proc = PtyProcess.spawn([str(root / "src/LanAgent.Terminal/bin/Release/net8.0/lanagent.exe"),
+proc = PtyProcess.spawn([str(root / "src/LanAgent.Terminal/bin/Release/net10.0/lanagent.exe"),
     "chat", "--workspace", str(root), "--data-dir", str(output), "--resume", session, "--config", config], cwd=str(root), dimensions=(36, 120))
 chunks, raw = queue.Queue(), []
 screen = pyte.Screen(120, 36)

@@ -65,10 +65,10 @@ public class AnthropicProvider : IAiProvider
         var inputTokens = 0;
         var cachedInputTokens = 0;
 
-        while (!reader.EndOfStream && !ct.IsCancellationRequested)
+        while (!ct.IsCancellationRequested)
         {
             var line = await reader.ReadLineAsync(ct);
-            if (line == null) continue;
+            if (line == null) break;
 
             if (line.StartsWith("event: "))
             {

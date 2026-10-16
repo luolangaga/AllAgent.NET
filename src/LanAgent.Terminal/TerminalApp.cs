@@ -50,7 +50,19 @@ internal static class TerminalApp
             var approval = new ToolsApproval(ui) { FullAccess = !args.Flags.Contains("ask"), PlanMode = planMode };
             var options = args.Options(approval) with { FullAccess = approval.FullAccess && !planMode };
             ui.Workspace = options.WorkspaceRoot;
-            if (args.Command == "doctor") return await DoctorAsync(args, options, ui);
+            if (args.Command == "doctor")
+            {
+                using var doctorStore = new DataStore(args.DataDirectory);
+                options = options with { SandboxMode = SavedSandboxMode(doctorStore) };
+                options.BrowserUse.Root = Path.Combine(args.SharedDirectory, "browser-use");
+                options.BrowserUse.Load(doctorStore);
+                return await DoctorAsync(args, options, ui);
+            }
+            if (args.Command == "powershell")
+            {
+                await PowerShellStoreCommand.ExecuteAsync(new PowerShellModuleStore(args.SharedDirectory, options.PowerShellPath), ui, args.Positionals);
+                return 0;
+            }
             var dataDir = args.DataDirectory;
             if (args.Command == "tasks")
             {
@@ -61,6 +73,7 @@ internal static class TerminalApp
             DataDirectoryLease.EnsureNoLegacyWriter(dataDir);
             ProjectDataDirectory.Register(args.Workspace, dataDir);
             using var store = new DataStore(dataDir);
+            options = options with { SandboxMode = SavedSandboxMode(store) };
             if (args.Get("data-dir") == null)
             {
                 store.ImportProjectData(args.SharedDirectory, args.Workspace);
@@ -70,11 +83,14 @@ internal static class TerminalApp
                     File.SetAttributes(folder, File.GetAttributes(folder) | FileAttributes.Hidden);
                 }
             }
+            options.BrowserUse.Root = Path.Combine(args.SharedDirectory, "browser-use");
+            var browser = new BrowserUseManager(store, options.BrowserUse, ui);
+            browser.Load();
+            if (args.Command == "browser") { await browser.ExecuteAsync(args.Positionals); return 0; }
             var computer = new ComputerUseManager(store, options.ComputerUse, ui);
             computer.Load();
             if (args.Command == "computer") { computer.Execute(args.Positionals); return 0; }
-            var pythonLibraries = new PythonPackageEnvironment(args.SharedDirectory);
-            options = options with { AuthorProfileDirectory = args.SharedDirectory, PythonLibraries = pythonLibraries, PythonPath = pythonLibraries.Ready ? pythonLibraries.PythonPath : options.PythonPath };
+            options = options with { SharedDirectory = args.SharedDirectory };
             ValueTask<bool> NotifyInstallationAsync(string message, CancellationToken ct)
             {
                 ct.ThrowIfCancellationRequested();
@@ -84,17 +100,21 @@ internal static class TerminalApp
             async Task<AgentOptions> CancelableInitializationAsync()
             {
                 var configured = options;
-                await CancelableAsync(ct => ManagementUi.Busy("初始化 Python、常用库与 ripgrep", async token =>
+                await CancelableAsync(ct => ManagementUi.Busy("初始化运行环境与 PowerShell 能力", async token =>
                 {
                     var doctor = new EnvironmentDoctor();
                     var environment = await doctor.EnsureAsync(NotifyInstallationAsync, options.PythonPath, options.PowerShellPath, token);
                     await doctor.EnsureRipgrepAsync(token);
-                    await pythonLibraries.EnsureAsync(environment.Python!, token);
+                    await using var browserCheck = new BrowserUseTools(options.BrowserUse);
+                    var browserEnvironment = await browserCheck.CheckEnvironmentAsync(token);
+                    if (!browserEnvironment.Ok) throw new InvalidOperationException(browserEnvironment.Error);
+                    ManagementUi.Success(ui, "浏览器环境检查完成：C# / WebView2，不安装 Python 浏览器库或 Chromium。");
                     TerminalArguments.DiscoverShellExecutables(args.Shell);
-                    configured = options with { PythonPath = pythonLibraries.Ready ? pythonLibraries.PythonPath : environment.Python, PowerShellPath = environment.PowerShell };
+                    configured = options with { PythonPath = environment.Python, PowerShellPath = environment.PowerShell };
                     await using var initializedRuntime = await AgentRuntime.CreateAsync(configured, token);
                     var initializedProbe = await initializedRuntime.ProbeSandboxAsync(token);
-                    if (!initializedProbe.Ok) throw new InvalidOperationException(initializedProbe.Error ?? "Hyperlight Python 标准库校验失败。");
+                    if (!initializedProbe.Ok) throw new InvalidOperationException(initializedProbe.Error ?? "沙箱执行校验失败。");
+                    ReportSandbox(initializedRuntime, ui);
                     store.SetSetting("environment:initialized", "1");
                 }, ct));
                 return configured;
@@ -103,7 +123,7 @@ internal static class TerminalApp
             LoadingIndicator.Set(store.GetSetting("terminal:spinner"));
             BackgroundTasks? roleTasks = null;
             var roleManager = new AgentRoleManager(roles, ui, name => roleTasks?.List.Any(job =>
-                BackgroundTasks.IsActive(job.State) && store.GetConversation(job.SessionId)?.AgentRole == name) == true);
+                BackgroundTasks.IsActive(job.State) && store.GetConversation(job.SessionId)?.AgentRole == name) == true, () => store.ApiConfigs.ToArray());
             if (args.Command == "agents") { await roleManager.ExecuteAsync(args.Positionals); return 0; }
             ui.Inbox = new InputInbox(store, options.WorkspaceRoot);
             if (args.Command == "stats") { UsageStatistics.Show(store, ui); return 0; }
@@ -163,7 +183,7 @@ internal static class TerminalApp
             }
             string? runtimeRole = null;
             var navigationModels = new Dictionary<Guid, ApiConfig>();
-            options = options with { MemoryUpdatesAllowed = () => !approval.PlanMode, InstructionsProvider = () => Instructions(options.WorkspaceRoot, catalog, approval.PlanMode, includeRoot: true) + "\nAvailable child agents:\n" + string.Join("\n", roles.List().Select(role => role.Name + ": " + role.Description)) };
+            options = options with { InstructionsProvider = () => QuestionPreference.AppendInstructions(Instructions(options.WorkspaceRoot, catalog, approval.PlanMode, includeRoot: true) + "\nAvailable child agents:\n" + string.Join("\n", roles.List().Select(role => role.Name + ": " + role.Description)), QuestionPreference.Current(store)) };
             IAiProvider Provider(ApiConfig selected)
             {
                 var provider = new AiProviderFactory(plugins.Providers).GetProvider(selected);
@@ -173,13 +193,14 @@ internal static class TerminalApp
             {
                 var expanded = await PromptReferences.ExpandWithImagesAsync(request.Prompt, options.WorkspaceRoot, ct);
                 ct.ThrowIfCancellationRequested();
-                return StartJob(request.Prompt, model: request.Model, provider: request.Provider, request: request, expanded: expanded, ownerToken: ct);
+                return StartJob(request.Prompt, model: request.Model, provider: request.Provider, request: request, expanded: expanded);
             }
-            string StartJob(string prompt, string kind = "子 Agent", string? model = null, string? provider = null, SubAgentRequest? request = null, PromptReferences.ExpandedPrompt? expanded = null, CancellationToken ownerToken = default)
+            string StartJob(string prompt, string kind = "子 Agent", string? model = null, string? provider = null, SubAgentRequest? request = null, PromptReferences.ExpandedPrompt? expanded = null)
             {
                 if (AgentExecutionScope.IsSubAgent) throw new InvalidOperationException("子 Agent 不能再次派发任务。");
                 request ??= new("general", kind + " · " + ToolResult.Clip(prompt, 40), prompt, model, provider);
                 var roleDefinition = roles.Get(request.Agent);
+                if (roleDefinition.Execution?.MaxDepth == 0) throw new InvalidOperationException("此角色已禁用子代理执行。");
                 if (!roleDefinition.ReadOnly) checkpoints.MarkExternalAction();
                 var roleChanged = request.SessionId == null || store.GetConversation(request.SessionId.Value)?.AgentRole != request.Agent;
                 var effectiveModel = model ?? (roleChanged ? roleDefinition.Model : null);
@@ -198,6 +219,7 @@ internal static class TerminalApp
                     });
                     if (joined != null) return joined;
                 }
+                selected = (roleDefinition.Execution ?? new()).Apply(selected);
                 child.SubAgentConfigId = selected.Id; child.ModelId = selected.DefaultModel; child.ProviderId = selected.ProviderId;
                 if (request.SessionId == null) store.AddConversation(child); else store.UpdateConversation(child);
                 var planning = approval.PlanMode || conversation.ParentConversationId != null && roles.Get(conversation.AgentRole ?? "general").ReadOnly;
@@ -207,7 +229,7 @@ internal static class TerminalApp
                 {
                     var fromInbox = !firstRun; firstRun = false;
                     return RunJobAsync(jobId, child.Id, prompt, selected, planning, childFullAccess, ct, fromInbox, expanded);
-                }, conversation.Id, () => store.GetPendingInputs(child.Id).Any(input => input.Delivery == "steer"), ownerToken);
+                }, conversation.Id, () => store.GetPendingInputs(child.Id).Any(input => input.Delivery == "steer"));
             }
             plugins.ProvideService(new AgentTaskLauncher(task => StartJob(task, "插件任务")));
             async IAsyncEnumerable<AgentEvent> RunJobAsync(string jobId, Guid session, string prompt, ApiConfig selected, bool planning, bool fullAccess, [EnumeratorCancellation] CancellationToken ct, bool fromInbox = false, PromptReferences.ExpandedPrompt? snapshot = null)
@@ -215,8 +237,13 @@ internal static class TerminalApp
                 AgentRoleDefinition CurrentRole() => roles.Get(store.GetConversation(session)?.AgentRole ?? "general");
                 bool ReadOnly() => planning || CurrentRole().ReadOnly;
                 var rolePolicy = new SubAgentRolePolicy(ReadOnly, options.WorkspaceRoot, options.ExternalDirectoryPermissions, CurrentRole,
-                    (_, _) => ValueTask.FromResult(false));
-                var childOptions = options with
+                    (_, _) => ValueTask.FromResult(false), parentTools: options.HostToolsProvider);
+                var settings = CurrentRole().Execution ?? new SubAgentExecutionSettings();
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                timeout.CancelAfter(settings.Apply(options).RunTimeout);
+                ct = timeout.Token;
+                using var slot = await SubAgentConcurrency.AcquireAsync(store, CurrentRole().Name, settings.MaxConcurrent, ct);
+                var childOptions = settings.Apply(options) with
                 {
                     IsSubAgent = true,
                     HostToolsProvider = () => CurrentRole().Tools,
@@ -229,17 +256,19 @@ internal static class TerminalApp
                         // Environment-configured providers need not be persisted in the store.
                         var configurations = store.ApiConfigs.ToList();
                         if (!configurations.Any(item => item.Id == current.Id)) configurations.Add(current);
-                        return SubAgentModelSelection.Resolve(current, configurations, state.ModelId, state.SubAgentConfigId?.ToString());
+                        return (CurrentRole().Execution ?? new()).Apply(SubAgentModelSelection.Resolve(current, configurations, state.ModelId, state.SubAgentConfigId?.ToString()));
                     },
                     Checkpoints = null, InstallationApprover = null,
-                    InstructionsProvider = () => Instructions(options.WorkspaceRoot, catalog, ReadOnly(), includeRoot: true) + "\nYou are a delegated agent. Stay within the assigned task. You cannot spawn agents or ask the user questions. Return missing information, blockers and permission failures to the parent agent in your final response. Follow the selected host permission mode; do not bypass a denial." +
+                    InstructionsProvider = () => (settings.IncludeProjectInstructions ? Instructions(options.WorkspaceRoot, catalog, ReadOnly(), includeRoot: true) : "") + "\nYou are a delegated agent. Stay within the assigned task. You cannot spawn agents or ask the user questions. Return missing information, blockers and permission failures to the parent agent in your final response. Follow the selected host permission mode; do not bypass a denial." +
                         "\nCurrent agent role: " + CurrentRole().Name + "\n" + CurrentRole().Instructions + (ReadOnly() ? "\nHost restriction: read-only. Do not create, modify, delete, move or copy files, or execute external operations." : ""),
                     Approver = (request, _) => ValueTask.FromResult(!ReadOnly() && request.Preapproved),
                     QuestionHandler = null
                 };
                 await using var childRuntime = await AgentRuntime.CreateAsync(childOptions, ct);
-                childRuntime.Tools.Register(new SkillTools(catalog)); childRuntime.Tools.Register(new McpResourceTools(mcp)); childRuntime.Tools.Register(new McpToolSet(mcp)); childRuntime.Tools.Register(plugins.ToolSet());
-                var engine = new AgentEngine(store, new RequestRoutingAiProvider(Provider), childRuntime.CodeAct, childOptions);
+                childRuntime.Tools.Register(new McpResourceTools(mcp)); childRuntime.Tools.Register(new McpToolSet(mcp)); childRuntime.Tools.Register(plugins.ToolSet());
+                var childProvider = new SubAgentAiProvider(new RequestRoutingAiProvider(Provider), settings,
+                    current => SubAgentModelSelection.Resolve(current, store.ApiConfigs, settings.FallbackModel, settings.FallbackProvider));
+                var engine = new AgentEngine(store, childProvider, childRuntime.CodeAct, childOptions);
                 if (fromInbox)
                 {
                     await foreach (var evt in engine.RunAsync(session, "Continue pending child input.", selected, ct, fromInbox: true)) yield return evt;
@@ -252,13 +281,11 @@ internal static class TerminalApp
             }
             async Task<AgentEngine> EngineAsync()
             {
-                if (tasks.List.Any(j => j.SessionId == conversation.Id && BackgroundTasks.IsActive(j.State)))
-                    await ManagementUi.Busy("停止该会话的旧子任务，准备接收你的输入", ct => tasks.StopSessionAsync(conversation.Id, ct));
                 var role = conversation.ParentConversationId == null ? "primary" : conversation.AgentRole ?? "general";
                 var resumedRole = role == "primary" ? null : roles.Get(role);
                 var resumedPolicy = resumedRole == null ? null : new SubAgentRolePolicy(() => approval.PlanMode || roles.Get(role).ReadOnly,
-                    options.WorkspaceRoot, options.ExternalDirectoryPermissions, () => roles.Get(role), approval.ApproveAsync);
-                var executionOptions = options with
+                    options.WorkspaceRoot, options.ExternalDirectoryPermissions, () => roles.Get(role), approval.ApproveAsync, parentTools: options.HostToolsProvider);
+                var executionOptions = (resumedRole?.Execution?.Apply(options) ?? options) with
                 {
                     IsSubAgent = role != "primary",
                     HostToolsProvider = () => resumedRole == null ? null : roles.Get(role).Tools,
@@ -266,22 +293,23 @@ internal static class TerminalApp
                     InvocationPolicy = resumedPolicy == null ? options.InvocationPolicy : (tool, arguments) => resumedPolicy.Validate(tool, arguments) ?? options.InvocationPolicy?.Invoke(tool, arguments),
                     InvocationAuthorization = resumedPolicy == null ? options.InvocationAuthorization : async (tool, arguments, token) => (options.InvocationAuthorization == null ? null : await options.InvocationAuthorization(tool, arguments, token)) ?? await resumedPolicy.AuthorizeAsync(tool, arguments, token),
                     Approver = resumedRole == null ? options.Approver : (request, token) => approval.PlanMode || roles.Get(role).ReadOnly ? ValueTask.FromResult(false) : options.Approver?.Invoke(request, token) ?? ValueTask.FromResult(request.Preapproved),
-                    InstructionsProvider = () => (options.InstructionsProvider?.Invoke() ?? "") + (resumedRole == null ? "" : "\n" + roles.Get(role).Instructions)
+                    InstructionsProvider = () => (resumedRole?.Execution?.IncludeProjectInstructions == false ? "" : options.InstructionsProvider?.Invoke() ?? "") + (resumedRole == null ? "" : "\n" + roles.Get(role).Instructions)
                 };
                 if (runtime != null && runtimeRole != role) { await runtime.DisposeAsync(); runtime = null; }
                 if (config == null || !config.IsEnabled) config = await models.SelectAsync(args.Get("config"), args.Get("model"));
+                ui.SetThinkingEffort(config);
                 if (runtime == null)
                 {
                     var doctor = new EnvironmentDoctor();
                     var environment = await ManagementUi.Busy("检查 Python 和 PowerShell 环境", ct => options.FullAccess ? doctor.EnsureAsync(NotifyInstallationAsync, options.PythonPath, options.PowerShellPath, ct) : ui.Interactive && !ui.Json ? doctor.EnsureAsync(ConfirmAsync, options.PythonPath, options.PowerShellPath, ct) : doctor.CheckAsync(options.PythonPath, options.PowerShellPath, ct));
                     if (!environment.Ready) throw new InvalidOperationException(string.Join("\n", environment.Problems) + " 使用 doctor --install。");
                     options = options with { PythonPath = environment.Python, PowerShellPath = environment.PowerShell };
-                    var executionLabel = executionOptions.FullAccess ? "Hyperlight 沙箱（完全访问）" : "Hyperlight 沙箱";
+                    var executionLabel = executionOptions.FullAccess ? "双后端沙箱（完全访问）" : "双后端沙箱";
                     if (!ui.Json) TerminalOutput.MarkupLine("[dim]正在检查 " + executionLabel + "…[/]");
                     executionOptions = executionOptions with { PythonPath = options.PythonPath, PowerShellPath = options.PowerShellPath };
                     runtime = await ManagementUi.Busy("启动 " + executionLabel, ct => AgentRuntime.CreateAsync(executionOptions, ct)); runtimeRole = role; var probe = await ManagementUi.Busy("验证 " + executionLabel, ct => runtime.ProbeSandboxAsync(ct));
-                    if (!probe.Ok) { await runtime.DisposeAsync(); runtime = null; throw new InvalidOperationException(probe.Error + (executionOptions.FullAccess ? "\n请检查 Windows Hypervisor Platform、BIOS 虚拟化及 sandbox 原生组件。" : "\n请检查 Windows Hypervisor Platform、BIOS 虚拟化及 sandbox 原生组件。")); }
-                    runtime.Tools.Register(new SkillTools(catalog));
+                    if (!probe.Ok) { await runtime.DisposeAsync(); runtime = null; throw new InvalidOperationException(probe.Error); }
+                    ReportSandbox(runtime, ui);
                     runtime.Tools.Register(new McpResourceTools(mcp));
                     if (resumedRole == null) runtime.Tools.Register(new AgentDelegationTools(tasks, StartDelegatedAsync));
                 }
@@ -293,7 +321,13 @@ internal static class TerminalApp
                 runtime.Tools.Replace<McpToolSet>(new McpToolSet(mcp));
                 runtime.Tools.Replace<PluginToolSet>((PluginToolSet)plugins.ToolSet());
                 if (FullScreenTerminal.Current != null) ui.Header(options.WorkspaceRoot, config.DefaultModel, conversation.Id);
-                return new AgentEngine(store, Provider(config), runtime.CodeAct, executionOptions);
+                IAiProvider executionProvider = new RequestRoutingAiProvider(Provider);
+                if (resumedRole != null)
+                {
+                    var settings = resumedRole.Execution ?? new SubAgentExecutionSettings();
+                    executionProvider = new SubAgentAiProvider(executionProvider, settings, current => SubAgentModelSelection.Resolve(current, store.ApiConfigs, settings.FallbackModel, settings.FallbackProvider));
+                }
+                return new AgentEngine(store, executionProvider, runtime.CodeAct, executionOptions);
             }
             void Navigate(Conversation target)
             {
@@ -313,10 +347,13 @@ internal static class TerminalApp
                     return ui.LastReason is "stop" or "STOP" ? 0 : ui.LastReason == "cancelled" ? 130 : 1;
                 }
                 using var screen = !args.Flags.Contains("inline") && AnsiConsole.Profile.Capabilities.Ansi ? new FullScreenTerminal(store, catalog, mcp, ui) : null;
+                using var modelFooter = new ModelFooter(() => extensions.FooterProviders);
+                if (screen != null) screen.ModelFooter = () => modelFooter.Read(config, ui.FooterRevision);
                 screen?.Enter();
                 if (screen != null) screen.ExtensionSummary = () => $"插件 · {plugins.Status.Count(p => p.Enabled && p.Error == null)} 个\n任务 · {tasks.List.Count(j => j.State is BackgroundTaskState.Running or BackgroundTaskState.Queued)} 运行 / 排队\n等待处理 · {tasks.List.Count(j => j.State is BackgroundTaskState.AwaitingAnswer or BackgroundTaskState.AwaitingApproval)} 个  /tasks";
                 if (screen != null) screen.TaskNotice = () => (tasks.List.Count(j => j.State is BackgroundTaskState.AwaitingAnswer or BackgroundTaskState.AwaitingApproval) is var count && count > 0 ? $"后台待处理 {count} · /tasks | " : "") + (ui.Inbox?.Label is { Length: > 0 } inboxLabel ? inboxLabel + " | " : "");
                 if (screen != null) screen.TaskLookup = tasks.Get;
+                if (screen != null) screen.InvocationTasks = id => tasks.List.Where(task => task.ParentToolCallId == id).OrderBy(task => task.CreatedAt).ToArray();
                 if (screen != null)
                 {
                     var taskViews = new Dictionary<string, TaskTranscriptView>();
@@ -325,9 +362,31 @@ internal static class TerminalApp
                         if (!taskViews.TryGetValue(task.Id, out var view)) taskViews[task.Id] = view = new(store, tasks, task.Id, () => ui.ShowThinking);
                         return view;
                     };
+                    screen.TaskPreview = task => TaskTranscriptView.LatestStep(store, tasks, task, ui.ShowThinking);
                 }
                 ui.Header(options.WorkspaceRoot, config?.DefaultModel ?? "尚未选择模型 · 管理功能可直接使用", conversation.Id);
-                if (!args.Flags.Contains("no-initialize") && (store.GetSetting("environment:initialized") != "1" || !pythonLibraries.Ready))
+                ui.RunningCommand = async (command, ct) =>
+                {
+                    ct.ThrowIfCancellationRequested();
+                    var words = CommandLineWords.Parse(command);
+                    switch (words[0])
+                    {
+                        case "/tasks": await taskManager.ExecuteAsync(words.Skip(1).ToArray(), ct); break;
+                        case "/help": ChatHelp(catalog, words.ElementAtOrDefault(1) == "all"); break;
+                        case "/status": TerminalOutput.Write(new Panel(new Text($"工作区：{options.WorkspaceRoot}\n会话：{conversation.Id}\n模型：{config?.DefaultModel}\n权限：{approval.ModeLabel}\n{ui.ContextLabel}\n运行任务：{tasks.List.Count(task => BackgroundTasks.IsActive(task.State))}")).Header("执行中 · 会话状态")); break;
+                        case "/sandbox":
+                            if (words.Length > 2 || (words.Length == 2 && !string.Equals(words[1], "status", StringComparison.OrdinalIgnoreCase)))
+                                throw new InvalidOperationException("请先停止当前任务，再切换沙箱。");
+                            ShowSandbox(options, runtime, ui); break;
+                        case "/browser":
+                            if (words.Length > 2 || words.ElementAtOrDefault(1) is not (null or "on" or "off" or "status")) throw new ArgumentException("任务执行中支持 /browser on|off|status；连接请先停止任务。");
+                            await browser.ExecuteAsync(words.Skip(1).ToArray()); break;
+                        case "/thinking": ui.ShowThinking = !ui.ShowThinking; break;
+                        case "/details": ui.Verbose = !ui.Verbose; break;
+                        default: throw new ArgumentException("此命令需要在当前任务停止后执行。运行中可用 /tasks、/status、/help、/thinking、/details、/queue 和 /steer；双击 Esc 停止任务。");
+                    }
+                };
+                if (!args.Flags.Contains("no-initialize") && store.GetSetting("environment:initialized") != "1")
                 {
                     try
                     {
@@ -344,7 +403,7 @@ internal static class TerminalApp
                 editor.WakeRequested = () => conversation.Revert == null && tasks.PendingNotifications(conversation.Id).Count > 0;
                 while (true)
                 {
-                    if (ui.Inbox?.Next is { } pendingInput)
+                    if (!tasks.IsSessionRunning(conversation.Id) && ui.Inbox?.Next is { } pendingInput)
                     {
                         try
                         {
@@ -376,6 +435,7 @@ internal static class TerminalApp
                         }
                         continue;
                     }
+                    ui.SetThinkingEffort(config);
                     var text = await editor.ReadAsync($"{config?.DisplayName ?? "未选择提供商"} · {config?.DefaultModel ?? "按需配置"} · 思考 {config?.ReasoningEffort ?? "default"} · {approval.ModeLabel} · 会话 {conversation.Id.ToString()[..8]} · {ui.Inbox?.Label}", initial: ui.Draft);
                     if (editor.InterruptedDraft != null) { ui.Draft = editor.InterruptedDraft; editor.InterruptedDraft = null; }
                     else if (screen == null) ui.Draft = "";
@@ -478,6 +538,10 @@ internal static class TerminalApp
                                 case "/ext":
                                     var extensionCommand = plugins.Commands.SingleOrDefault(c => c.Name == rest.FirstOrDefault()) ?? throw new ArgumentException("插件命令不存在；使用 /plugins 查看已启用插件。");
                                     string extensionOutput = ""; await CancelableAsync(async ct => extensionOutput = await ManagementUi.Busy("执行插件命令", token => extensionCommand.Execute(rest.Skip(1).ToArray(), token), ct)); TerminalOutput.Write(new Text(ToolResult.Clip(extensionOutput, 16000) + "\n")); continue;
+                                case "/powershell":
+                                    await CancelableAsync(ct => PowerShellStoreCommand.ExecuteAsync(new PowerShellModuleStore(args.SharedDirectory, options.PowerShellPath), ui, rest, ct));
+                                    runtime?.PowerShellModules.LoadCatalog();
+                                    continue;
                                 case "/skills": await skills.ExecuteAsync(rest); continue;
                                 case "/mcp":
                                     if (tasks.Active && rest.FirstOrDefault() is not ("list" or "show")) throw new InvalidOperationException("后台任务运行期间请先完成或取消任务，再修改 MCP 连接。");
@@ -487,8 +551,11 @@ internal static class TerminalApp
                                 case "/providers": case "/config":
                                     await models.ExecuteAsync(rest);
                                     if (config != null && store.ApiConfigs.FirstOrDefault(c => c.Id == config.Id) is { } updated) config = ManagementUi.Clone(updated); else config = null;
+                                    if (config != null) ui.SetModelContext(config);
                                     continue;
                                 case "/models": models.ShowModels(); continue;
+                                case "/questions": QuestionPreference.Execute(store, ui, rest); continue;
+                                case "/todo": TodoCommand.Execute(store, ui, conversation.Id, rest); continue;
                                 case "/context-size":
                                     config ??= await models.SelectAsync(args.Get("config"));
                                     await models.SetContextAsync(config, rest.FirstOrDefault()); continue;
@@ -497,11 +564,20 @@ internal static class TerminalApp
                                     config ??= await models.SelectAsync(args.Get("config"));
                                     var efforts = ReasoningSettings.Efforts(config).ToArray();
                                     if (efforts.Length == 1) { ManagementUi.Success(ui, "当前模型不支持调整推理强度，使用模型默认行为。"); continue; }
-                                    var effort = rest.FirstOrDefault() == "next" ? efforts[(Array.IndexOf(efforts, config.ReasoningEffort) + 1) % efforts.Length] : rest.FirstOrDefault() ?? ManagementUi.Choose("思考强度 · " + ProviderCatalog.ReasoningFor(config), efforts);
-                                    ReasoningSettings.SetEffort(config, effort);
-                                    if (rest.ElementAtOrDefault(1) is { } budget) { config.ThinkingBudget = int.Parse(budget); if (config.ThinkingBudget is < 1024 or > 131072) throw new ArgumentException("思考预算范围 1024–131072。"); }
+                                    var capability = ReasoningSettings.Capabilities(config);
+                                    var effort = rest.FirstOrDefault() == "next" ? efforts[(Array.IndexOf(efforts, config.ReasoningEffort) + 1) % efforts.Length] : rest.FirstOrDefault() ?? ManagementUi.Choose("思考强度 · " + config.DefaultModel + " · " + capability.Protocol, efforts,
+                                        level => level == "budget" ? $"budget · 自定义 {capability.MinimumBudget}–{capability.MaximumBudget} tokens" : level);
+                                    int? budget = rest.ElementAtOrDefault(1) is { } budgetText ? int.Parse(budgetText) : null;
+                                    if (effort == "budget" && budget == null && rest.FirstOrDefault() == "next")
+                                        budget = Math.Clamp(config.ThinkingBudget, capability.MinimumBudget, capability.MaximumBudget);
+                                    if (effort == "budget" && budget == null && rest.FirstOrDefault() != "next")
+                                        budget = int.Parse(await ManagementUi.Text($"思考预算（{capability.MinimumBudget}–{capability.MaximumBudget} tokens）", Math.Clamp(config.ThinkingBudget, capability.MinimumBudget, capability.MaximumBudget).ToString()));
+                                    var reasoningConfig = ManagementUi.Clone(config);
+                                    ReasoningSettings.Configure(reasoningConfig, effort, budget);
+                                    config = reasoningConfig;
                                     if (store.ApiConfigs.Any(c => c.Id == config.Id)) store.UpdateApiConfig(ManagementUi.Clone(config));
-                                    ManagementUi.Success(ui, "思考强度已设置：" + config.ReasoningEffort + "；具体模型若限制此级别，接口会返回明确错误。"); continue;
+                                    ui.SetModelContext(config);
+                                    ManagementUi.Success(ui, "思考强度已设置：" + ReasoningSettings.Label(config) + " · " + capability.Protocol); continue;
                                 case "/new": case "/clear": conversation = SessionOperations.Get(store, null, options.WorkspaceRoot); ui.Header(options.WorkspaceRoot, config?.DefaultModel ?? "按需配置", conversation.Id); continue;
                                 case "/session": case "/sessions": case "/resume":
                                     var resumed = rest.Length > 0 ? SessionOperations.Get(store, rest[0], options.WorkspaceRoot) : SessionOperations.Pick(store, ui);
@@ -574,15 +650,30 @@ internal static class TerminalApp
                                         if (runtime != null) { await runtime.DisposeAsync(); runtime = null; }
                                     }
                                     TerminalOutput.Write(new Panel(new Text(approval.ModeLabel + "\n" + (approval.PlanMode ? "文件读取可用；写入、Shell 和 MCP 操作停用。" : approval.FullAccess ? "文件、Shell、MCP 与插件工具不再逐次审核；允许工作区外的文件和已安装可执行程序。\n双击 Esc / Ctrl+C 仍可停止任务。" : "文件写入、未信任的 Shell 程序和 MCP 操作执行前显示参数并询问；可信 Shell 别名免逐次确认。"))).Header("当前权限")); continue;
+                                case "/sandbox":
+                                    if (rest.Length > 1) throw new ArgumentException("用法：/sandbox [status|auto|hyperlight|monty]。");
+                                    var sandboxChoice = rest.FirstOrDefault()?.ToLowerInvariant();
+                                    if (sandboxChoice is null or "status") { ShowSandbox(options, runtime, ui); continue; }
+                                    var sandboxMode = sandboxChoice switch
+                                    {
+                                        "auto" => SandboxMode.Auto,
+                                        "hyperlight" => SandboxMode.Hyperlight,
+                                        "monty" => SandboxMode.Monty,
+                                        _ => throw new ArgumentException("沙箱模式：auto / hyperlight / monty；/sandbox status 查看当前选择。")
+                                    };
+                                    if (tasks.Active) throw new InvalidOperationException("请先完成或取消后台任务，再切换沙箱。");
+                                    if (runtime != null) { await runtime.DisposeAsync(); runtime = null; runtimeRole = null; }
+                                    store.SetSetting("terminal:sandbox", sandboxChoice);
+                                    options = options with { SandboxMode = sandboxMode };
+                                    ManagementUi.Success(ui, "沙箱选择已保存：" + sandboxChoice + "，下次任务执行前验证并启用。");
+                                    ShowSandbox(options, runtime, ui); continue;
                                 case "/tools": if (runtime == null) await EngineAsync(); ShowTools(runtime!.Tools.Definitions, ui); continue;
+                                case "/browser": await browser.ExecuteAsync(rest); continue;
                                 case "/computer": computer.Execute(rest); continue;
                                 case "/status":
-                                    TerminalOutput.Write(new Panel(new Text($"工作区：{options.WorkspaceRoot}\n会话：{conversation.Id}\n模型：{config?.DisplayName ?? "未选择"} / {config?.DefaultModel}\n思考：{config?.ReasoningEffort ?? "default"}\n权限：{approval.ModeLabel}\n沙箱：{(runtime != null ? "Hyperlight 已验证" : "首次任务时检查")}\n技能：{catalog.List().Count(s => s.Enabled)}\nMCP：{mcp.GetAllServerTools().Count} 个已连接\n审计：{options.AuditPath}")).Header("会话状态")); continue;
+                                    TerminalOutput.Write(new Panel(new Text($"工作区：{options.WorkspaceRoot}\n会话：{conversation.Id}\n模型：{config?.DisplayName ?? "未选择"} / {config?.DefaultModel}\n思考：{config?.ReasoningEffort ?? "default"}\n权限：{approval.ModeLabel}\n沙箱：{(runtime != null ? runtime.SandboxName + " 已验证" : "首次任务时检查")}\n技能：{catalog.List().Count(s => s.Enabled)}\nMCP：{mcp.GetAllServerTools().Count} 个已连接\n审计：{options.AuditPath}")).Header("会话状态")); continue;
                                 case "/install-pip":
-                                    if (approval.PlanMode) throw new InvalidOperationException("只读规划模式不安装依赖；请切换 /permissions ask 或 full。");
-                                    if (tasks.Active) throw new InvalidOperationException("请先完成或取消任务，再修改共享 Python 环境。");
-                                    await CancelableAsync(ct => ManagementUi.Busy("安装 Python 库并更新 pip.md", token => pythonLibraries.InstallAsync(rest, token), ct));
-                                    ManagementUi.Success(ui, "宿主 Python 库已安装，pip.md 已更新；请通过目录中的 Python 路径使用并显式 import。"); continue;
+                                    throw new ArgumentException("pip 清单功能已移除，请使用 /powershell 搜索和安装 PowerShell 模块。");
                                 case "/doctor":
                                     if (rest.FirstOrDefault() == "install") options = await CancelableInitializationAsync();
                                     await DoctorAsync(args, options, ui); continue;
@@ -637,6 +728,12 @@ internal static class TerminalApp
                             }
                             screen?.UserMessage(originalCommand);
                         }
+                        preparedPrompt ??= await PromptReferences.ExpandWithImagesAsync(text, options.WorkspaceRoot, allowExplicitExternalImages: true);
+                        if (tasks.TryPostInput(conversation.Id, () => store.EnqueueInput(conversation.Id, text, preparedPrompt.Text, preparedPrompt.Images, "steer")))
+                        {
+                            ManagementUi.Success(ui, "消息已接收，将继续当前会话任务。");
+                            continue;
+                        }
                         var engine = await EngineAsync(); await RunTurnAsync(engine, conversation.Id, text, config!, ui, checkpoints, store, preparedPrompt: preparedPrompt);
                     }
                     catch (WorkspaceChange) { throw; }
@@ -689,32 +786,59 @@ internal static class TerminalApp
     }
     private static async Task<int> DoctorAsync(TerminalArguments args, AgentOptions options, TerminalUi ui)
     {
-        var libraries = options.PythonLibraries ?? new PythonPackageEnvironment(args.SharedDirectory);
-        if (libraries.Ready) options = options with { PythonPath = libraries.PythonPath, PythonLibraries = libraries };
         var doctor = new EnvironmentDoctor(); if (args.Flags.Contains("install") && !ui.Interactive) throw new ArgumentException("安装需要交互终端逐项确认。");
         var environment = args.Flags.Contains("install") ? await doctor.EnsureAsync(ConfirmAsync, options.PythonPath, options.PowerShellPath) : await doctor.CheckAsync(options.PythonPath, options.PowerShellPath);
         if (args.Flags.Contains("install"))
         {
             await doctor.EnsureRipgrepAsync();
-            if (environment.Python != null) await libraries.EnsureAsync(environment.Python);
-            options = options with { PythonPath = libraries.Ready ? libraries.PythonPath : environment.Python, PythonLibraries = libraries };
+            options = options with { PythonPath = environment.Python };
             environment = await doctor.CheckAsync(options.PythonPath, environment.PowerShell);
         }
         var ripgrep = EnvironmentDoctor.FindExecutable("rg.exe");
-        var pip = libraries.Ready ? await BoundedProcess.RunAsync(BoundedProcess.StartInfo(libraries.PythonPath, ["-m", "pip", "--version"]), TimeSpan.FromSeconds(30), default) : null;
-        ManagementUi.Output(ui, new { environment, ripgrep, libraries = libraries.Ready, pip = pip?.Stdout, catalog = libraries.CatalogPath }, () =>
+        await using var browserCheck = new BrowserUseTools(options.BrowserUse);
+        var browserEnvironment = await browserCheck.CheckEnvironmentAsync();
+        var powershell = new PowerShellModuleStore(args.SharedDirectory, environment.PowerShell);
+        if (environment.PowerShell != null) await powershell.ExecuteAsync("list");
+        ManagementUi.Output(ui, new { environment, ripgrep, browser = browserEnvironment, powershell = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(powershell.Summary) }, () =>
         {
             var table = new Table().AddColumn("环境").AddColumn("结果");
-            table.AddRow("宿主 Python 3.10–3.14（共享 pip 库）", Markup.Escape(environment.Python ?? "缺失或版本不符")); table.AddRow("PowerShell 7.6", Markup.Escape(environment.PowerShell ?? "缺失"));
-            table.AddRow("ripgrep", Markup.Escape(ripgrep ?? "缺失")); table.AddRow("Python 库环境 / pip", Markup.Escape(pip?.ExitCode == 0 ? pip.Stdout.Trim() : "未初始化或 pip 不可用"));
-            table.AddRow("pip.md", Markup.Escape(File.Exists(libraries.CatalogPath) ? libraries.CatalogPath : "尚未生成"));
-            table.AddRow("执行模式", options.FullAccess ? "Hyperlight microVM · 免审批" : "Hyperlight microVM"); table.AddRow("工作区", Markup.Escape(options.WorkspaceRoot));
+            table.AddRow("Browser Use / WebView2", Markup.Escape(browserEnvironment.Ok ? browserEnvironment.ToJson() : browserEnvironment.Error ?? "环境检查失败"));
+            table.AddRow("宿主 Python 3.10–3.14（沙箱运行依赖）", Markup.Escape(environment.Python ?? "缺失或版本不符")); table.AddRow("内嵌 PowerShell SDK", Markup.Escape(environment.PowerShell ?? "缺失"));
+            table.AddRow("ripgrep", Markup.Escape(ripgrep ?? "缺失"));
+            table.AddRow("PowerShell 能力", Markup.Escape(powershell.Summary));
+            table.AddRow("执行模式", options.FullAccess ? "自动选择 Hyperlight / Monty · 免审批" : "自动选择 Hyperlight / Monty"); table.AddRow("工作区", Markup.Escape(options.WorkspaceRoot));
             TerminalOutput.Write(table); foreach (var issue in environment.Problems) ui.Error(issue);
         });
         if (!environment.Ready) return 1;
-        await using var runtime = await AgentRuntime.CreateAsync(options with { PythonPath = environment.Python, PowerShellPath = environment.PowerShell }); var probe = await runtime.ProbeSandboxAsync();
-        ManagementUi.Output(ui, new { sandbox = probe }, () => { if (probe.Ok) TerminalOutput.MarkupLine(options.FullAccess ? "[green]✓ Hyperlight microVM 实际执行校验通过[/]" : "[green]✓ Hyperlight microVM 实际执行校验通过[/]"); else ui.Error(probe.Error ?? "执行环境失败"); });
-        return probe.Ok && ripgrep != null && libraries.Ready && pip?.ExitCode == 0 ? 0 : 1;
+        await using var runtime = await AgentRuntime.CreateAsync(options with { PythonPath = environment.Python, PowerShellPath = environment.PowerShell, AllowSandboxInstallation = args.Flags.Contains("install") }); var probe = await runtime.ProbeSandboxAsync();
+        ManagementUi.Output(ui, new { sandbox = probe, backend = runtime.SandboxName, fallbackReason = runtime.SandboxFallbackReason }, () => { if (probe.Ok) TerminalOutput.Write(new Text("✓ " + runtime.SandboxName + " 实际执行校验通过\n")); else ui.Error(probe.Error ?? "执行环境失败"); });
+        if (probe.Ok) ReportSandbox(runtime, ui);
+        return probe.Ok && browserEnvironment.Ok && ripgrep != null ? 0 : 1;
+    }
+    private static SandboxMode SavedSandboxMode(DataStore store) => store.GetSetting("terminal:sandbox") switch
+    {
+        "hyperlight" => SandboxMode.Hyperlight,
+        "monty" => SandboxMode.Monty,
+        _ => SandboxMode.Auto
+    };
+
+    private static void ShowSandbox(AgentOptions options, AgentRuntime? runtime, TerminalUi ui)
+    {
+        var mode = options.SandboxMode.ToString().ToLowerInvariant();
+        var active = runtime?.SandboxName ?? "尚未启动，下次任务时验证";
+        var behavior = options.SandboxMode == SandboxMode.Auto
+            ? "优先 Hyperlight，初始化失败自动切换 Monty。"
+            : "仅使用指定沙箱；初始化失败时报告错误。";
+        ManagementUi.Output(ui, new { sandboxMode = mode, active, fallbackReason = runtime?.SandboxFallbackReason }, () =>
+            TerminalOutput.Write(new Panel(new Text($"选择：{mode}\n当前：{active}\n{behavior}\n/sandbox auto | hyperlight | monty\n选择保存在当前工作区，下次启动沿用。" )).Header("沙箱")));
+    }
+
+    private static void ReportSandbox(AgentRuntime runtime, TerminalUi ui)
+    {
+        ManagementUi.Output(ui, new { backend = runtime.SandboxName, fallbackReason = runtime.SandboxFallbackReason }, () =>
+            TerminalOutput.Write(new Text(runtime.SandboxFallbackReason == null
+                ? "沙箱：" + runtime.SandboxName + "\n"
+                : "Hyperlight 不可用，已自动切换到 " + runtime.SandboxName + "。\n原因：" + runtime.SandboxFallbackReason + "\n")));
     }
     private static async ValueTask<bool> ConfirmAsync(string message, CancellationToken ct) => FullScreenTerminal.Current is { } screen ? await screen.ConfirmAsync(message, ct) : await AnsiConsole.PromptAsync(new ConfirmationPrompt(Markup.Escape(message)) { DefaultValue = false }, ct);
     internal static ApiConfig ResolveSubAgentConfig(ApiConfig current, IEnumerable<ApiConfig> configured, string? model, string? provider, string? defaultModel, string? defaultProvider)
@@ -757,14 +881,19 @@ internal static class TerminalApp
         lanagent logout [提供商ID]
         lanagent hooks [list|enable 名称|disable 名称]
         lanagent tasks [list|show ID]            任务跨启动保留结果；任务仅在当前 chat 进程内运行
+        lanagent powershell list|search 关键词|install 模块 [版本]|commands [模块]
         lanagent doctor [--install]            环境检查；安装前询问
         lanagent tools [--json]                工具契约
+        lanagent browser on|off|status        浏览器操作开关（默认开启）
+        lanagent browser connect             外置浏览器连接向导
+        lanagent browser tutorial            详细连接教程
+        lanagent browser mode builtin|chromium
         lanagent computer on|off|status        电脑操作开关（默认关闭）
         操作模式由 AI 根据任务自动选择；/computer-use 加载内置电脑操作技能
         lanagent computer isolated URL Token文件路径（独立 Windows Worker 隧道）
 
         --workspace 路径 --data-dir 路径 --resume ID --config ID/名称
-        --python 路径 --pwsh 路径 --worker 路径 --guest 路径
+        --python 路径 --pwsh SDK-worker路径 --worker 路径 --guest 路径
         --model ID --effort 级别 --budget Token数 --verbose --json
         --subagent-model ID --subagent-provider 配置ID/名称（默认跟随当前模型）
         --context-window 100k|200k|400k|1M|Token数
@@ -775,7 +904,7 @@ internal static class TerminalApp
         login custom
           --model ID [--models ID1,ID2] [--key-env MY_API_KEY] [--reasoning-protocol openai]
         skills add --name 名称 --description 描述 --instructions-file 文件 [--scope project|user]
-        agents list|show 名称|import 路径.json|remove 名称
+        agents [panel|edit 名称|add|list|show 名称|import 路径.json|remove 名称]
         mcp add --name 名称 --command 可执行文件或URL --args-json '["参数"]' [--transport stdio|http|sse]
 
         LANAGENT_MODEL / LANAGENT_API_KEY / LANAGENT_BASE_URL / LANAGENT_PROVIDER

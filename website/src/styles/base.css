@@ -1,0 +1,304 @@
+/* ==========================================================================
+   基础样式：重置、排版、像素化组件、通用工具类
+   ========================================================================== */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--fs-body);
+  line-height: 1.75;
+  letter-spacing: 0.01em;
+  overflow-x: hidden;
+  -webkit-font-smoothing: none;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: geometricPrecision;
+}
+
+img {
+  image-rendering: pixelated;
+  max-width: 100%;
+}
+
+a {
+  color: var(--c-mint);
+  text-decoration: none;
+  border-bottom: 1px dashed rgba(111, 242, 176, 0.4);
+  transition: color var(--t-fast) var(--ease-step), border-color var(--t-fast) var(--ease-step);
+}
+
+a:hover {
+  color: var(--c-lime);
+  border-bottom-color: var(--c-lime);
+}
+
+::selection {
+  background: var(--c-mint);
+  color: #05100a;
+}
+
+/* ---------- 像素滚动条 ---------- */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--c-line-strong) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: #0b1116;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--c-line-strong);
+  border: 2px solid #0b1116;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--c-mint-deep);
+}
+
+/* ---------- 排版 ---------- */
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-pixel);
+  font-weight: 400;
+  line-height: 1.22;
+  margin: 0;
+  letter-spacing: 0.02em;
+}
+
+p {
+  margin: 0;
+}
+
+code,
+kbd,
+pre {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+
+kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  border: 2px solid var(--c-line-strong);
+  border-bottom-width: 4px;
+  background: var(--c-surface-2);
+  color: var(--c-text);
+  font-size: var(--fs-micro);
+  line-height: 1.6;
+}
+
+:focus-visible {
+  outline: 2px solid var(--c-amber);
+  outline-offset: 2px;
+}
+
+/* ---------- 布局工具 ---------- */
+.shell {
+  width: 100%;
+  max-width: var(--page);
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+}
+
+.shell-wide {
+  max-width: var(--page-wide);
+}
+
+/* 锚点跳转时给粘性头部留出空间 */
+section[id] {
+  scroll-margin-top: 88px;
+}
+
+.section {
+  position: relative;
+  padding-block: var(--section-y);
+  border-top: 2px solid rgba(34, 49, 60, 0.55);
+}
+
+.section--flush {
+  border-top: 0;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--grid-2);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--grid);
+  flex-wrap: wrap;
+}
+
+/* ---------- 像素面板（硬边 + 双层描边） ---------- */
+.panel {
+  position: relative;
+  background: linear-gradient(180deg, rgba(24, 34, 43, 0.95), rgba(14, 20, 26, 0.95));
+  border: 2px solid var(--c-line);
+  box-shadow: inset 0 0 0 2px rgba(6, 8, 10, 0.9), var(--shadow-hard);
+}
+
+.panel--flat {
+  box-shadow: inset 0 0 0 2px rgba(6, 8, 10, 0.9);
+}
+
+/* 像素切角：用 clip-path 做 8bit 风格的斜切角 */
+.pixel-cut {
+  clip-path: polygon(
+    0 8px,
+    8px 8px,
+    8px 0,
+    calc(100% - 8px) 0,
+    calc(100% - 8px) 8px,
+    100% 8px,
+    100% calc(100% - 8px),
+    calc(100% - 8px) calc(100% - 8px),
+    calc(100% - 8px) 100%,
+    8px 100%,
+    8px calc(100% - 8px),
+    0 calc(100% - 8px)
+  );
+}
+
+/* ---------- 抖动/网点底纹 ---------- */
+.dither {
+  background-image: radial-gradient(rgba(255, 255, 255, 0.045) 1px, transparent 1px);
+  background-size: 4px 4px;
+}
+
+.dither-dense {
+  background-image: radial-gradient(rgba(255, 255, 255, 0.07) 1px, transparent 1px);
+  background-size: 3px 3px;
+}
+
+.grid-lines {
+  background-image: linear-gradient(rgba(34, 49, 60, 0.5) 2px, transparent 2px),
+    linear-gradient(90deg, rgba(34, 49, 60, 0.5) 2px, transparent 2px);
+  background-size: 32px 32px;
+}
+
+/* ---------- 扫描线 / CRT ---------- */
+.scanlines::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0) 0px,
+    rgba(0, 0, 0, 0) 2px,
+    rgba(0, 0, 0, 0.16) 3px,
+    rgba(0, 0, 0, 0.16) 4px
+  );
+  mix-blend-mode: multiply;
+  opacity: 0.55;
+}
+
+.vignette::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(120% 90% at 50% 40%, transparent 45%, rgba(3, 5, 6, 0.85) 100%);
+}
+
+/* ---------- 文本 ---------- */
+.eyebrow {
+  font-family: var(--font-pixel);
+  font-size: var(--fs-small);
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  color: var(--c-mint);
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.eyebrow::before {
+  content: '';
+  width: 12px;
+  height: 12px;
+  background: currentColor;
+  box-shadow: 12px 0 0 currentColor;
+  clip-path: polygon(0 0, 100% 0, 100% 60%, 0 60%);
+}
+
+.muted {
+  color: var(--text-dim);
+}
+
+.tiny {
+  font-size: var(--fs-micro);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--text-mute);
+  font-family: var(--font-pixel);
+}
+
+.text-accent {
+  color: var(--c-mint);
+}
+
+.text-amber {
+  color: var(--c-amber);
+}
+
+/* ---------- 像素分隔线 ---------- */
+.rule {
+  height: 2px;
+  width: 100%;
+  background-image: linear-gradient(90deg, var(--c-line) 0 8px, transparent 8px 16px);
+  background-size: 16px 2px;
+  opacity: 0.9;
+}
+
+/* ---------- 通用交互 ---------- */
+.hover-lift {
+  transition: transform var(--t-fast) var(--ease-step), box-shadow var(--t-fast) var(--ease-step),
+    border-color var(--t-fast) var(--ease-step);
+}
+
+.hover-lift:hover {
+  transform: translate(-2px, -2px);
+  border-color: var(--c-mint);
+  box-shadow: inset 0 0 0 2px rgba(6, 8, 10, 0.9), 6px 6px 0 0 rgba(0, 0, 0, 0.5);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* ---------- 打印降级 ---------- */
+@media print {
+  .scanlines::after,
+  .grid-lines {
+    display: none;
+  }
+}

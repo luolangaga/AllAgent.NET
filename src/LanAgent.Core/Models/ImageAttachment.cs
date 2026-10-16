@@ -1,8 +1,12 @@
+using SkiaSharp;
+
 namespace LanAgent.Core.Models;
 
 public sealed record ImageAttachment(string Name, string MediaType, string Base64)
 {
     public const int MaxBytes = 4 * 1024 * 1024;
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? ProcessingNote { get; init; }
     [System.Text.Json.Serialization.JsonIgnore]
     public string DataUrl => "data:" + MediaType + ";base64," + Base64;
     public static ImageAttachment FromBytes(string name, byte[] bytes)
@@ -33,6 +37,32 @@ public sealed record ImageAttachment(string Name, string MediaType, string Base6
         await using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
         if (file.Length > MaxBytes) throw new ArgumentException("图片超过 4 MB。");
         var bytes = new byte[checked((int)file.Length)]; await file.ReadExactlyAsync(bytes, ct);
-        return FromBytes(path, bytes);
+        var attachment = FromBytes(path, bytes);
+        using var stream = new SKMemoryStream(bytes);
+        using var codec = SKCodec.Create(stream) ?? throw new ArgumentException("图片无法解码；请重新导出为 PNG 或 JPEG。");
+        var info = codec.Info;
+        if ((long)info.Width * info.Height > 40_000_000)
+            throw new ArgumentException("图片超过 4000 万像素；请先裁剪或缩小。");
+        using var decoded = new SKBitmap(info.Width, info.Height, SKColorType.Rgba8888, SKAlphaType.Premul);
+        if (codec.GetPixels(decoded.Info, decoded.GetPixels()) != SKCodecResult.Success)
+            throw new ArgumentException("图片数据损坏或不完整；请重新导出。");
+        // Bound both dimensions and base64 payload, as Pi does before sending inline images.
+        var scale = Math.Min(1d, 2000d / Math.Max(info.Width, info.Height));
+        if (scale == 1 && attachment.Base64.Length <= 4_500_000) return attachment;
+        var width = Math.Max(1, (int)Math.Round(info.Width * scale));
+        var height = Math.Max(1, (int)Math.Round(info.Height * scale));
+        while (true)
+        {
+            ct.ThrowIfCancellationRequested();
+            using var resized = decoded.Resize(new SKImageInfo(width, height), new SKSamplingOptions(SKFilterMode.Linear))
+                ?? throw new ArgumentException("无法缩小图片。");
+            using var image = SKImage.FromBitmap(resized);
+            using var png = image.Encode(SKEncodedImageFormat.Png, 100);
+            if (png.Size <= 3_375_000) return FromBytes(path, png.ToArray()) with {
+                ProcessingNote = $"Original {info.Width}x{info.Height}; attached {width}x{height}. Map image coordinates to the original using x*{info.Width}/{width}, y*{info.Height}/{height}."
+            };
+            if (width == 1 && height == 1) throw new ArgumentException("无法将图片压缩到传输限制以内。");
+            width = Math.Max(1, width * 3 / 4); height = Math.Max(1, height * 3 / 4);
+        }
     }
 }
