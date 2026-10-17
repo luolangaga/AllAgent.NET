@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <PackageId>AllAgent.NET.Diligence</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>AllAgent.NET</Authors>
+    <Description>通过 /ext effort 切换 Agent 执行积极度：省力、标准、勤快。</Description>
+    <PackageTags>AllAgent.NET;LanAgent;Plugin;Agent;Prompt</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageLicenseExpression>GPL-3.0-only</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/luolangaga/AllAgent.NET.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/AllAgent.NET.Core/AllAgent.NET.Core.csproj" PrivateAssets="all" />
+    <None Include="allagent-plugin.json" Pack="true" PackagePath="allagent/" />
+    <None Include="README.md" Pack="true" PackagePath="/" />
+    <None Include="../../LICENSE" Pack="true" PackagePath="/" />
+  </ItemGroup>
+</Project>

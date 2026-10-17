@@ -21,7 +21,7 @@ const ANIMATION_DURATION = 240
         <div class="panel faq-note">
           <p class="tiny">先自检一遍</p>
           <p class="faq-note-text">
-            <code>lanagent doctor</code> 会检查 Python、PowerShell、ripgrep、共享库环境、pip 与
+            <code>allagent doctor</code> 会检查 Python、PowerShell、ripgrep、共享库环境、pip 与
             <code>pip.md</code>，并真的跑一次沙箱执行；检查本身不会安装任何软件。
           </p>
           <a class="faq-note-link" href="#quickstart">去看三步快速开始</a>
@@ -46,7 +46,7 @@ const ANIMATION_DURATION = 240
               <dl class="faq-terms">
                 <div class="faq-term">
                   <dt><code>full</code><span class="faq-badge">默认</span></dt>
-                  <dd>35 个宿主工具不再逐次弹审批，工作区外的路径也放行。它不是提权：LanAgent 不会申请管理员权限。</dd>
+                  <dd>35 个宿主工具不再逐次弹审批，工作区外的路径也放行。它不是提权：AllAgent.NET 不会申请管理员权限。</dd>
                 </div>
                 <div class="faq-term">
                   <dt><code>ask</code></dt>
@@ -115,10 +115,10 @@ const ANIMATION_DURATION = 240
                 </li>
                 <li>
                   权限档位 <code>full</code> 只表示「宿主工具不逐次审批、允许工作区外路径」，
-                  它不会给 LanAgent 或它启动的进程管理员权限。
+                  它不会给 AllAgent.NET 或它启动的进程管理员权限。
                 </li>
                 <li>
-                  唯一需要额外装东西的场景是缺失环境：<code>lanagent doctor</code> 会如实报出缺什么，
+                  唯一需要额外装东西的场景是缺失环境：<code>allagent doctor</code> 会如实报出缺什么，
                   <code>doctor install</code> 才经 winget 补装（安装 Python 3.13 / PowerShell 后需要重启）。
                 </li>
               </ul>
@@ -133,7 +133,7 @@ const ANIMATION_DURATION = 240
             <template #suffix><span class="faq-tag">凭据</span></template>
             <div class="faq-a">
               <p>
-                不会。沙箱 worker 只保留 Windows 系统环境变量，LanAgent 自己拿到的模型服务凭据不会跟着进 worker。
+                不会。沙箱 worker 只保留 Windows 系统环境变量，AllAgent.NET 自己拿到的模型服务凭据不会跟着进 worker。
               </p>
               <ul class="faq-points">
                 <li>
@@ -145,8 +145,8 @@ const ANIMATION_DURATION = 240
                   想读文件、跑命令都得走宿主工具。
                 </li>
                 <li>
-                  不想把 Key 写进项目，就用环境变量启动：<code>LANAGENT_PROVIDER</code>、
-                  <code>LANAGENT_BASE_URL</code>、<code>LANAGENT_MODEL</code>、<code>LANAGENT_API_KEY</code>。
+                  不想把 Key 写进项目，就用环境变量启动：<code>ALLAGENT_PROVIDER</code>、
+                  <code>ALLAGENT_BASE_URL</code>、<code>ALLAGENT_MODEL</code>、<code>ALLAGENT_API_KEY</code>。
                 </li>
               </ul>
             </div>
@@ -160,12 +160,12 @@ const ANIMATION_DURATION = 240
             <template #suffix><span class="faq-tag">数据</span></template>
             <div class="faq-a">
               <p>
-                Terminal 的项目数据默认落在 <code>&lt;workspace&gt;/.lanagent/data/</code>，用
+                Terminal 的项目数据默认落在 <code>&lt;workspace&gt;/.allagent/data/</code>，用
                 <code>--data-dir</code> 可以换到别处。
               </p>
               <dl class="faq-terms">
                 <div class="faq-term">
-                  <dt><code>lanagent.json</code></dt>
+                  <dt><code>allagent.json</code></dt>
                   <dd>v3 清单与设置，记录当前引用了哪些会话修订。</dd>
                 </div>
                 <div class="faq-term">
@@ -184,7 +184,7 @@ const ANIMATION_DURATION = 240
                 </div>
               </dl>
               <p class="faq-foot">
-                共享 Python 库、插件、OAuth 凭据与用户 Skills 仍然放在 <code>%APPDATA%/LanAgent</code>，
+                共享 Python 库、插件、OAuth 凭据与用户 Skills 仍然放在 <code>%APPDATA%/AllAgent.NET</code>，
                 不跟着工作区走。
               </p>
             </div>
@@ -213,7 +213,7 @@ const ANIMATION_DURATION = 240
                   以及普通模式下的 reparse point。
                 </li>
                 <li>
-                  Node 与 npm 只在你自己构建附带的前端资源（<code>src/LanAgent.Web</code>）时才需要；
+                  Node 与 npm 只在你自己构建附带的前端资源（<code>src/AllAgent.NET.Web</code>）时才需要；
                   用 Terminal 本身要的是 .NET 8 SDK、Python 3.10–3.14、PowerShell 7.6 与 ripgrep。
                 </li>
               </ul>

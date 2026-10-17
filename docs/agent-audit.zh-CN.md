@@ -1,4 +1,4 @@
-# LanAgent 实测审计报告
+# AllAgent.NET 实测审计报告
 
 - 日期：2026-10-09
 - 环境：Windows 主机 + Hyperlight 微虚拟机沙箱；.NET SDK 11.0.100-rc.1（TFM net8.0）；Node.js v24.15.0
@@ -15,9 +15,9 @@
 
 命令：
 
-    dotnet build src/LanAgent.Core      # 0 warning / 0 error
-    dotnet build tests/LanAgent.Tests   # 0 warning / 0 error
-    dotnet test tests/LanAgent.Tests --no-build --filter <表达式>
+    dotnet build src/AllAgent.NET.Core      # 0 warning / 0 error
+    dotnet build tests/AllAgent.NET.Tests   # 0 warning / 0 error
+    dotnet test tests/AllAgent.NET.Tests --no-build --filter <表达式>
 
 分片结果（多轮重跑）：
 
@@ -45,7 +45,7 @@
 | file_read(path='A'*8000+'.txt') | 正常拒绝（超长路径报错），参数 8,000 字符可通过 |
 | 源代码含 6,000 个中文字符 | 正常（源码本身不受该缓冲限制） |
 | run_shell 输出 20,050 字符 | 裁剪为 20,000，truncated=true |
-| dotnet run --project src/LanAgent.Sandbox -- --version | {"kind":"error","error":"Missing init."} |
+| dotnet run --project src/AllAgent.NET.Sandbox -- --version | {"kind":"error","error":"Missing init."} |
 
 ## 三、优点（附实测或源码证据）
 
@@ -59,7 +59,7 @@
 7. Provider 抽象干净：IAiProvider 四个实现（openai / anthropic / gemini / ollama），Ollama 复用 OpenAiProvider 仅换 base URL，扩展成本低。
 8. 测试资产含真实集成：终端与子 Agent 集成测试是真实启动（各约 19s），CodeAct 用例跑在真实微虚拟机上，安全类用例覆盖工具边界与目录外访问。
 9. 持久化稳健：DataStore 线程安全（读写锁）+ 原子写 + 写后校验 + .bak / .tmp 兜底。
-10. 可观测性可用：统一日志写到 %APPDATA%/LanAgent/lanagent.log，桥接调用有明确排查路径。
+10. 可观测性可用：统一日志写到 %APPDATA%/AllAgent.NET/allagent.log，桥接调用有明确排查路径。
 
 ---
 
@@ -102,7 +102,7 @@
 
 ### P3｜Sandbox 组件缺少独立可运行的 CLI 契约
 
-- dotnet run --project src/LanAgent.Sandbox -- --version 返回 {"kind":"error","error":"Missing init."}。
+- dotnet run --project src/AllAgent.NET.Sandbox -- --version 返回 {"kind":"error","error":"Missing init."}。
 - 作为宿主内部组件可以接受，但不利于运维排障时"先自检沙箱是否可用"。建议提供 --self-check 之类的最小入口（探测微虚拟机能否启动并返回 0/1）。
 
 ---

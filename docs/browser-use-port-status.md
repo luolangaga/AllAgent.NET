@@ -17,10 +17,10 @@ the full project has not yet been ported. Do not report complete parity.
 | tools/service.py evaluate | JavaScript expressions/Promise results, errors, dialog interruption | Full upstream JS repair/serialization logic remains incomplete |
 | tools/service.py upload_file, save_as_pdf | Not implemented | Host path permissions and transfers needed |
 | browser/watchdogs/downloads_watchdog.py | Native browser download behavior only | Progress tracking and managed download results needed |
-| agent/service.py | Existing LanAgent reasoning loop | Upstream history, recovery, batch action orchestration not ported |
+| agent/service.py | Existing AllAgent.NET reasoning loop | Upstream history, recovery, batch action orchestration not ported |
 
 The built-in skill remains the on-demand entry point. Runtime host I/O and user
-permissions remain enforced by LanAgent. No Python browser dependency or separate
+permissions remain enforced by AllAgent.NET. No Python browser dependency or separate
 Chromium download is introduced. Preserve the upstream MIT notice with ports.
 
 Regression coverage includes real Monty skill loading using both keyword and dict

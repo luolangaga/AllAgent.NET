@@ -10,7 +10,7 @@ import { onBeforeUnmount, onMounted, ref } from 'vue'
  */
 const visible = ref(false)
 const progress = ref(0)
-const lines = ['lanagent.sys', 'mount workspace', 'spawn sandbox', 'attach host tools', 'ready']
+const lines = ['allagent.sys', 'mount workspace', 'spawn sandbox', 'attach host tools', 'ready']
 
 let timers: ReturnType<typeof setTimeout>[] = []
 let rafId = 0
@@ -53,7 +53,7 @@ onBeforeUnmount(() => {
 <template>
   <div v-if="visible" class="boot" role="presentation" @click="finish">
     <div class="boot-box">
-      <p class="boot-brand">LanAgent</p>
+      <p class="boot-brand">AllAgent.NET</p>
       <ul class="boot-list">
         <li v-for="(line, i) in lines" :key="line" :class="{ 'is-on': progress * lines.length > i }">
           <span class="boot-dot" />

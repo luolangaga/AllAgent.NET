@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <CopyEmbeddedPowerShell>true</CopyEmbeddedPowerShell>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsTestProject>true</IsTestProject>
+    <IsPackable>false</IsPackable>
+    <CopyAgentSandbox>true</CopyAgentSandbox>
+    <CopyBrowserWorker>true</CopyBrowserWorker>
+    <CopyComputerWorker>true</CopyComputerWorker>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/AllAgent.NET.Browser/AllAgent.NET.Browser.csproj" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" SetTargetFramework="TargetFramework=net10.0-windows" />
+    <ProjectReference Include="../../src/AllAgent.NET.ComputerUse/AllAgent.NET.ComputerUse.csproj" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" SetTargetFramework="TargetFramework=net10.0-windows" />
+    <ProjectReference Include="../AllAgent.NET.ComputerUseFixture/AllAgent.NET.ComputerUseFixture.csproj" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" SetTargetFramework="TargetFramework=net10.0-windows" />
+    <ProjectReference Include="../../plugins/AllAgent.NET.CommandCode/AllAgent.NET.CommandCode.csproj" />
+    <ProjectReference Include="../../plugins/AllAgent.NET.WorkBuddy/AllAgent.NET.WorkBuddy.csproj" />
+    <ProjectReference Include="../../plugins/AllAgent.NET.Diligence/AllAgent.NET.Diligence.csproj" />
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" PrivateAssets="all" />
+    <ProjectReference Include="../../src/AllAgent.NET.Core/AllAgent.NET.Core.csproj" />
+    <ProjectReference Include="../../samples/AllAgent.NET.SamplePlugin/AllAgent.NET.SamplePlugin.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="../../src/AllAgent.NET.Sandbox/AllAgent.NET.Sandbox.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="../AllAgent.NET.ProcessProbe/AllAgent.NET.ProcessProbe.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="../../src/AllAgent.NET.Terminal/AllAgent.NET.Terminal.csproj" />
+    <PackageReference Include="Spectre.Console.Testing" Version="0.57.2" />
+    <ProjectReference Include="../../src/AllAgent.NET.ToolGenerator/AllAgent.NET.ToolGenerator.csproj" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
+  </ItemGroup>
+  <Target Name="CopyProcessProbe" AfterTargets="Build">
+    <ItemGroup><ProbeFiles Include="../AllAgent.NET.ProcessProbe/bin/$(Configuration)/net10.0/*" /></ItemGroup>
+    <Copy SourceFiles="@(ProbeFiles)" DestinationFolder="$(OutDir)probe" SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="CopySamplePlugin" AfterTargets="Build">
+    <ItemGroup><PluginFiles Include="../../samples/AllAgent.NET.SamplePlugin/bin/$(Configuration)/net10.0/AllAgent.NET.SamplePlugin.dll" /><PluginFiles Include="../../samples/AllAgent.NET.SamplePlugin/allagent-plugin.json" /></ItemGroup>
+    <Copy SourceFiles="@(PluginFiles)" DestinationFolder="$(OutDir)sample-plugin" SkipUnchangedFiles="true" />
+  </Target>
+  <!-- Tests launch the referenced terminal as a separate process in this output
+       directory. Its dependencies use this project's shared-framework resolution. -->
+  <Target Name="ConfigureTerminalTestRuntime" AfterTargets="Build">
+    <Copy SourceFiles="$(TargetDir)$(AssemblyName).runtimeconfig.json" DestinationFiles="$(TargetDir)allagent.runtimeconfig.json" />
+  </Target>
+</Project>

@@ -1,5 +1,15 @@
 # 子代理独立配置
 
+## 运行与取消语义
+
+模型只有一个委派工具 `subagent`(single / parallel / chain),另有 `cancel_agent`:
+
+- **前台(默认)**:调用阻塞到所有子代理进入终态,结果内联返回;父 turn 被取消(终端 Esc、桌面取消流)时,本次调用启动的前台子代理连同沙箱一起取消(Queued 直接取消,运行中先进入 Cancelling)。前台结果不产生额外通知。
+- **后台(`background=true`,仅 single;或终端 `/background`)**:立即返回 `taskId`,子代理独立生命周期,不受父 turn 取消影响;完成(或失败/取消/中断)时向父会话投递**一次**内部通知,终端与桌面/Web 都会在父会话空闲时自动唤醒并消化通知。
+- `sessionID` 用于续聊已完成的子会话,或对运行中的后台子代理追加 steer(steer 立即返回,结果稍后通知)。取消进行中(Cancelling)不再接受 steer。
+- 结果字段:`exitCode` 0=完成、130=取消、1=失败/中断,未完成时为 null;`partial=true` 表示子代理未完成,只能作为不完整证据使用,不得当作最终答案。
+- 子代理不能再派发、不能向人提问;子权限 ⊆ 父权限 ∩ 角色权限。
+
 桌面应用：设置 → 子代理独立配置 → 编辑角色 JSON → 保存角色配置。
 
 终端：直接输入 `/agents` 打开交互配置面板，使用方向键选择、Enter 确认。支持新建、编辑、恢复或删除角色。也可以使用 `/agents edit review` 直接编辑指定角色，`/agents add` 新建角色。
@@ -19,7 +29,7 @@
     "readOnly": true,
     "provider": "你的提供商配置 ID",
     "model": "你的模型 ID",
-    "tools": ["file_read", "file_search", "file_glob", "list_directory", "skill_read", "skill_reference"],
+    "tools": ["file_read", "file_search", "everything_search", "list_directory", "skill_read", "skill_reference"],
     "execution": {
       "temperature": 0.2,
       "maxOutputTokens": 4096,

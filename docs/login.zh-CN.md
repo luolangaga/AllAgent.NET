@@ -7,9 +7,12 @@
 | 入口 | 登录方式 | 当前模型能力 |
 |---|---|---|
 | `/login codex` | 官方 Continue with ChatGPT 浏览器授权；不用填写 Client ID 或 Key | 自动获取账号模型目录，选择模型并建立 Responses 配置；实际推理由首次请求确认 |
+| `/login commandcode` | 自带插件；在输入框直接粘贴 `user_` 开头的 API Key（或在启动前设置 `COMMANDCODE_API_KEY`） | 验证并加密保存密钥，自动获取模型列表；模型页脚显示剩余额度、计划与重置时间 |
 | `/login 插件ID` | 对应 .NET 认证插件实现 | 由插件的认证和模型提供商共同决定 |
 
-`/login status` 查看全部入口，`/logout 提供商ID` 退出。独立命令行也支持 `lanagent login codex`、`lanagent login status --json` 和 `lanagent logout codex`。Copilot 和 Claude Code 的内置认证登录入口已移除；已有 Anthropic API Key 可继续通过 `/providers` 配置。
+提供商选择列表统一"账号登录优先"：账号/授权类提供商排在最前，API Key 类预设随后；列表支持输入过滤，到顶/到底不循环滚动。
+
+`/login status` 查看全部入口，`/logout 提供商ID` 退出。独立命令行也支持 `allagent login codex`、`allagent login status --json` 和 `allagent logout codex`。Copilot 和 Claude Code 的内置认证登录入口已移除；已有 Anthropic API Key 可继续通过 `/providers` 配置。
 
 ## Codex / ChatGPT
 
@@ -27,4 +30,4 @@
 
 ## 认证插件
 
-安装带 `LanAgent` 标签的 .NET 插件后，插件的 `IAuthenticationProvider` 自动进入 `/login` 面板。服务专用认证应在插件代码中封装，用户不填写 OAuth 端点。内置 ID `codex` 为宿主保留；其他 ID 请使用插件前缀。模型与 HTTP MCP 可引用该认证 ID，凭据按提供商的目标来源策略处理。接口、示例、NuGet 打包与信任边界见 [插件开发文档](plugins.zh-CN.md)。
+安装带 `AllAgent.NET` 标签的 .NET 插件后，插件的 `IAuthenticationProvider` 自动进入 `/login` 面板。服务专用认证应在插件代码中封装，用户不填写 OAuth 端点。内置 ID `codex` 为宿主保留；其他 ID 请使用插件前缀。模型与 HTTP MCP 可引用该认证 ID，凭据按提供商的目标来源策略处理。接口、示例、NuGet 打包与信任边界见 [插件开发文档](plugins.zh-CN.md)。

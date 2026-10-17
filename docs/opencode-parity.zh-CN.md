@@ -1,18 +1,18 @@
 # OpenCode 源码移植验收记录
 
-目标：保留 LanAgent 的 CodeAct / Hyperlight 执行边界，移植 OpenCode 的终端功能和交互。用户明确要求目前不开发桌面端，Vue/Avalonia 不在当前开发范围。此记录不代表已经实现完整功能对等。
+目标：保留 AllAgent.NET 的 CodeAct / Hyperlight 执行边界，移植 OpenCode 的终端功能和交互。用户明确要求目前不开发桌面端，Vue/Avalonia 不在当前开发范围。此记录不代表已经实现完整功能对等。
 
 ## 固定参考
 
 - 上游：https://github.com/anomalyco/opencode
 - commit：`e31136bdbdb43e934d8bbd81e75a2065a2625699`
-- 本地只读参考：`tools/opencode-reference`，不作为 LanAgent 的构建依赖。
+- 本地只读参考：`tools/opencode-reference`，不作为 AllAgent.NET 的构建依赖。
 - 审阅日期：2026-10-11。后续核对必须引用此版本，不能混用在线最新版行为。
 - 许可证：上游 LICENSE 为 MIT；复制或改编部分随发行保留完整许可和版权声明，见 THIRD-PARTY-NOTICES.md。
 
 ## 源码对应与差异
 
-| 范围 | 上游源码（相对参考目录） | LanAgent 现状 / 待办 |
+| 范围 | 上游源码（相对参考目录） | AllAgent.NET 现状 / 待办 |
 |---|---|---|
 | 子代理输入与执行 | packages/core/src/tool/plugin/subagent.ts | 终端新增 subagent：agent/description/prompt、前台默认运行、后台返回、继续空闲子会话、父子归属校验、同一任务内运行中 steering 及收尾续跑；新任务与 steering 支持图片/文本快照、运行中角色和模型切换、实时宿主权限与下一步骤指令；自定义角色与深度待补齐 |
 | 子代理最后回复 | packages/core/src/session/subagent-completion.ts | 已增加独立 FinalOutput；完成时向父代理返回最后轮次文本；过程文本仍留在任务记录 |
@@ -26,16 +26,16 @@
 | 权限 | packages/core/src/permission.ts、packages/schema/src/permission.ts、packages/core/src/util/wildcard.ts、packages/tui/src/routes/session/permission.tsx | 角色有序 action/resource/effect 规则、通配符与 allow/deny/ask 已接入；实际工具执行前验证，完全访问不跳过 ask；记忆规则和完整权限生命周期待补齐 |
 | 上下文压缩 | packages/core/src/session/compaction.ts | 现有摘要；待对齐自动/溢出/手动三类触发、最近消息保留和厂商原生压缩 |
 | 桌面/Web | packages/app、packages/desktop、packages/session-ui | 用户要求目前不开发；不作为当前终端交付范围 |
-| 商业发行 | 上游发布脚本、桌面打包、依赖许可 | 待审阅；LanAgent 尚缺签名安装器、升级、回滚与发行验收 |
+| 商业发行 | 上游发布脚本、桌面打包、依赖许可 | 待审阅；AllAgent.NET 尚缺签名安装器、升级、回滚与发行验收 |
 | 图片输入 | packages/tui/src/component/prompt/local-attachment.ts、clipboard.ts、prompt/attachment.ts | 已接入 @图片路径、四协议真实图片内容块、图片字节持久化、剪贴板截图引用、图片附件信息面板、分批多模态摘要、路径粘贴暂存和草稿移除/撤销；剪贴板真实交互、附件选择列表、文件拖入尚待补齐 |
 
 ## 本批验证
 
-`dotnet test tests/LanAgent.Tests -c Release --filter "FullyQualifiedName~SubAgentToolsTests|FullyQualifiedName~BackgroundTaskTests|FullyQualifiedName~ExecutionPresentationTests"`
+`dotnet test tests/AllAgent.NET.Tests -c Release --filter "FullyQualifiedName~SubAgentToolsTests|FullyQualifiedName~BackgroundTaskTests|FullyQualifiedName~ExecutionPresentationTests"`
 
 14 项通过。包括多轮最终回复、持久化重载、没有完成事件时判失败、原有等待授权与取消流程。没有完成事件的异步流不再被当作成功。
 
-第二批：`dotnet test tests/LanAgent.Tests -c Release --filter "FullyQualifiedName~SubAgent|FullyQualifiedName~BackgroundTaskTests|FullyQualifiedName~ExecutionPresentationTests"`，19 项通过（59 秒），含现有真实 Hyperlight 子代理测试。新增测试覆盖角色校验、父子归属、拒绝继续活跃子会话、typed subagent 前后台返回。终端 Explore 宿主策略已实现，但其专门的端到端权限测试仍需补充；本批没有完成全部终端交互验收。
+第二批：`dotnet test tests/AllAgent.NET.Tests -c Release --filter "FullyQualifiedName~SubAgent|FullyQualifiedName~BackgroundTaskTests|FullyQualifiedName~ExecutionPresentationTests"`，19 项通过（59 秒），含现有真实 Hyperlight 子代理测试。新增测试覆盖角色校验、父子归属、拒绝继续活跃子会话、typed subagent 前后台返回。终端 Explore 宿主策略已实现，但其专门的端到端权限测试仍需补充；本批没有完成全部终端交互验收。
 
 第三批：通知/子会话/工具/后台任务/输入/全屏相关筛选 27 项通过；随后新增父模型结束前消费通知的真实 Hyperlight 测试，SubAgentNotificationTests 共 4 项通过（9 秒）。通知验证包括快任务先完成后注册、持久化重启、不同父会话隔离、消息写入后尚未确认时的重复恢复、前台结果不重复投递。终端 Release 构建通过。ANSI 输入循环已实现完成事件唤醒并保留草稿；非 ANSI TextPrompt 等待中暂不能自动唤醒，结果会在下一次输入或恢复时处理。此限制尚未达到完整交互对等。
 
@@ -99,7 +99,7 @@ ToolRegistry 新增可选 InvocationPolicy，审批之前及真正调用宿主�
 
 第十六批验证：角色权限/配置/切换/模型/收件箱/子会话/终端产品/引擎筛选 51 项通过（42 秒）；权限专项包含 canonical 路径、通配符、最后匹配、空规则 ask、完全访问仍要求确认、等待时配置变更撤销、取消与父授权不可提升。真实终端 run --json --full-access + 双 SSE + 父子 Hyperlight 通过，确认运行中切换和重启后手动恢复均拒绝规则禁止读取及未经确认读取，允许读取仍正常；图片快照、角色默认模型切换、唯一 execute_code 协议继续有效。证据 artifacts/qa/subagent-steering/cd7910d1920f4a318e4f66ab99afab33。真实 ConPTY + Hyperlight 通过 Y 允许读取、N 拒绝读取、deny 无弹窗、受拒内容未送模型，证据 artifacts/qa/agent-permissions/0a071e12dd884dca8d9bbe27f777967c。完整复刻和商业发行仍未完成，桌面端未开发。
 
-第十六批最终复验：补充工具/扩展/外部目录筛选 61 项通过（14 秒），最新权限与角色切换专项 8 项通过（10 秒）。标准 Release 输出曾因正在运行的 lanagent.exe 占用失败，未终止用户会话；改用 build/permission-verification/terminal 独立输出后构建零警告、零错误。使用该最终产物重新执行两套真实验收均通过，最新证据为 artifacts/qa/subagent-steering/f709b91879ad4480afca38d3649f936a 与 artifacts/qa/agent-permissions/518e721d277a46e9a344c1538c3eb250。QA 脚本支持 LANAGENT_QA_EXECUTABLE 指定独立产物，默认仍使用标准 Release 路径。
+第十六批最终复验：补充工具/扩展/外部目录筛选 61 项通过（14 秒），最新权限与角色切换专项 8 项通过（10 秒）。标准 Release 输出曾因正在运行的 allagent.exe 占用失败，未终止用户会话；改用 build/permission-verification/terminal 独立输出后构建零警告、零错误。使用该最终产物重新执行两套真实验收均通过，最新证据为 artifacts/qa/subagent-steering/f709b91879ad4480afca38d3649f936a 与 artifacts/qa/agent-permissions/518e721d277a46e9a344c1538c3eb250。QA 脚本支持 ALLAGENT_DOTNET_QA_EXECUTABLE 指定独立产物，默认仍使用标准 Release 路径。
 
 第十七批（终端交互修复）：参考 OpenCode 输入粘贴与分区选择方式，输入框右键支持原生剪贴板文字/图片，有输入或消息选区时优先复制。PNG 注册格式直接读取，普通 Windows 位图/DIB 经固定 STA helper 转换；Ctrl+V/Shift+Insert 与空 bracketed-paste 事件均进入相同图片暂存逻辑，读取在后台完成。消息选区按渲染块限制，表格按起始列限制，跨行高亮和复制使用同一边界，排除邻接消息、侧栏与布局边框。
 

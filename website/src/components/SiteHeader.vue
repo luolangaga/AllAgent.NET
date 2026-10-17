@@ -13,7 +13,7 @@ const NAV: { href: string; label: string }[] = [
   { href: '#faq', label: '常见问题' },
 ]
 
-const REPO_URL = 'https://github.com/luolangaga/LanAgent'
+const REPO_URL = 'https://github.com/luolangaga/AllAgent.NET'
 
 const compact = ref(false)
 const progress = ref(0)
@@ -61,7 +61,7 @@ onBeforeUnmount(() => {
     <div class="shell bar-inner">
       <a class="brand" href="#top" @click="menuOpen = false">
         <PixelIcon name="terminal" :size="26" class="brand-icon" />
-        <span class="brand-text">LANAGENT</span>
+        <span class="brand-text">ALLAGENT</span>
         <span class="brand-badge tiny">GPL-3.0</span>
       </a>
 

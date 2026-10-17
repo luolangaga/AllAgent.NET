@@ -12,7 +12,7 @@
 
 `file_read` 的 offset 是从 1 开始的行号，limit 是行数。每页最多 2,000 行或 20,000 UTF-8 字节，并同时限制 JSON 转义后的大小，返回 totalLines、nextOffset、outputLines、outputBytes 和 notice。普通分页保留完整行；超长单行返回 nextColumnOffset，保持同一 offset 并设置 column_offset 继续读取。文本文件不设置固定大小上限。PNG/JPEG/GIF/WebP 按内容签名识别，通过已有模型图片通道传递，单图仍限 4 MB，不把 base64 塞进工具 JSON。详见 [宿主文件与命令工具](host-tools.zh-CN.md)。
 
-`list_directory` 默认隐藏常见构建、依赖及代理缓存目录（包括 .lanagent）；`include_ignored=true` 可以查看全部。先过滤、按名称排序，再按条目数和序列化字节预算分页；此工具仍不递归。
+`list_directory` 默认隐藏常见构建、依赖及代理缓存目录（包括 .allagent）；`include_ignored=true` 可以查看全部。先过滤、按名称排序，再按条目数和序列化字节预算分页；此工具仍不递归。
 
 宿主已停止 Python AST 白名单审核。普通 Python 语法、关键字解包、推导式、元组解包和 lambda 由实际 guest 执行；模块可用性由隔离运行时决定。运行错误返回真实源码位置和异常诊断，宿主工具失败通过 ok/error 返回。guest 未配置宿主文件挂载或出站域名，宿主 I/O 通过工具完成。
 

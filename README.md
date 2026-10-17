@@ -1,4 +1,4 @@
-# LanAgent
+# AllAgent.NET
 
 Browser Use 默认开启，由 C# 实现。内置模式使用 WebView2 独立窗口，外置模式支持自动启动并连接 Chrome/Edge。支持网页 JS（含 Promise）、页面观察、鼠标输入、标签页和截图；无需安装 Python 浏览器库或下载 Chromium。操作说明通过内置 `/browser-use` skill 按需加载，识别到的其他浏览器操作技能会被屏蔽。`/browser` 打开管理面板，选择浏览器后自动启动、检测连接，`/browser on|off` 控制总开关。[详细连接教程与当前能力边界](docs/browser-use.zh-CN.md)。
 
@@ -6,9 +6,11 @@ Windows Computer Use 使用 FlaUI，默认关闭。用户用 `/computer on|off` 
 
 **面向 Windows 本机工作流的 AI Agent。**
 
-LanAgent 支持文件与内容搜索、会话分支、上下文整理和失败重试。子代理提供调查、修改、审查、验证四种角色，支持单任务、并行和串行链派发；子代理向主代理返回结果和阻塞原因，停止会等待实际收尾。
+AllAgent.NET 支持文件与内容搜索、会话分支、上下文整理和失败重试。子代理提供调查、修改、审查、验证四种角色，支持单任务、并行和串行链派发；子代理向主代理返回结果和阻塞原因，停止会等待实际收尾。
 
-在熟悉的 Windows 终端里，让 AI 检查项目、修改文件、调用本机开发工具，并验证结果。LanAgent 围绕 PowerShell、Windows 路径、原生剪贴板和 Hyperlight 微虚拟机设计；Agent 执行目前支持 **Windows x64**。
+Windows 内置 Everything 便携索引引擎，Agent 可通过 `everything_search` 快速按名称查找文件。无需另装、配置或手动启动；首次自动索引获准目录，后续复用并监控变化。代码内容搜索仍使用 ripgrep。[文件搜索说明](docs/file-search.zh-CN.md)。
+
+在熟悉的 Windows 终端里，让 AI 检查项目、修改文件、调用本机开发工具，并验证结果。AllAgent.NET 围绕 PowerShell、Windows 路径、原生剪贴板和 Hyperlight 微虚拟机设计；Agent 执行目前支持 **Windows x64**。
 
 [快速开始](#快速开始) · [Windows 上的优势](#为什么适合在-windows-上工作) · [使用指南](#日常使用) · [开发与构建](#开发与构建) · [GPL-3.0](LICENSE)
 
@@ -41,13 +43,13 @@ Agent 可以在指定工作区内调用已安装的 `git`、`dotnet`、`rg`、No
 
 默认模式下，模型通过 Python 组织步骤，Python 优先在 **Hyperlight 微虚拟机**中运行，启动失败时自动切换到 **Monty 软件沙箱（无需虚拟化）**；文件、网络和命令操作通过受控工具交给 C# 宿主执行。每次代码执行恢复干净的虚拟机快照，worker 不继承模型服务凭据。
 
-默认使用完全访问模式，也可用 `lanagent --full-access` 或 `/permissions full` 选择。Python 始终在选定的隔离沙箱中执行，不再运行宿主 AST 白名单审核，语法与能力错误由隔离运行时返回；文件、网络与程序执行通过 C# 宿主工具完成。完全访问仅取消宿主工具逐次审批，允许工作区外路径，不授予管理员权限。`--ask` 或 `/permissions ask` 开启审批；`/permissions plan` 使用只读策略。两种权限模式均要求 Python、随包 PowerShell SDK worker 和至少一个可用沙箱；缺少沙箱时不得降级为宿主 Python。默认单次代码超时为 600 秒，可用 `--code-timeout` 调整。
+默认使用完全访问模式，也可用 `allagent --full-access` 或 `/permissions full` 选择。Python 始终在选定的隔离沙箱中执行，不再运行宿主 AST 白名单审核，语法与能力错误由隔离运行时返回；文件、网络与程序执行通过 C# 宿主工具完成。完全访问仅取消宿主工具逐次审批，允许工作区外路径，不授予管理员权限。`--ask` 或 `/permissions ask` 开启审批；`/permissions plan` 使用只读策略。两种权限模式均要求 Python、随包 PowerShell SDK worker 和至少一个可用沙箱；缺少沙箱时不得降级为宿主 Python。默认单次代码超时为 600 秒，可用 `--code-timeout` 调整。
 
-第一次进入终端聊天会初始化环境：内嵌 PowerShell SDK worker 会实际启动自检，无需安装系统 PowerShell；worker 缺失或损坏时提示修复 LanAgent。ripgrep 通过 `winget install --id BurntSushi.ripgrep.MSVC` 补齐。宿主 Python 检查可执行性与 3.10–3.14 版本范围；缺少或版本不符时提示通过 winget 安装 Python 3.13，安装完成后提示重启。不自动创建共享 pip 库环境或安装 Python 第三方包。扩展能力统一通过 `/powershell` 模块商店管理；Hyperlight 启动时保留标准库与 UTF-16LE/Base64 校验。离线或仅管理配置时可用 `--no-initialize` 跳过。
+第一次进入终端聊天会初始化环境：内嵌 PowerShell SDK worker 会实际启动自检，无需安装系统 PowerShell；worker 缺失或损坏时提示修复 AllAgent.NET。ripgrep 通过 `winget install --id BurntSushi.ripgrep.MSVC` 补齐。宿主 Python 检查可执行性与 3.10–3.14 版本范围；缺少或版本不符时提示通过 winget 安装 Python 3.13，安装完成后提示重启。不自动创建共享 pip 库环境或安装 Python 第三方包。扩展能力统一通过 `/powershell` 模块商店管理；Hyperlight 启动时保留标准库与 UTF-16LE/Base64 校验。离线或仅管理配置时可用 `--no-initialize` 跳过。
 
 Python 仅使用沙箱已有的语言与标准库能力；提示词禁止安装或导入第三方 Python 包，也禁止通过宿主 Python 绕过。pip 清单不再注入上下文，`/install-pip` 已移除。已存在的 Python 环境与库文件保留；AI 能力清单改为 PowerShell 模块摘要，并通过 `powershell_capabilities` 查询导出命令。
 
-`/doctor` 与 `lanagent doctor` 检查宿主 Python 的可执行性和版本、PowerShell 能力清单、ripgrep 和选定沙箱的实际执行结果；`/doctor install` 修复依赖，通过 winget 安装 Python 后提示重启软件。检查本身不会安装软件。
+`/doctor` 与 `allagent doctor` 检查宿主 Python 的可执行性和版本、PowerShell 能力清单、ripgrep 和选定沙箱的实际执行结果；`/doctor install` 修复依赖，通过 winget 安装 Python 后提示重启软件。检查本身不会安装软件。
 
 这让模型的计算代码与 Windows 宿主操作分开管理。**获准运行的本机程序仍具有当前用户的权限**；微虚拟机不隔离已经批准的 Shell 或 MCP 进程，也不会自动撤回它们的副作用。
 
@@ -75,15 +77,15 @@ Python 仅使用沙箱已有的语言与标准库能力；提示词禁止安装�
 从 NuGet.org 安装已发布版本：
 
 ```powershell
-dotnet tool install --global LanAgent.Terminal
-lanagent --help
-lanagent doctor
+dotnet tool install --global AllAgent.NET.Terminal
+allagent --help
+allagent doctor
 ```
 
 从旧版本升级：
 
 ```powershell
-dotnet tool update --global LanAgent.Terminal
+dotnet tool update --global AllAgent.NET.Terminal
 ```
 
 新安装者执行 `dotnet tool install`；从旧版本升级时执行 `dotnet tool update`。
@@ -91,22 +93,22 @@ dotnet tool update --global LanAgent.Terminal
 首次运行前检查 Windows 环境：
 
 ```powershell
-lanagent doctor
+allagent doctor
 # 可选：检查并在确认后通过 winget 安装依赖
-lanagent doctor --install
+allagent doctor --install
 ```
 
-NuGet Tool 会安装 `lanagent` 命令。完成模型配置后即可使用：
+NuGet Tool 会安装 `allagent` 命令。完成模型配置后即可使用：
 
 ```powershell
-lanagent chat --workspace C:\Projects\MyProject
+allagent chat --workspace C:\Projects\MyProject
 ```
 
 进入聊天后按 **F2** 配置模型或选择提供商，也可使用 `/login` 登录。安装后升级或卸载：
 
 ```powershell
-dotnet tool update --global LanAgent.Terminal
-dotnet tool uninstall --global LanAgent.Terminal
+dotnet tool update --global AllAgent.NET.Terminal
+dotnet tool uninstall --global AllAgent.NET.Terminal
 ```
 
 如要从源码启动开发版本，可继续使用 `./agent.ps1`；模型和扩展管理无需启动沙箱，首次执行任务时才检查执行环境。
@@ -124,14 +126,14 @@ dotnet tool uninstall --global LanAgent.Terminal
 也可临时通过环境变量配置，不把 API Key 写进项目：
 
 ```powershell
-$env:LANAGENT_PROVIDER = 'openai'
-$env:LANAGENT_BASE_URL = 'https://api.openai.com/v1'
-$env:LANAGENT_MODEL = '<模型 ID>'
-$env:LANAGENT_API_KEY = '<你的 API Key>'
+$env:ALLAGENT_PROVIDER = 'openai'
+$env:ALLAGENT_BASE_URL = 'https://api.openai.com/v1'
+$env:ALLAGENT_MODEL = '<模型 ID>'
+$env:ALLAGENT_API_KEY = '<你的 API Key>'
 .\agent.ps1 chat --workspace C:\Projects\MyProject
 ```
 
-如需安装为全局 `lanagent` 命令，见 [.NET Tool 打包与安装](docs/nuget-tool.zh-CN.md)。
+如需安装为全局 `allagent` 命令，见 [.NET Tool 打包与安装](docs/nuget-tool.zh-CN.md)。
 
 ## 日常使用
 
@@ -158,11 +160,11 @@ $env:LANAGENT_API_KEY = '<你的 API Key>'
 
 `/undo` 可撤回具有检查点的工作区文件工具修改，不能撤回 Shell、MCP 或工作区外的副作用。具体边界见 [执行与权限说明](docs/execution.zh-CN.md)。
 
-终端的会话与配置默认保存在工作目录的 `.lanagent/data/`（Windows 下隐藏）。`lanagent.json` 是小型清单，每个会话单独保存于 `conversations/`，保存当前会话不会重写其他历史。程序可执行文件所在目录的 `lanagent-projects.json` 记录各工作目录与数据路径；已登记的路径不会重复写入。`--data-dir` 可覆盖项目数据目录。插件、OAuth 登录凭据、用户技能和 Python 公共运行库继续复用 `%APPDATA%\LanAgent`，避免每个项目重复安装；显式指定 `--data-dir` 时这些资源也使用指定目录。
+终端的会话与配置默认保存在工作目录的 `.allagent/data/`（Windows 下隐藏）。`allagent.json` 是小型清单，每个会话单独保存于 `conversations/`，保存当前会话不会重写其他历史。程序可执行文件所在目录的 `allagent-projects.json` 记录各工作目录与数据路径；已登记的路径不会重复写入。`--data-dir` 可覆盖项目数据目录。插件、OAuth 登录凭据、用户技能和 Python 公共运行库继续复用 `%APPDATA%\AllAgent.NET`，避免每个项目重复安装；显式指定 `--data-dir` 时这些资源也使用指定目录。
 
-用户目录下的外部技能仅自动扫描 `~/.agents/skills/`；不会扫描 `~/.codex/skills/`、`~/.claude/skills/` 或 `~/.config/opencode/skills/`。LanAgent 自身技能目录及项目级技能仍按原规则加载。
+用户目录下的外部技能仅自动扫描 `~/.agents/skills/`；不会扫描 `~/.codex/skills/`、`~/.claude/skills/` 或 `~/.config/opencode/skills/`。AllAgent.NET 自身技能目录及项目级技能仍按原规则加载。
 
-首次使用项目数据目录时，自动导入旧 AppData 数据库中属于当前工作区的会话，以及未记录工作区的旧会话、配置；旧目录保持可恢复。旧版单文件数据库写入时自动转换为拆分格式，并保留 `lanagent.legacy-v2.json.bak`。清单与会话通过校验和、原子替换和落盘刷新保存，保留主清单与备份引用的会话版本；坏文件不会被静默替换成空数据库。旧版本程序不支持新格式，请使用新版本读取。请求仍会把任务所需内容发送给所选模型服务。
+首次使用项目数据目录时，自动导入旧 AppData 数据库中属于当前工作区的会话，以及未记录工作区的旧会话、配置；旧目录保持可恢复。旧版单文件数据库写入时自动转换为拆分格式，并保留 `allagent.legacy-v2.json.bak`。清单与会话通过校验和、原子替换和落盘刷新保存，保留主清单与备份引用的会话版本；坏文件不会被静默替换成空数据库。旧版本程序不支持新格式，请使用新版本读取。请求仍会把任务所需内容发送给所选模型服务。
 
 提示词保留稳定前缀并固定工具顺序，Anthropic 使用系统与历史消息缓存断点；侧栏展示服务端返回的缓存 Token 命中率。实际命中取决于模型与服务策略。
 
@@ -171,11 +173,11 @@ $env:LANAGENT_API_KEY = '<你的 API Key>'
 终端开发不需要 Node.js：
 
 ```powershell
-dotnet build src/LanAgent.Terminal
-dotnet test tests/LanAgent.Tests
+dotnet build src/AllAgent.NET.Terminal
+dotnet test tests/AllAgent.NET.Tests
 
 # 发布 Windows x64 版本（自带 .NET 运行时）
-dotnet publish src/LanAgent.Terminal -c Release -r win-x64 --self-contained true -o artifacts/lanagent-win-x64
+dotnet publish src/AllAgent.NET.Terminal -c Release -r win-x64 --self-contained true -o artifacts/allagent-win-x64
 ```
 
 发布后保留整个输出目录及 `sandbox/` 子目录。宿主 Python 仍需满足要求，保留随包 `powershell/` 目录；无虚拟化时使用 Monty。
@@ -185,44 +187,45 @@ dotnet publish src/LanAgent.Terminal -c Release -r win-x64 --self-contained true
 ```powershell
 # 终端 1：安装根目录和 Web 项目依赖，启动 Vite
 npm install
-npm --prefix src/LanAgent.Web install
-npm --prefix src/LanAgent.Web run dev
+npm --prefix src/AllAgent.NET.Web install
+npm --prefix src/AllAgent.NET.Web run dev
 
 # 终端 2：启动桌面宿主，使用 Vite 开发服务
-dotnet run --project src/LanAgent.Desktop -p:SkipWebBuild=true
+dotnet run --project src/AllAgent.NET.Desktop -p:SkipWebBuild=true
 ```
 
 | 项目 | 职责 |
 |---|---|
-| `LanAgent.Core` | UI 无关的 Agent 引擎、模型服务、数据与宿主工具 |
-| `LanAgent.Terminal` | Spectre.Console 终端界面 |
-| `LanAgent.Sandbox` | Hyperlight 隔离执行 worker |
-| `LanAgent.ToolGenerator` | C# 工具 Schema 与类型化分发生成器 |
-| `LanAgent.Desktop` / `LanAgent.Web` | Avalonia 桌面宿主与 React / Iconiq UI 聊天界面 |
-| `LanAgent.Tests` | 工具边界、生命周期、终端行为及实际微虚拟机测试 |
+| `AllAgent.NET.Core` | UI 无关的 Agent 引擎、模型服务、数据与宿主工具 |
+| `AllAgent.NET.Terminal` | Spectre.Console 终端界面 |
+| `AllAgent.NET.Sandbox` | Hyperlight 隔离执行 worker |
+| `AllAgent.NET.ToolGenerator` | C# 工具 Schema 与类型化分发生成器 |
+| `AllAgent.NET.Desktop` / `AllAgent.NET.Web` | Avalonia 桌面宿主与 React / Iconiq UI 聊天界面 |
+| `AllAgent.NET.Tests` | 工具边界、生命周期、终端行为及实际微虚拟机测试 |
 
-`LanAgent.Core` 可嵌入其他 .NET 应用；扩展工具通过 `[AgentTool]` 注册，模型统一经 `execute_code` 调用。Hyperlight 相关依赖目前包含预览版本，升级需重新验证实际虚拟机测试。
+`AllAgent.NET.Core` 可嵌入其他 .NET 应用；扩展工具通过 `[AgentTool]` 注册，模型统一经 `execute_code` 调用。Hyperlight 相关依赖目前包含预览版本，升级需重新验证实际虚拟机测试。
 
 ## 更多文档
 
 - [CodeAct 与工具执行](docs/codeact.zh-CN.md)
 - [执行详情、权限与目录授权](docs/execution.zh-CN.md)
+- [PowerShell 持久会话与对象输出](docs/powershell-session.zh-CN.md)
 - [账号登录](docs/login.zh-CN.md)
 - [.NET Tool 打包与安装](docs/nuget-tool.zh-CN.md)
 - [插件开发](docs/plugins.zh-CN.md)
 - [插件开发新手教程（Core 1.1.0）](docs/plugin-development-beginner.zh-CN.md)
-- [执行积极度插件：省力、标准、勤快](plugins/LanAgent.Diligence/README.md)
+- [执行积极度插件：省力、标准、勤快](plugins/AllAgent.NET.Diligence/README.md)
 - [终端交互与任务控制](docs/terminal-followup.zh-CN.md)
 - [自定义代理角色示例](docs/agent-roles.example.json)
 
-欢迎通过 [Issues](https://github.com/luolangaga/LanAgent/issues) 报告问题或提出建议。提交改动时请说明复现步骤、行为变化与验证方式；环境或沙箱问题请附上 `doctor` 输出，并移除密钥和个人数据。
+欢迎通过 [Issues](https://github.com/luolangaga/AllAgent.NET/issues) 报告问题或提出建议。提交改动时请说明复现步骤、行为变化与验证方式；环境或沙箱问题请附上 `doctor` 输出，并移除密钥和个人数据。
 
 ## 开源协议
 
-LanAgent 使用 [GPL-3.0-only](LICENSE) 协议。第三方代码的声明与许可证见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
+AllAgent.NET 使用 [GPL-3.0-only](LICENSE) 协议。第三方代码的声明与许可证见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
 
 
-多开终端时，每个 `lanagent` 实例拥有独立输入框、当前会话和窗口尺寸，同一工作区共享 `.lanagent/data` 内的项目历史。保存采用跨进程事务，打开会话列表时刷新历史；关闭终端会自动退出对应实例；所有终端关闭后不驻留后台。后台任务随当前实例运行，关闭窗口会停止该实例，后续启动将遗留任务记为中断。详见 [终端说明](docs/nuget-tool.zh-CN.md)。
+多开终端时，每个 `allagent` 实例拥有独立输入框、当前会话和窗口尺寸，同一工作区共享 `.allagent/data` 内的项目历史。保存采用跨进程事务，打开会话列表时刷新历史；关闭终端会自动退出对应实例；所有终端关闭后不驻留后台。后台任务随当前实例运行，关闭窗口会停止该实例，后续启动将遗留任务记为中断。详见 [终端说明](docs/nuget-tool.zh-CN.md)。
 
 ### 双沙箱自动兜底
 
@@ -234,4 +237,4 @@ Monty 是 Rust 实现的 Python 子集解释器，并非完整 CPython：不支�
 
 ### PowerShell 能力商店
 
-`lanagent powershell search 关键词` 搜索 PSGallery；`lanagent powershell install 模块 [版本]` 安装模块及依赖。聊天内使用 `/powershell`。`list` 查看已验证模块，`commands 模块` 查看导出命令。AI 自动获得模块摘要，并通过 `powershell_capabilities` 查询详细命令。[使用说明](docs/powershell-store.zh-CN.md)。
+`allagent powershell search 关键词` 搜索 PSGallery；`allagent powershell install 模块 [版本]` 安装模块及依赖。聊天内使用 `/powershell`。`list` 查看已验证模块，`commands 模块` 查看导出命令。AI 自动获得模块摘要，并通过 `powershell_capabilities` 查询详细命令。AI 也可用 `powershell_script` 在持久会话中直接执行 PowerShell 代码并接收结构化对象与输出流。[商店说明](docs/powershell-store.zh-CN.md) · [会话说明](docs/powershell-session.zh-CN.md)。

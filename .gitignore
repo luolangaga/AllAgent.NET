@@ -7,7 +7,7 @@ build/
 dist/
 deploy/
 dotnet10-vue-app/
-LanAgent/
+AllAgent.NET/
 .claude/
 .commandcode/
 .vs/
@@ -19,10 +19,11 @@ LanAgent/
 **/*.log
 **/*.pfx
 **/*.pem
-**/lanagent.json*
-**/lanagent-projects.json*
-**/.lanagent/
+**/allagent.json*
+**/allagent-projects.json*
+**/.allagent/
+**/.allagent-legacy/
 SatelliteInterference.spec
-src/LanAgent.Desktop/Assets/web/
+src/AllAgent.NET.Desktop/Assets/web/
 **/TestResults/
 **/*.dmp

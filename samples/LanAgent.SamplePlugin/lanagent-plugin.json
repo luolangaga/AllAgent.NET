@@ -1,5 +1,0 @@
-{
-  "sdkVersion": 1,
-  "assembly": "LanAgent.SamplePlugin.dll",
-  "entryType": "LanAgent.SamplePlugin.ExamplePlugin"
-}

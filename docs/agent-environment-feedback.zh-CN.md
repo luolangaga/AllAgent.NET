@@ -1,8 +1,8 @@
-# LanAgent 环境使用反馈（官网开发 + 内置浏览器实测）
+# AllAgent.NET 环境使用反馈（官网开发 + 内置浏览器实测）
 
 > 元信息
 > - 日期：2026-10-16
-> - 会话任务：为 LanAgent 做一个像素 / 位图风官网（`website/`，Vue 3 + Vite + Pixelium Design），并在内置浏览器里实测前端
+> - 会话任务：为 AllAgent.NET 做一个像素 / 位图风官网（`website/`，Vue 3 + Vite + Pixelium Design），并在内置浏览器里实测前端
 > - 执行者：宿主 Agent（CodeAct，Python 在 Monty 沙箱，I/O 全部走 C# 宿主工具）
 > - 证据来源：`browser` 工具的 `evaluate` 实测输出、`run_shell` / `shell_status` 返回、宿主机实测命令
 > - 关联产出：[`website/README.md`](../website/README.md)、[`website/CONTRIBUTING-PIXEL.md`](../website/CONTRIBUTING-PIXEL.md)、[`website/SITE-CONTENT.md`](../website/SITE-CONTENT.md)
@@ -73,7 +73,7 @@
 - 实测该端口已关闭（`urlopen` → `WinError 10061`，且 `msedge.exe` 进程数为 **0**）。
 - `open` 返回：`Unable to connect to the remote server`。
 - 同时用 `mode: "builtin"` 打开被拒：`Browser mode is selected by the user. Saved mode: chromium. Do not switch browsers; use the saved mode or ask the user to change it in /browser.`
-- 用户在 `/browser` 切到内置模式后，同样形式的 `open` 立即成功，返回 `browser.mode = "builtin"`，`profile = %APPDATA%\LanAgent\browser-use\webview2`。
+- 用户在 `/browser` 切到内置模式后，同样形式的 `open` 立即成功，返回 `browser.mode = "builtin"`，`profile = %APPDATA%\AllAgent.NET\browser-use\webview2`。
 
 **影响**
 
@@ -176,8 +176,8 @@ error: A delegated task failed, was cancelled or needs parent input. Inspect res
 - 校验：`npx vue-tsc --noEmit` → `0`；`npx vite build` → `0`（约 1.0–1.4s，468 modules）。
 - 预览服务：`npm run preview` → `http://127.0.0.1:4173/`（`?noboot=1` 跳过开机动画）。
 - 终端预览区块的还原依据（源码位置）：
-  - 颜色：`src/LanAgent.Terminal/TerminalTheme.cs` 的 `night` 主题（`#11131A` / `#1A1D27` / `#7DCFFF` / `#DCE1EB`）。
-  - 布局：`src/LanAgent.Terminal/FullScreenTerminal.cs`（消息区 + `left["input"]` 的 Heavy 边框「输入任务」面板 + 右栏 `Sidebar()` + 底部三行 footer）。
+  - 颜色：`src/AllAgent.NET.Terminal/TerminalTheme.cs` 的 `night` 主题（`#11131A` / `#1A1D27` / `#7DCFFF` / `#DCE1EB`）。
+  - 布局：`src/AllAgent.NET.Terminal/FullScreenTerminal.cs`（消息区 + `left["input"]` 的 Heavy 边框「输入任务」面板 + 右栏 `Sidebar()` + 底部三行 footer）。
   - 工具卡片：同一文件里 `new Panel(new Text(summary)).Header(TerminalUi.ToolLabel(...))`。
   - 审批列表：`ApprovalPreview.cs` 的 `❯ 1. 允许这一次`。
 - 实测截图（在 `.gitignore` 的 `artifacts/site/`，仅本机）：`v3-top.png`（首屏）、`v4-faq.png`、`tall.png`、`bottom-crop.png`，以及本次终端预览的浏览器实测截图。

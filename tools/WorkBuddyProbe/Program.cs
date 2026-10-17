@@ -1,7 +1,7 @@
-using LanAgent.WorkBuddy;
-using LanAgent.Core.Services.AI;
-var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "LanAgent", "plugins");
-var directory = Directory.GetDirectories(root, "lanagent.workbuddy-*").OrderByDescending(Directory.GetLastWriteTimeUtc).First();
+using AllAgent.NET.WorkBuddy;
+using AllAgent.NET.Core.Services.AI;
+var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "AllAgent", "plugins");
+var directory = Directory.GetDirectories(root, "allagent.workbuddy-*").OrderByDescending(Directory.GetLastWriteTimeUtc).First();
 using var account = new WorkBuddyAccount(Path.Combine(directory, "data"));
 using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(90));
 var config = account.CreateConfiguration();

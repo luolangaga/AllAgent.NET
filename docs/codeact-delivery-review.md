@@ -4,9 +4,9 @@
 
 参考微软 [CodeAct 文档](https://learn.microsoft.com/en-us/agent-framework/agents/code-act) 与 [.NET 设计](https://github.com/microsoft/agent-framework/blob/main/docs/features/code_act/dotnet-implementation.md)。这些是框架文档及设计，不是交付质量认证。
 
-LanAgent 的普通和 full-access 模式都通过 `HyperlightProcessSandbox` 启动 worker。worker 实际使用微软 `HyperlightExecuteCodeFunction`，取 SDK 的 `BuildInstructions`，使用干净快照，每次执行不保留 Python 变量。模型只看到 `execute_code`，宿主工具通过 provider 的工具目录和 `call_tool` 调用。这些与官方核心结构一致。
+AllAgent.NET 的普通和 full-access 模式都通过 `HyperlightProcessSandbox` 启动 worker。worker 实际使用微软 `HyperlightExecuteCodeFunction`，取 SDK 的 `BuildInstructions`，使用干净快照，每次执行不保留 Python 变量。模型只看到 `execute_code`，宿主工具通过 provider 的工具目录和 `call_tool` 调用。这些与官方核心结构一致。
 
-差异包括：自定义 AST 限制、自定义 IPC 分片、`ok/data/error` 返回包装及逐次宿主工具审批。微软 .NET 设计描述的审批方式是基于工具目录为整个 `execute_code` 决定审批，LanAgent 的 ask 模式在宿主调用时分别审批。因此不能宣称完整实现了微软公共 API 或全部设计要求。
+差异包括：自定义 AST 限制、自定义 IPC 分片、`ok/data/error` 返回包装及逐次宿主工具审批。微软 .NET 设计描述的审批方式是基于工具目录为整个 `execute_code` 决定审批，AllAgent.NET 的 ask 模式在宿主调用时分别审批。因此不能宣称完整实现了微软公共 API 或全部设计要求。
 
 full-access 默认开启，只改变宿主工具的审批和路径权限，不能取消 microVM；缺少 PowerShell 或可运行的 Python guest/worker 必须报错。宿主 Python 供共享 pip 库使用，检查可执行性和 3.10–3.14 版本范围；缺少或版本不符时提示通过 winget 安装 Python 3.13。Python 与 PowerShell 7.6 安装成功后要求重启软件。`--ask` 恢复审批，plan 保留只读约束。
 
@@ -26,13 +26,13 @@ full-access 默认开启，只改变宿主工具的审批和路径权限，不�
 
 2026-10-13 直接读取了以下上游源码；分支链接会随上游更新，本记录描述本次读到的实现：
 
-| 项目及源码 | 已核实的做法 | LanAgent 的应用 |
+| 项目及源码 | 已核实的做法 | AllAgent.NET 的应用 |
 | --- | --- | --- |
 | [Pi system-prompt.ts](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/core/system-prompt.ts) | 分段组装提示词；规则按可用工具贡献；去重；项目指令、技能、工作目录分别组织 | 将通用指导与工具指导拆开，只为实际注册的文件、Shell、研究、委派能力添加对应段落 |
 | [Pi read.ts](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/core/tools/read.ts) 和 [edit.ts](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/core/tools/edit.ts) | 文件工具自带简短行为指导；精确修改、匹配唯一、分页读取 | file_edit 使用 Pi 风格的 edits 数组批量协议（条目为 old_string/new_string）；基于同一原文件匹配、拒绝歧义和重叠、保留 BOM 与换行、同文件修改排队 |
 | [Gemini CLI promptProvider.ts](https://github.com/google-gemini/gemini-cli/blob/main/packages/core/src/prompts/promptProvider.ts) 和 [snippets.ts](https://github.com/google-gemini/gemini-cli/blob/main/packages/core/src/prompts/snippets.ts) | 按模式、实际工具和上下文组装段落；强调工程约定、诊断、验证和上下文效率 | 明确理解→实现→验证→交付流程；按工具提供能力指导；区分权限、运行隔离和交付证据 |
 
-这里借鉴组织方式和行为原则，提示词正文为 LanAgent 原创改写，没有移植项目身份、工具名或专用编辑协议。没有采纳上游无条件要求加测试、为所有不明确请求停止实施等规则；继续遵循用户授权、项目要求和任务规模。
+这里借鉴组织方式和行为原则，提示词正文为 AllAgent.NET 原创改写，没有移植项目身份、工具名或专用编辑协议。没有采纳上游无条件要求加测试、为所有不明确请求停止实施等规则；继续遵循用户授权、项目要求和任务规模。
 
 具体变化：正文移至 `CodeActInstructions.cs`；`CodeActProvider` 负责根据当前工具目录组装提示词，稳定规则在前，工具目录和环境在后；合并原先重复的验收段落；移除过时的宿主 Python 运行表述；突出 `ok`、后台任务状态和实际完成之间的区别。源码限制和微软 SDK 的真实指导继续保留。
 

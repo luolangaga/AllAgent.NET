@@ -1,0 +1,103 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <CopyEmbeddedPowerShell>true</CopyEmbeddedPowerShell>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RollForward>Major</RollForward>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>allagent</AssemblyName>
+    <CopyAgentSandbox>true</CopyAgentSandbox>
+    <CopyBrowserWorker>true</CopyBrowserWorker>
+    <CopyComputerWorker>true</CopyComputerWorker>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>allagent</ToolCommandName>
+    <PackageId>AllAgent.NET.Terminal</PackageId>
+    <Version>1.0.7</Version>
+    <Authors>AllAgent.NET</Authors>
+    <Description>AllAgent.NET terminal AI agent with Hyperlight microVM CodeAct execution for Windows x64.</Description>
+    <PackageTags>AllAgent.NET;AI;Agent;CLI;CodeAct</PackageTags>
+    <PackageLicenseExpression>GPL-3.0-only</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/luolangaga/AllAgent.NET</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageOutputPath>../../artifacts/packages</PackageOutputPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../AllAgent.NET.Browser/AllAgent.NET.Browser.csproj" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" SetTargetFramework="TargetFramework=net10.0-windows" />
+    <ProjectReference Include="../../plugins/AllAgent.NET.CommandCode/AllAgent.NET.CommandCode.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
+    <None Include="../../docs/nuget-tool.zh-CN.md" Pack="true" PackagePath="/README.md" />
+    <ProjectReference Include="../AllAgent.NET.Core/AllAgent.NET.Core.csproj" />
+    <ProjectReference Include="../AllAgent.NET.ComputerUse/AllAgent.NET.ComputerUse.csproj" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" SetTargetFramework="TargetFramework=net10.0-windows" />
+    <ProjectReference Include="../AllAgent.NET.Sandbox/AllAgent.NET.Sandbox.csproj" ReferenceOutputAssembly="false" />
+    <PackageReference Include="Spectre.Console" Version="0.57.2" />
+  </ItemGroup>
+  <!-- Web workspace assets: built by Vite, served by /web-ui (and the web-ui command) from web/ next to the host. -->
+  <PropertyGroup>
+    <WebUiSourceDirectory>$(MSBuildThisFileDirectory)..\AllAgent.NET.Desktop\Assets\web\</WebUiSourceDirectory>
+  </PropertyGroup>
+  <!-- Build React frontend before dotnet build (skip in CI with -p:SkipWebBuild=true). -->
+  <Target Name="BuildWebFrontend" BeforeTargets="BeforeBuild"
+          Condition="'$(SkipWebBuild)' != 'true' AND Exists('$(MSBuildThisFileDirectory)..\AllAgent.NET.Web\package.json')">
+    <Exec Command="npm run build"
+          WorkingDirectory="$(MSBuildThisFileDirectory)..\AllAgent.NET.Web"
+          ConsoleToMSBuild="true" />
+  </Target>
+  <Target Name="CopyWebUiAssets" AfterTargets="Build" Condition="Exists('$(WebUiSourceDirectory)index.html')">
+    <ItemGroup>
+      <WebUiAssetFiles Include="$(WebUiSourceDirectory)**/*" />
+    </ItemGroup>
+    <!-- Hashed asset names change per build; clear the folder so stale bundles never pile up. -->
+    <RemoveDir Directories="$(OutDir)web" />
+    <Copy SourceFiles="@(WebUiAssetFiles)" DestinationFiles="@(WebUiAssetFiles->'$(OutDir)web/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
+  <!-- Publish and tool packing both collect ResolvedFileToPublish. -->
+  <Target Name="IncludeWebUiInPublish" AfterTargets="ComputeFilesToPublish" Condition="Exists('$(WebUiSourceDirectory)index.html')">
+    <ItemGroup>
+      <WebUiPublishFiles Include="$(WebUiSourceDirectory)**/*" />
+      <ResolvedFileToPublish Include="@(WebUiPublishFiles)">
+        <RelativePath>web/%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+  <!-- Built-in plugins ship next to the host and are installed on first start. -->
+  <Target Name="CopyBuiltinPlugins" AfterTargets="Build">
+    <ItemGroup>
+      <BuiltinPluginFiles Include="../../plugins/AllAgent.NET.CommandCode/bin/$(Configuration)/$(TargetFramework)/AllAgent.NET.CommandCode.dll" />
+      <BuiltinPluginFiles Include="../../plugins/AllAgent.NET.CommandCode/allagent-plugin.json" />
+    </ItemGroup>
+    <Copy SourceFiles="@(BuiltinPluginFiles)" DestinationFolder="$(OutDir)builtin-plugins/AllAgent.NET.CommandCode/" SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="IncludeBuiltinPluginsInToolPackage" AfterTargets="ComputeFilesToPublish" Condition="'$(PackAsTool)' == 'true'">
+    <ItemGroup>
+      <BuiltinPluginPublishFiles Include="$(OutDir)builtin-plugins/**/*" />
+      <ResolvedFileToPublish Include="@(BuiltinPluginPublishFiles)">
+        <RelativePath>builtin-plugins/%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+  <!-- The tool runs on Windows only: publish/pack never carries debug symbols, other platforms' native assets or compile-time reference assemblies. -->
+  <Target Name="TrimPortableRuntimeAssets" AfterTargets="ComputeFilesToPublish">
+    <ItemGroup>
+      <_PortableRuntimeFile Include="@(ResolvedFileToPublish)" Condition="'%(Extension)' == '.pdb' Or '%(Extension)' == '.so' Or '%(Extension)' == '.dylib' Or $([System.String]::Copy('%(RelativePath)').Replace('\','/').StartsWith('ref/'))" />
+      <ResolvedFileToPublish Remove="@(_PortableRuntimeFile)" />
+    </ItemGroup>
+  </Target>
+  <!-- Tool packing collects ResolvedFileToPublish, not files copied after Publish. -->
+  <Target Name="IncludeSandboxInToolPackage" AfterTargets="ComputeFilesToPublish" Condition="'$(PackAsTool)' == 'true'">
+    <PropertyGroup>
+      <ToolSandboxPublishDirectory>$(MSBuildProjectDirectory)/obj/$(Configuration)/$(TargetFramework)/tool-sandbox/</ToolSandboxPublishDirectory>
+    </PropertyGroup>
+    <MSBuild Projects="../AllAgent.NET.Sandbox/AllAgent.NET.Sandbox.csproj" Targets="Publish"
+             Properties="Configuration=$(Configuration);PublishDir=$(ToolSandboxPublishDirectory);CopyAgentSandbox=false;PublishSingleFile=false;SelfContained=false;UseAppHost=true;RuntimeIdentifier=$(RuntimeIdentifier)" />
+    <ItemGroup>
+      <ToolSandboxFiles Include="$(ToolSandboxPublishDirectory)**/*" Exclude="$(ToolSandboxPublishDirectory)pi/**/*;$(ToolSandboxPublishDirectory)**/everything/**;$(ToolSandboxPublishDirectory)**/ref/**;$(ToolSandboxPublishDirectory)**/runtimes/linux*/**;$(ToolSandboxPublishDirectory)**/runtimes/osx*/**;$(ToolSandboxPublishDirectory)**/*.pdb;$(ToolSandboxPublishDirectory)**/*.so;$(ToolSandboxPublishDirectory)**/*.dylib" />
+      <ResolvedFileToPublish Include="@(ToolSandboxFiles)">
+        <RelativePath>sandbox/%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+</Project>

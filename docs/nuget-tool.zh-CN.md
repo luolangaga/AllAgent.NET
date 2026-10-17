@@ -1,8 +1,8 @@
-# LanAgent .NET Tool
+# AllAgent.NET .NET Tool
 
-Computer Use：`lanagent computer on|off|status`，聊天内 `/computer on|off|status` 控制总开关。AI 使用 `computer_mode` 自动选择三种模式，内置 `/computer-use` 技能指导操作；默认关闭，软件测试优先后台控件点击与文本输入。Worker 随工具包分发，需要 Windows .NET 10 Desktop Runtime。完整后台键鼠需独立 Windows 会话/虚拟机中的 Worker 和安全隧道，未配置时会明确报错。
+Computer Use：`allagent computer on|off|status`，聊天内 `/computer on|off|status` 控制总开关。AI 使用 `computer_mode` 自动选择三种模式，内置 `/computer-use` 技能指导操作；默认关闭，软件测试优先后台控件点击与文本输入。Worker 随工具包分发，需要 Windows .NET 10 Desktop Runtime。完整后台键鼠需独立 Windows 会话/虚拟机中的 Worker 和安全隧道，未配置时会明确报错。
 
-LanAgent 的终端 AI Agent，安装后的命令为 `lanagent`。
+AllAgent.NET 的终端 AI Agent，安装后的命令为 `allagent`。
 
 模型通过 Hyperlight CodeAct 调用文件、搜索和 Shell 工具。子代理包括调查、修改、审查和验证角色，支持单任务、并行、串行链派发；子代理不向用户提问，停止会等待实际清理。
 
@@ -15,26 +15,26 @@ LanAgent 的终端 AI Agent，安装后的命令为 `lanagent`。
 安装已发布到 NuGet.org 的版本：
 
 ```powershell
-dotnet tool install --global LanAgent.Terminal
-lanagent --help
-lanagent doctor
-lanagent doctor --install
-lanagent chat --workspace C:\Projects\MyProject
+dotnet tool install --global AllAgent.NET.Terminal
+allagent --help
+allagent doctor
+allagent doctor --install
+allagent chat --workspace C:\Projects\MyProject
 ```
 
 进入聊天后按 F2 配置模型或使用 `/login`。更新和卸载：
 
-每次运行 `lanagent` 都启动独立聊天界面：输入框、当前会话、模型选择、权限和窗口尺寸属于各自的进程。同一工作区默认共用隐藏目录 `.lanagent/data`，历史在打开会话列表、恢复会话以及保存时刷新。共享 manifest 的读取、修改、原子提交和历史清理由跨进程锁保护；独立会话同时写入不会互相覆盖。另一终端更新或删除了同一会话时，旧对象保存会报冲突，需要重新打开，避免覆盖历史。公共 Python 环境、插件、用户技能和登录凭据继续复用 AppData。
+每次运行 `allagent` 都启动独立聊天界面：输入框、当前会话、模型选择、权限和窗口尺寸属于各自的进程。同一工作区默认共用隐藏目录 `.allagent/data`，历史在打开会话列表、恢复会话以及保存时刷新。共享 manifest 的读取、修改、原子提交和历史清理由跨进程锁保护；独立会话同时写入不会互相覆盖。另一终端更新或删除了同一会话时，旧对象保存会报冲突，需要重新打开，避免覆盖历史。公共 Python 环境、插件、用户技能和登录凭据继续复用 AppData。
 
 后台任务归创建它的终端进程管理。多开不会将另一个活跃进程的任务标为中断，也不会覆盖它的任务记录；`tasks list/show` 可查看项目内的持久记录。退出无需命令，直接关闭终端；全部终端关闭后程序自动退出，不驻留后台。关闭窗口会结束当前实例，未完成任务在后续启动时记为中断，不会自动重跑；可通过 `--resume ID` 恢复历史。
 
-迁移前启动的旧版共享后台需先结束旧进程再重启。`lanagent attach` 仅用于显式连接仍在运行的旧版共享后台（沿用其工作区、权限和共享输入行为，`Ctrl+]` 断开连接），不会自动创建后台。新启动的独立实例不使用该连接模式。
+迁移前启动的旧版共享后台需先结束旧进程再重启。`allagent attach` 仅用于显式连接仍在运行的旧版共享后台（沿用其工作区、权限和共享输入行为，`Ctrl+]` 断开连接），不会自动创建后台。新启动的独立实例不使用该连接模式。
 
 供应商和模型一起自动恢复。F2 或 `/model` 直接显示“供应商 · 模型”的列表，上次选择排在首位。
 
 ```powershell
-dotnet tool update --global LanAgent.Terminal
-dotnet tool uninstall --global LanAgent.Terminal
+dotnet tool update --global AllAgent.NET.Terminal
+dotnet tool uninstall --global AllAgent.NET.Terminal
 ```
 
 ## 从源码打包并通过本地 NuGet 源安装
@@ -42,24 +42,24 @@ dotnet tool uninstall --global LanAgent.Terminal
 在仓库根目录运行（打包需 .NET SDK）：
 
 ```powershell
-dotnet pack src/LanAgent.Terminal -c Release -p:Version=1.0.1
-dotnet tool install --global LanAgent.Terminal --add-source ./artifacts/packages --version 1.0.1
+dotnet pack src/AllAgent.NET.Terminal -c Release -p:Version=1.0.1
+dotnet tool install --global AllAgent.NET.Terminal --add-source ./artifacts/packages --version 1.0.1
 ```
 
 更新到刚打包的本地版本：
 
 ```powershell
-dotnet tool update --global LanAgent.Terminal --add-source ./artifacts/packages --version 1.0.1
+dotnet tool update --global AllAgent.NET.Terminal --add-source ./artifacts/packages --version 1.0.1
 ```
 
-版本默认在 `src/LanAgent.Terminal/LanAgent.Terminal.csproj` 中维护，也可以通过 `-p:Version=1.0.2` 覆盖。sandbox 的文件作为工具运行文件放入包内的 `sandbox/` 子目录，不依赖另外发布 LanAgent.Core 或 LanAgent.Sandbox 包。
+版本默认在 `src/AllAgent.NET.Terminal/AllAgent.NET.Terminal.csproj` 中维护，也可以通过 `-p:Version=1.0.2` 覆盖。sandbox 的文件作为工具运行文件放入包内的 `sandbox/` 子目录，不依赖另外发布 AllAgent.NET.Core 或 AllAgent.NET.Sandbox 包。
 
 ## 发布
 
 确认包 ID 在 NuGet.org 可用、版本及作者信息正确，并用有权发布该包的 API Key 执行：
 
 ```powershell
-dotnet nuget push ./artifacts/packages/LanAgent.Terminal.1.0.0.nupkg --source https://api.nuget.org/v3/index.json --api-key <API_KEY>
+dotnet nuget push ./artifacts/packages/AllAgent.NET.Terminal.1.0.0.nupkg --source https://api.nuget.org/v3/index.json --api-key <API_KEY>
 ```
 
 API Key 请通过本地安全配置提供，不要提交到仓库。这里只配置和生成工具包；公共发布需要单独执行上述命令。

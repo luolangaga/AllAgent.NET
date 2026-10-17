@@ -31,15 +31,15 @@ const INSTALL_BLOCKS: CommandBlock[] = [
     key: 'install',
     label: '安装 · 验证',
     lines: [
-      'dotnet tool install --global LanAgent.Terminal',
-      'lanagent --help',
-      'lanagent doctor',
+      'dotnet tool install --global AllAgent.NET.Terminal',
+      'allagent --help',
+      'allagent doctor',
     ],
   },
   {
     key: 'install-chat',
     label: '在该工作区进入会话',
-    lines: ['lanagent chat --workspace C:\\Projects\\MyProject'],
+    lines: ['allagent chat --workspace C:\\Projects\\MyProject'],
   },
 ]
 
@@ -47,15 +47,15 @@ const MAINTAIN_BLOCK: CommandBlock = {
   key: 'maintain',
   label: '升级 / 卸载',
   lines: [
-    'dotnet tool update --global LanAgent.Terminal',
-    'dotnet tool uninstall --global LanAgent.Terminal',
+    'dotnet tool update --global AllAgent.NET.Terminal',
+    'dotnet tool uninstall --global AllAgent.NET.Terminal',
   ],
 }
 
 /** ② 体检：doctor 本身只检查，加参数才经 winget 补装 */
 const DOCTOR_BLOCKS: CommandBlock[] = [
-  { key: 'doctor', label: '检查环境', lines: ['lanagent doctor'] },
-  { key: 'doctor-install', label: '补齐缺失依赖', lines: ['lanagent doctor --install'] },
+  { key: 'doctor', label: '检查环境', lines: ['allagent doctor'] },
+  { key: 'doctor-install', label: '补齐缺失依赖', lines: ['allagent doctor --install'] },
 ]
 
 const DOCTOR_ITEMS: DoctorItem[] = [
@@ -72,10 +72,10 @@ const ENV_BLOCK: CommandBlock = {
   key: 'env',
   label: '环境变量方式 · Key 不写进项目',
   lines: [
-    "$env:LANAGENT_PROVIDER = 'openai'",
-    "$env:LANAGENT_BASE_URL = 'https://api.openai.com/v1'",
-    "$env:LANAGENT_MODEL = '<模型 ID>'",
-    "$env:LANAGENT_API_KEY = '<你的 API Key>'",
+    "$env:ALLAGENT_PROVIDER = 'openai'",
+    "$env:ALLAGENT_BASE_URL = 'https://api.openai.com/v1'",
+    "$env:ALLAGENT_MODEL = '<模型 ID>'",
+    "$env:ALLAGENT_API_KEY = '<你的 API Key>'",
     '.\\agent.ps1 chat --workspace C:\\Projects\\MyProject',
   ],
 }
@@ -171,7 +171,7 @@ async function copyBlock(block: CommandBlock): Promise<void> {
         <p v-reveal class="eyebrow">QUICK START</p>
         <h2 v-reveal="{ delay: 90 }" class="qs-title">三步把它接进你的工作区</h2>
         <p v-reveal="{ delay: 140 }" class="qs-lead muted">
-          <code>lanagent</code> 是 NuGet 上的 .NET 全局工具：装完先让 <code>doctor</code> 体检，
+          <code>allagent</code> 是 NuGet 上的 .NET 全局工具：装完先让 <code>doctor</code> 体检，
           再挑模型、描述任务。下面每个命令块都能一键复制。
         </p>
       </header>

@@ -1,19 +1,19 @@
-# LanAgent 插件开发入门：从零做一个能干预 Agent 的插件
+# AllAgent.NET 插件开发入门：从零做一个能干预 Agent 的插件
 
-本文面向第一次开发 LanAgent 插件的读者。你将创建一个真正的 .NET 插件，实现计算工具、中文回答规范、工具禁用、临时 Skills、请求上下文修改和终端命令，最后打包安装到 LanAgent。
+本文面向第一次开发 AllAgent.NET 插件的读者。你将创建一个真正的 .NET 插件，实现计算工具、中文回答规范、工具禁用、临时 Skills、请求上下文修改和终端命令，最后打包安装到 AllAgent.NET。
 
-本文对应 **LanAgent.Core 1.1.0**。请搭配支持这些接口的终端宿主版本使用。SDK 与项目源码采用 **GPL-3.0-only** 许可证。更完整的安装器、认证、模型提供商和 Hook 说明见 [插件参考文档](https://github.com/luolangaga/LanAgent/blob/main/docs/plugins.zh-CN.md)。
+本文对应 **AllAgent.NET.Core 1.1.0**。请搭配支持这些接口的终端宿主版本使用。SDK 与项目源码采用 **GPL-3.0-only** 许可证。更完整的安装器、认证、模型提供商和 Hook 说明见 [插件参考文档](https://github.com/luolangaga/AllAgent.NET/blob/main/docs/plugins.zh-CN.md)。
 
 ## 1. 先认识四个东西
 
 | 名称 | 可以怎样理解 |
 |---|---|
-| LanAgent 终端宿主 | 真正运行聊天、模型、沙箱和插件的程序 |
-| LanAgent.Core NuGet 包 | 开发插件使用的 SDK，提供接口、模型和工具代码生成器 |
+| AllAgent.NET 终端宿主 | 真正运行聊天、模型、沙箱和插件的程序 |
+| AllAgent.NET.Core NuGet 包 | 开发插件使用的 SDK，提供接口、模型和工具代码生成器 |
 | 你的插件 DLL | 编译后的 C# 代码，由宿主加载 |
 | 你的插件 `.nupkg` | 安装包，里面装着 DLL 和入口清单 |
 
-**引用 Core 包，是让你的代码能够编译；在 LanAgent 中导入插件包，才是让插件开始工作。** 两步都要做。
+**引用 Core 包，是让你的代码能够编译；在 AllAgent.NET 中导入插件包，才是让插件开始工作。** 两步都要做。
 
 Core 同时包含 Agent 运行库，但单独安装它不会自动得到完整终端、Hyperlight worker、Python 或 PowerShell 环境。写插件时使用现有宿主最容易入门。当前桌面应用尚未加载 `PluginHost`，本文的安装和试用入口是终端。
 
@@ -43,21 +43,21 @@ dotnet --info
 
 插件目标框架是 `.NET 10`，代码用到 C# 12。Core 携带的工具源生成器使用 Roslyn 4.14，因此不要只用早期 .NET 10 SDK 编译插件；选择包含兼容或更新编译器的 SDK，例如 .NET 10 SDK。仓库当前验证环境使用 .NET 11 预览 SDK。SDK 是编译器和构建工具，目标框架则决定程序面向哪个运行时，两者不必同版本。
 
-SDK 包名为 `LanAgent.Core`，通过 NuGet 安装：
+SDK 包名为 `AllAgent.NET.Core`，通过 NuGet 安装：
 
 ```powershell
-dotnet add package LanAgent.Core --version 1.1.0
+dotnet add package AllAgent.NET.Core --version 1.1.0
 ```
 
 此命令在已有项目的目录中执行。下一节会从创建项目开始，并给出完整项目文件；如果直接使用该项目文件，无需重复添加引用。
 
 ## 4. 新建第一个插件项目
 
-选择一个工作目录，例如 `C:\LanAgentPluginLab`：
+选择一个工作目录，例如 `C:\AllAgent.NETPluginLab`：
 
 ```powershell
-New-Item -ItemType Directory -Force C:\LanAgentPluginLab
-Set-Location C:\LanAgentPluginLab
+New-Item -ItemType Directory -Force C:\AllAgent.NETPluginLab
+Set-Location C:\AllAgent.NETPluginLab
 dotnet new classlib -n MyFirstPlugin -f net10.0
 Set-Location MyFirstPlugin
 ```
@@ -74,13 +74,13 @@ Set-Location MyFirstPlugin
     <PackageId>MyFirstPlugin</PackageId>
     <Version>1.0.0</Version>
     <Authors>YourName</Authors>
-    <Description>我的第一个 LanAgent 插件</Description>
-    <PackageTags>LanAgent;Tools;Skills</PackageTags>
+    <Description>我的第一个 AllAgent.NET 插件</Description>
+    <PackageTags>AllAgent.NET;LanAgent;Tools;Skills</PackageTags>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="LanAgent.Core" Version="1.1.0"
+    <PackageReference Include="AllAgent.NET.Core" Version="1.1.0"
                       ExcludeAssets="runtime" PrivateAssets="all" />
-    <None Include="lanagent-plugin.json" Pack="true" PackagePath="lanagent/" />
+    <None Include="allagent-plugin.json" Pack="true" PackagePath="allagent/" />
   </ItemGroup>
 </Project>
 ```
@@ -88,7 +88,7 @@ Set-Location MyFirstPlugin
 这几个配置特别有用：
 
 - `PackageId` 是安装包名称，`Version` 是你自己的插件版本，与 SDK 版本相互独立。
-- `PackageTags` 必须包含独立标签 `LanAgent`，安装器会检查它；这不表示官方认证。
+- `PackageTags` 应包含独立标签 `AllAgent.NET`；为兼容旧版宿主，建议同时保留 `LanAgent`。安装器会接受 `AllAgent.NET`、`AllAgent` 和 `LanAgent`，标签不表示官方认证。
 - `ExcludeAssets="runtime"` 表示运行时使用宿主已经加载的 Core，不另外部署一份来覆盖宿主。
 - `PrivateAssets="all"` 表示开发用的 SDK 引用不作为你的插件包依赖向下传播。
 - 工具代码生成器已经包含在 SDK 的 `analyzers/dotnet/cs/` 中，不需要额外引用生成器项目。
@@ -103,7 +103,7 @@ NuGet 会根据项目引用下载 SDK 和它的依赖。首次恢复需要联网
 
 ## 5. 添加入口清单
 
-在项目目录创建 `lanagent-plugin.json`：
+在项目目录创建 `allagent-plugin.json`：
 
 ```json
 {
@@ -121,14 +121,14 @@ NuGet 会根据项目引用下载 SDK 和它的依赖。首次恢复需要联网
 
 ```csharp
 using System.ComponentModel;
-using LanAgent.Core.Extensions;
-using LanAgent.Core.Services;
-using LanAgent.Core.Services.AI;
-using LanAgent.Core.Tools;
+using AllAgent.NET.Core.Extensions;
+using AllAgent.NET.Core.Services;
+using AllAgent.NET.Core.Services.AI;
+using AllAgent.NET.Core.Tools;
 
 namespace MyFirstPlugin;
 
-public sealed class MyPlugin : ILanAgentPlugin
+public sealed class MyPlugin : IAllAgent.NETPlugin
 {
     public string Id => "my.first-plugin";
     public string Name => "我的第一个插件";
@@ -210,17 +210,17 @@ dotnet pack -c Release --no-build -o ./packages
 
 ```text
 lib/net10.0/MyFirstPlugin.dll
-lanagent/lanagent-plugin.json
+allagent/allagent-plugin.json
 ```
 
 `.nupkg` 本质是 ZIP 文件，可以用压缩软件打开检查。不要只把清单留在源码目录而忘了打进包里。
 
-## 8. 安装到 LanAgent 并试用
+## 8. 安装到 AllAgent.NET 并试用
 
-先完成或取消正在运行的任务，然后在 **LanAgent 聊天输入框** 输入以下命令。这些斜杠命令不是 PowerShell 命令：
+先完成或取消正在运行的任务，然后在 **AllAgent.NET 聊天输入框** 输入以下命令。这些斜杠命令不是 PowerShell 命令：
 
 ```text
-/plugins import C:\LanAgentPluginLab\MyFirstPlugin\packages\MyFirstPlugin.1.0.0.nupkg
+/plugins import C:\AllAgent.NETPluginLab\MyFirstPlugin\packages\MyFirstPlugin.1.0.0.nupkg
 /plugins list
 /ext hello 小明
 /tools
@@ -378,6 +378,6 @@ await foreach (var evt in engine.RunAsync(conversationId, "用户任务", config
 
 ## 14. SDK 版本与许可证
 
-SDK 的包 ID 为 `LanAgent.Core`，本文示例固定使用 `1.1.0`。更新 SDK 时，在项目文件中修改版本，并使用支持相同接口的宿主。插件自己的版本单独递增。
+SDK 的包 ID 为 `AllAgent.NET.Core`，本文示例固定使用 `1.1.0`。更新 SDK 时，在项目文件中修改版本，并使用支持相同接口的宿主。插件自己的版本单独递增。
 
-NuGet 包包含 Core DLL、工具生成器、本文 README、参考文档、GPLv3 许可证正文和第三方声明。项目源码与包信息可在 [LanAgent 仓库](https://github.com/luolangaga/LanAgent) 查看，许可证标识为 `GPL-3.0-only`。第三方组件保留各自的许可证和声明，详见仓库的 `THIRD-PARTY-NOTICES.md`。
+NuGet 包包含 Core DLL、工具生成器、本文 README、参考文档、GPLv3 许可证正文和第三方声明。项目源码与包信息可在 [AllAgent.NET 仓库](https://github.com/luolangaga/AllAgent.NET) 查看，许可证标识为 `GPL-3.0-only`。第三方组件保留各自的许可证和声明，详见仓库的 `THIRD-PARTY-NOTICES.md`。

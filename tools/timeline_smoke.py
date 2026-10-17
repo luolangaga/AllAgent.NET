@@ -26,9 +26,9 @@ for index in range(18):
     messages.append(message)
     messages.append({"id": str(uuid.uuid4()), "conversationId": session, "role": "assistant", "content": "Reply " + str(index) + "\n" + "x" * 100,
         "createdAt": f"2026-10-11T01:{index:02d}:01Z"})
-(output / "lanagent.json").write_text(json.dumps({"conversations": [{"id": session, "title": "Timeline fixture", "messages": messages}],
+(output / "allagent.json").write_text(json.dumps({"conversations": [{"id": session, "title": "Timeline fixture", "messages": messages}],
     "apiConfigs": [], "skills": [], "appSettings": {}, "mcpServerConfigs": []}), encoding="utf-8")
-proc = PtyProcess.spawn([str(root / "src/LanAgent.Terminal/bin/Release/net10.0/lanagent.exe"), "chat", "--workspace", str(root),
+proc = PtyProcess.spawn([str(root / "src/AllAgent.NET.Terminal/bin/Release/net10.0/allagent.exe"), "chat", "--workspace", str(root),
     "--data-dir", str(output), "--resume", session], cwd=str(root), dimensions=(30, 120))
 chunks, raw = queue.Queue(), []
 screen = pyte.Screen(120, 30)
@@ -37,7 +37,7 @@ def screen_text():
     return "\n".join("".join(screen.buffer[y][x].data for x in range(screen.columns)) for y in range(screen.lines))
 def state():
     try:
-        return json.loads((output / "lanagent.json").read_text(encoding="utf-8-sig"))
+        return json.loads((output / "allagent.json").read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         return {}
 def reader():

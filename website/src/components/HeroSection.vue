@@ -5,8 +5,8 @@ import PixelField from '@/components/PixelField.vue'
 import PixelIcon from '@/components/PixelIcon.vue'
 
 /** 首屏：位图背景 + 一句定位 + 安装命令 + 关键数字。 */
-const REPO_URL = 'https://github.com/luolangaga/LanAgent'
-const INSTALL_CMD = 'dotnet tool install --global LanAgent.Terminal'
+const REPO_URL = 'https://github.com/luolangaga/AllAgent.NET'
+const INSTALL_CMD = 'dotnet tool install --global AllAgent.NET.Terminal'
 
 const copied = ref(false)
 let copiedTimer: ReturnType<typeof setTimeout> | null = null
@@ -23,7 +23,7 @@ const STATS: Stat[] = [
 const CHIPS: string[] = ['exe + args 字面量传递', '模型凭据不进 worker', 'Windows 路径闸门']
 
 const BOOT: { text: string; tone: 'ok' | 'key' | 'dim' }[] = [
-  { text: 'lanagent doctor', tone: 'key' },
+  { text: 'allagent doctor', tone: 'key' },
   { text: 'host python 3.13.7 · pwsh 7.6.x · ripgrep', tone: 'ok' },
   { text: 'sandbox backend: hyperlight (verified)', tone: 'ok' },
   { text: 'shared venv: python/venv · pip.md indexed', tone: 'dim' },
@@ -140,7 +140,7 @@ onBeforeUnmount(() => {
         </h1>
 
         <p class="lede muted">
-          LanAgent 把模型侧的入口收成一个 <code>execute_code</code>：Python 在隔离沙箱中组织步骤，
+          AllAgent.NET 把模型侧的入口收成一个 <code>execute_code</code>：Python 在隔离沙箱中组织步骤，
           文件、命令、桌面与浏览器动作交给
           <strong>35 个 C# 宿主工具</strong>执行。参数按字面量传递，路径按 Windows 语义校验，
           模型服务的凭据不会进沙箱。
@@ -172,7 +172,7 @@ onBeforeUnmount(() => {
       <aside class="status panel scanlines">
         <header class="status-bar">
           <span class="status-dot" />
-          <span class="tiny">lanagent · doctor</span>
+          <span class="tiny">allagent · doctor</span>
           <span class="status-live tiny">live</span>
         </header>
 

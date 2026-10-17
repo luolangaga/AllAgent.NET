@@ -1,6 +1,6 @@
-# LanAgent 官网（website/）
+# AllAgent.NET 官网（website/）
 
-LanAgent 的官方落地页：Vue 3 + Vite + TypeScript，像素 / 位图风格，组件来自
+AllAgent.NET 的官方落地页：Vue 3 + Vite + TypeScript，像素 / 位图风格，组件来自
 [Pixelium Design](https://shika-works.github.io/pixelium-design/zh/guide/intro)（`@pixelium/web-vue`）。
 
 ## 本地开发

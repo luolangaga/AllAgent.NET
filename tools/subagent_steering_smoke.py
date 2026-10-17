@@ -10,7 +10,7 @@ import time
 import uuid
 
 root = Path(__file__).resolve().parents[1]
-executable = os.environ.get("LANAGENT_QA_EXECUTABLE", str(root / "src/LanAgent.Terminal/bin/Release/net10.0/lanagent.exe"))
+executable = os.environ.get("ALLAGENT_DOTNET_QA_EXECUTABLE", str(root / "src/AllAgent.NET.Terminal/bin/Release/net10.0/allagent.exe"))
 output = root / "artifacts/qa/subagent-steering" / uuid.uuid4().hex
 output.mkdir(parents=True)
 workspace = output / "workspace"
@@ -63,7 +63,7 @@ class Handler(BaseHTTPRequestHandler):
             parent_code = code if not child and parent_calls == 1 else None
             if not child and parent_calls == 2:
                 assert child_started.wait(35), "Child did not enter its actual response stream"
-                saved = json.loads((output / "lanagent.json").read_text(encoding="utf-8-sig"))
+                saved = json.loads((output / "allagent.json").read_text(encoding="utf-8-sig"))
                 child_id = next(c["id"] for c in saved["conversations"] if c.get("parentConversationId") == session)
                 parent_code = 'print(call_tool("subagent", agent="reviewer", description="correction", prompt=' + json.dumps(correction_prompt) + ', sessionID=' + json.dumps(child_id) + '))'
             self.send_response(200)
@@ -78,7 +78,7 @@ class Handler(BaseHTTPRequestHandler):
                 end = time.monotonic() + 40
                 while time.monotonic() < end:
                     try:
-                        saved = json.loads((output / "lanagent.json").read_text(encoding="utf-8-sig"))
+                        saved = json.loads((output / "allagent.json").read_text(encoding="utf-8-sig"))
                         if any(p["content"].startswith("CORRECTION-CHILD-PROOF") and p["delivery"] == "steer" for p in saved.get("pendingInputs", [])):
                             image.unlink()
                             reference.unlink()
@@ -105,7 +105,7 @@ server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
 second_server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 threading.Thread(target=second_server.serve_forever, daemon=True).start()
-(output / "lanagent.json").write_text(json.dumps({"conversations": [{"id": session, "title": "Parent steering fixture", "messages": []}],
+(output / "allagent.json").write_text(json.dumps({"conversations": [{"id": session, "title": "Parent steering fixture", "messages": []}],
     "apiConfigs": [{"id": config, "providerId": "openai", "displayName": "fixture", "protocol": "openai", "apiKey": "first-fixture-key", "baseUrl": f"http://127.0.0.1:{server.server_port}", "defaultModel": "fixture", "models": ["fixture"], "isEnabled": True},
                    {"id": alternate, "providerId": "openai", "displayName": "alternate", "protocol": "openai", "apiKey": "second-fixture-key", "baseUrl": f"http://127.0.0.1:{second_server.server_port}", "defaultModel": "alternate-default", "models": ["switched-fixture"], "isEnabled": True}],
     "skills": [], "appSettings": {}, "mcpServerConfigs": []}), encoding="utf-8")
@@ -128,7 +128,7 @@ try:
     assert any(not r["ok"] and "missing.png" in (r.get("error") or "") for r in rejected), rejected
     assert not errors, errors
     assert child_started.is_set(), "Actual child request missing"
-    data = json.loads((output / "lanagent.json").read_text(encoding="utf-8-sig"))
+    data = json.loads((output / "allagent.json").read_text(encoding="utf-8-sig"))
     children = [c for c in data["conversations"] if c.get("parentConversationId") == session]
     assert len(children) == 1, children
     assert children[0]["modelId"] == "switched-fixture" and children[0]["subAgentConfigId"] == alternate
@@ -161,7 +161,7 @@ try:
     resumed_run = subprocess.run([executable, "run", "RESUMED-PERMISSION-PROOF", "--workspace", str(workspace), "--data-dir", str(output), "--resume", children[0]["id"], "--config", alternate, "--model", "switched-fixture", "--json", "--full-access"], cwd=root, capture_output=True, text=True, encoding="utf-8", timeout=60)
     (output / "resume-events.jsonl").write_text(resumed_run.stdout, encoding="utf-8")
     assert resumed_run.returncode == 0, resumed_run.stdout + resumed_run.stderr
-    resumed_data = json.loads((output / "lanagent.json").read_text(encoding="utf-8-sig"))
+    resumed_data = json.loads((output / "allagent.json").read_text(encoding="utf-8-sig"))
     resumed_messages = next(c for c in resumed_data["conversations"] if c["id"] == children[0]["id"])["messages"]
     boundary = next(i for i, m in enumerate(resumed_messages) if m["content"] == "RESUMED-PERMISSION-PROOF")
     assert any(m["role"] == "tool" and "permission rules deny" in m["content"] and "permission approval denied" in m["content"] and "READ-ONLY-PROOF" in m["content"] for m in resumed_messages[boundary+1:])

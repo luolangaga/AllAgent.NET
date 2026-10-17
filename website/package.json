@@ -1,9 +1,9 @@
 {
-  "name": "lanagent-website",
+  "name": "allagent-website",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "LanAgent 官网 —— 像素风 Vue 3 落地页（Pixelium Design）",
+  "description": "AllAgent.NET 官网 —— 像素风 Vue 3 落地页（Pixelium Design）",
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",

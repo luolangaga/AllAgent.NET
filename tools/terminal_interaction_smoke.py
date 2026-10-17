@@ -19,7 +19,7 @@ output = root / "artifacts/qa/terminal-interaction" / uuid.uuid4().hex
 workspace = output / "workspace"
 workspace.mkdir(parents=True)
 for i in range(40): (workspace / f"file-{i:02}.txt").write_text("FILE-PICKER-PROOF", encoding="utf-8")
-exe = os.environ.get("LANAGENT_QA_EXECUTABLE", str(root / "build/interaction-verification/terminal/lanagent.exe"))
+exe = os.environ.get("ALLAGENT_DOTNET_QA_EXECUTABLE", str(root / "build/interaction-verification/terminal/allagent.exe"))
 png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jI1kAAAAASUVORK5CYII=")
 u, k = c.windll.user32, c.windll.kernel32
 u.OpenClipboard.argtypes = [w.HWND]
@@ -33,7 +33,7 @@ k.GlobalUnlock.argtypes = [w.HANDLE]
 k.GlobalSize.argtypes = [w.HANDLE]; k.GlobalSize.restype = c.c_size_t
 k.GlobalFree.argtypes = [w.HANDLE]
 u.RegisterClipboardFormatW.argtypes = [w.LPCWSTR]; u.RegisterClipboardFormatW.restype = w.UINT
-owner = u.CreateWindowExW(0, "STATIC", "LanAgent QA clipboard", 0, 0, 0, 0, 0, -3, None, None, None)
+owner = u.CreateWindowExW(0, "STATIC", "AllAgent.NET QA clipboard", 0, 0, 0, 0, 0, -3, None, None, None)
 assert owner
 def opened():
     for _ in range(100):
@@ -92,7 +92,7 @@ server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 session, config = str(uuid.uuid4()), str(uuid.uuid4())
 messages = [{"id": str(uuid.uuid4()), "conversationId": session, "role": "assistant", "content": "OLD-BLOCK-PROOF" if i == 0 else f"SCROLL-BLOCK-{i:03}", "createdAt": f"2026-10-11T10:{i:02}:00"} for i in range(40)]
-(output / "lanagent.json").write_text(json.dumps({"conversations": [{"id": session, "title": "Interaction fixture", "messages": messages}],
+(output / "allagent.json").write_text(json.dumps({"conversations": [{"id": session, "title": "Interaction fixture", "messages": messages}],
     "apiConfigs": [{"id": config, "providerId": "openai", "displayName": "fixture", "protocol": "openai", "baseUrl": f"http://127.0.0.1:{server.server_port}", "defaultModel": "fixture", "models": ["fixture"], "isEnabled": True}],
     "skills": [], "appSettings": {}, "mcpServerConfigs": []}), encoding="utf-8")
 qa_env = os.environ.copy()
@@ -185,7 +185,7 @@ try:
     assert not errors, errors
     wait_for(lambda value: "完成" in value)
     proc.write("\x1b[200~/spinner Dots\x1b[201~\r"); wait_for(lambda value: "加载指示已保存" in value)
-    saved = json.loads((output / "lanagent.json").read_text(encoding="utf-8-sig"))
+    saved = json.loads((output / "allagent.json").read_text(encoding="utf-8-sig"))
     assert saved["appSettings"]["terminal:spinner"] == "Dots"
     assert "启动 Hyperlight 沙箱" in "".join(raw), "Actual Status preparation not rendered"
     proc.terminate(force=True)

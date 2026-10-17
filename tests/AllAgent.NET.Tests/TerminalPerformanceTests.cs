@@ -1,0 +1,140 @@
+using AllAgent.NET.Core.Data;
+using AllAgent.NET.Core.Services;
+using AllAgent.NET.Core.Tools;
+using AllAgent.NET.Terminal;
+using Spectre.Console;
+using Spectre.Console.Rendering;
+using Spectre.Console.Testing;
+using Xunit;
+using Xunit.Abstractions;
+
+namespace AllAgent.NET.Tests;
+
+public sealed class TerminalPerformanceTests(ITestOutputHelper output)
+{
+    [Fact]
+    public void ScrollingLongAnimatedHistoryOnlyRendersVisibleAnimations()
+    {
+        var console = new TestConsole(); console.Profile.Width = 100;
+        var options = RenderOptions.Create(console, console.Profile.Capabilities);
+        var history = Enumerable.Range(0, 2000).Select(_ => new AnimatedHistoryRow()).ToArray();
+        var items = history.Cast<IRenderable>().ToArray();
+        _ = new TranscriptViewport(items, 20, 0).Render(options, 100).ToArray();
+        var initialRenders = history.Sum(item => item.Renders);
+        foreach (var row in history) row.AnimationVersion++;
+        _ = new TranscriptViewport(items, 20, 500).Render(options, 100).ToArray();
+        var scrollRenders = history.Sum(item => item.Renders) - initialRenders;
+        Assert.InRange(scrollRenders, 1, 20);
+        Assert.Equal(1, history[0].Renders);
+        output.WriteLine($"2,000 animated history blocks: {scrollRenders} blocks rendered on scroll");
+    }
+
+    private sealed class AnimatedHistoryRow : IRenderable, IVersionedRenderable, IAnimatedRenderable
+    {
+        public int Renders { get; private set; }
+        public int Version => 0;
+        public long AnimationVersion { get; set; }
+        public Measurement Measure(RenderOptions options, int maxWidth) => new(1, 1);
+        public IEnumerable<Segment> Render(RenderOptions options, int maxWidth)
+        {
+            Renders++;
+            yield return new Segment("history");
+        }
+    }
+
+    [Fact]
+    public void ScrollDeltaSkipsUnchangedWidePrefixSidebarAndPadding()
+    {
+        List<List<Segment>> before = [[new Segment("中文│"), new Segment("old history"), new Segment("   │ unchanged sidebar")]];
+        List<List<Segment>> after = [[new Segment("中文│"), new Segment("new history"), new Segment("   │ unchanged sidebar")]];
+        var delta = SpectreScreenDisplay.ChangedRows(after, before);
+        Assert.Equal(2, delta.Count);
+        Assert.Equal("\u001b[1;6H", delta[0].Text);
+        Assert.Equal("new history", delta[1].Text);
+    }
+
+    [Fact]
+    public void DeltaDoesNotSkipSuffixThatMovedToDifferentColumns()
+    {
+        List<List<Segment>> before = [[new Segment("a"), new Segment("suffix")]];
+        List<List<Segment>> after = [[new Segment("longer"), new Segment("suffix")]];
+        var delta = SpectreScreenDisplay.ChangedRows(after, before);
+        Assert.Equal("longersuffix", string.Concat(delta.Where(segment => !segment.IsControlCode).Select(segment => segment.Text)));
+    }
+
+    [Fact]
+    public void SuggestionScrollingDoesNotRediscoverCommands()
+    {
+        using var workspace = new TestWorkspace();
+        var discoveries = 0;
+        var editor = new InputEditor(Path.Combine(workspace.Root, "history.json"), workspace.Root,
+            () => { discoveries++; return CommandCatalog.Builtins; });
+        var state = new InputState(); state.Set("/");
+        var hints = editor.Hints(state);
+        for (var i = 0; i < 1000; i++)
+        {
+            state.MoveSuggestion(i % 2 == 0 ? 1 : -1, hints.Count);
+            Assert.Same(hints, editor.Hints(state));
+        }
+        Assert.Equal(1, discoveries);
+        state.Insert("mod");
+        Assert.Contains(editor.Hints(state), hint => hint.Text == "/model");
+        Assert.Equal(1, discoveries);
+        state.SelectAll(); Assert.Empty(editor.Hints(state));
+    }
+
+    [Fact]
+    public void DeltaDetectsStylesAndPreservesCursorControls()
+    {
+        List<List<Segment>> before = [[new Segment("中文", new Style(Color.Green))], [new Segment("same")]];
+        List<List<Segment>> after = [[new Segment("中文", new Style(Color.Red))], [new Segment("same")]];
+        Assert.Empty(SpectreScreenDisplay.ChangedRows(before, before));
+        var delta = SpectreScreenDisplay.ChangedRows(after, before);
+        Assert.Equal(2, delta.Count);
+        Assert.True(delta[0].IsControlCode); Assert.Equal("\u001b[1;1H", delta[0].Text);
+        var frame = new SegmentFrame(delta, 80);
+        var console = new TestConsole();
+        var rendered = frame.Render(RenderOptions.Create(console, console.Profile.Capabilities), 80).ToArray();
+        Assert.True(rendered[0].IsControlCode);
+        Assert.Equal(Color.Red, rendered[1].Style.Foreground);
+        Assert.Equal(4, rendered[1].CellCount());
+    }
+
+    [Theory]
+    [InlineData(80, 24)]
+    [InlineData(120, 35)]
+    public async Task SlashSelectionOnlyWritesChangedRows(int width, int height)
+    {
+        using var workspace = new TestWorkspace();
+        using var store = new DataStore(Path.Combine(workspace.Root, "data"));
+        var skills = new SkillCatalog(store, workspace.Root, workspace.Root, workspace.Root);
+        await using var mcp = new McpToolService(store, new SkillExecutor());
+        var console = new TestConsole(); console.Profile.Width = width; console.Profile.Height = height;
+        using var screen = new FullScreenTerminal(store, skills, mcp, new TerminalUi(false, false), console);
+        screen.Append(new Text(string.Join('\n', Enumerable.Range(0, 1000).Select(i => $"历史消息 {i}"))));
+        var input = new InputState(); input.Set("/");
+        var hints = input.Suggestions(CommandCatalog.Builtins);
+        screen.SetInput(input, hints, "ready");
+        var before = Segment.SplitLines(screen.RenderFrame(width, height), width, height);
+        input.MoveSuggestion(1, hints.Count);
+        var segments = screen.RenderFrame(width, height);
+        var after = Segment.SplitLines(segments, width, height);
+        var delta = SpectreScreenDisplay.ChangedRows(after, before);
+        Assert.Equal(2, delta.Count(segment => segment.IsControlCode));
+        Assert.DoesNotContain(delta, segment => segment.Text.Contains("历史消息"));
+        var fullCells = segments.Sum(segment => segment.CellCount());
+        var deltaCells = delta.Sum(segment => segment.CellCount());
+        Assert.True(deltaCells < fullCells / 5);
+        output.WriteLine($"{width}x{height}: {fullCells} -> {deltaCells} cells ({100.0 * (1 - (double)deltaCells / fullCells):F1}% reduction)");
+        // Re-entry/resize requires a complete repaint, including all blank padding rows.
+        Assert.Equal(height, SpectreScreenDisplay.ChangedRows(after, null).Count(segment => segment.IsControlCode));
+    }
+
+    [Fact]
+    public void SafeTextFastPathStillRemovesTerminalEscapeSequences()
+    {
+        const string safe = "中文 👩‍💻\trow\nnext";
+        Assert.Same(safe, TerminalSafeText.Clean(safe));
+        Assert.Equal("safe", TerminalSafeText.Clean("\u001b[2Jsafe\u0000\u0085"));
+    }
+}

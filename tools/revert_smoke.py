@@ -37,19 +37,19 @@ storage = data / "checkpoints" / key
 storage.mkdir(parents=True)
 for checkpoint in checkpoints:
     (storage / (checkpoint["Id"].replace("-", "") + ".json")).write_text(json.dumps(checkpoint), encoding="utf-8")
-(data / "lanagent.json").write_text(json.dumps({"conversations": [{"id": session, "title": "Revert fixture", "messages": messages}], "apiConfigs": [],
+(data / "allagent.json").write_text(json.dumps({"conversations": [{"id": session, "title": "Revert fixture", "messages": messages}], "apiConfigs": [],
     "skills": [], "appSettings": {}, "mcpServerConfigs": []}), encoding="utf-8")
 (workspace / "shared.txt").write_text("version 3", encoding="utf-8")
 (workspace / "created.txt").write_text("created", encoding="utf-8")
 raw = []
 def state():
     try:
-        return json.loads((data / "lanagent.json").read_text(encoding="utf-8-sig"))
+        return json.loads((data / "allagent.json").read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         return {}
 class Terminal:
     def __init__(self):
-        self.proc = PtyProcess.spawn([str(root / "src/LanAgent.Terminal/bin/Release/net10.0/lanagent.exe"), "chat", "--workspace", str(workspace), "--data-dir", str(data), "--resume", session], cwd=str(root), dimensions=(32, 120))
+        self.proc = PtyProcess.spawn([str(root / "src/AllAgent.NET.Terminal/bin/Release/net10.0/allagent.exe"), "chat", "--workspace", str(workspace), "--data-dir", str(data), "--resume", session], cwd=str(root), dimensions=(32, 120))
         self.chunks = queue.Queue()
         self.screen = pyte.Screen(120, 32)
         self.stream = pyte.Stream(self.screen)

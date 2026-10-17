@@ -1,6 +1,6 @@
 # Start Vite dev server and Avalonia app together
 $viteJob = Start-Job -ScriptBlock {
-    Set-Location "C:\Users\luolan\LanAgent\src\LanAgent.Web"
+    Set-Location "C:\Users\luolan\AllAgent.NET\src\AllAgent.NET.Web"
     npm run dev
 }
 
@@ -15,9 +15,9 @@ try {
     Write-Host "Vite may still be starting..." -ForegroundColor Yellow
 }
 
-Write-Host "Starting LanAgent desktop app..." -ForegroundColor Cyan
-Set-Location "C:\Users\luolan\LanAgent"
-dotnet run --project src/LanAgent.Desktop/LanAgent.Desktop.csproj -p:SkipWebBuild=true
+Write-Host "Starting AllAgent.NET desktop app..." -ForegroundColor Cyan
+Set-Location "C:\Users\luolan\AllAgent.NET"
+dotnet run --project src/AllAgent.NET.Desktop/AllAgent.NET.Desktop.csproj -p:SkipWebBuild=true
 
 # Cleanup
 Stop-Job $viteJob

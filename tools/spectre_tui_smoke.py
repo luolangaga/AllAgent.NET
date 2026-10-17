@@ -20,14 +20,14 @@ messages = [
      "content": f"消息 {index:03d} 中文历史内容\n" + "render-cache " * 12}
     for index in range(150)
 ]
-(data / "lanagent.json").write_text(json.dumps({
+(data / "allagent.json").write_text(json.dumps({
     "conversations": [{"id": session, "title": "Spectre 回归测试", "messages": messages}],
     "apiConfigs": [], "skills": [], "appSettings": {}, "mcpServerConfigs": []
 }, ensure_ascii=False), encoding="utf-8")
 environment = os.environ.copy()
 environment["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1"
 process = PtyProcess.spawn([
-    str(root / "src/LanAgent.Terminal/bin/Debug/net10.0/lanagent.exe"), "chat",
+    str(root / "src/AllAgent.NET.Terminal/bin/Debug/net10.0/allagent.exe"), "chat",
     "--workspace", str(root), "--data-dir", str(data), "--resume", session
 ], cwd=str(root), env=environment, dimensions=(30, 100))
 chunks = queue.Queue()

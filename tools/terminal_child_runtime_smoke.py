@@ -62,12 +62,12 @@ server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
 server.daemon_threads = True
 threading.Thread(target=server.serve_forever, daemon=True).start()
 session, config = str(uuid.uuid4()), str(uuid.uuid4())
-(output / "lanagent.json").write_text(json.dumps({"conversations": [{"id": session, "title": "MAIN-HISTORY-PROOF", "messages": []}],
+(output / "allagent.json").write_text(json.dumps({"conversations": [{"id": session, "title": "MAIN-HISTORY-PROOF", "messages": []}],
     "apiConfigs": [{"id": config, "providerId": "openai", "displayName": "fixture", "protocol": "openai", "baseUrl": f"http://127.0.0.1:{server.server_port}", "defaultModel": "fixture", "models": ["fixture"], "isEnabled": True}],
     "skills": [], "appSettings": {}, "mcpServerConfigs": []}), encoding="utf-8")
 env = os.environ.copy(); env.pop("NO_COLOR", None)
 env.update({"TERM": "xterm-256color", "FORCE_COLOR": "1", "COLORTERM": "truecolor"})
-exe = os.environ.get("LANAGENT_QA_EXECUTABLE", str(root / "build/interaction-verification/terminal/lanagent.exe"))
+exe = os.environ.get("ALLAGENT_DOTNET_QA_EXECUTABLE", str(root / "build/interaction-verification/terminal/allagent.exe"))
 proc = PtyProcess.spawn([exe, "chat", "--workspace", str(workspace), "--data-dir", str(output), "--resume", session, "--config", config], cwd=str(root), env=env, dimensions=(42, 140))
 chunks, raw = queue.Queue(), []
 screen = pyte.Screen(140, 42); stream = pyte.Stream(screen)
@@ -112,7 +112,7 @@ try:
     proc.write("\x1b")
     wait_for(lambda value: "已取消" in value, 5)
     (output / "cancel-screen.txt").write_text(text(), encoding="utf-8")
-    saved = json.loads((output / "lanagent.json").read_text(encoding="utf-8-sig"))
+    saved = json.loads((output / "allagent.json").read_text(encoding="utf-8-sig"))
     children = [c for c in saved["conversations"] if c.get("parentConversationId") == session]
     assert len(children) == 1
     assert counts["child"] == 2, counts

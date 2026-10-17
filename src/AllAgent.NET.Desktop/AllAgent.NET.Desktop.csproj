@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <CopyEmbeddedPowerShell>true</CopyEmbeddedPowerShell>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <CopyAgentSandbox>true</CopyAgentSandbox>
+    <CopyBrowserWorker>true</CopyBrowserWorker>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../AllAgent.NET.Browser/AllAgent.NET.Browser.csproj" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" SetTargetFramework="TargetFramework=net10.0-windows" />
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="11.2.3" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.2.3" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.2.3" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="11.2.3" />
+    <PackageReference Include="Avalonia.Controls.WebView" Version="11.4.0" />
+    <!-- Security backport compatible with Avalonia's older D-Bus protocol API. -->
+    <PackageReference Include="Tmds.DBus.Protocol" Version="0.21.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AllAgent.NET.Core\AllAgent.NET.Core.csproj" />
+    <ProjectReference Include="..\AllAgent.NET.Sandbox\AllAgent.NET.Sandbox.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <!-- Embed web assets built by Vite -->
+  <ItemGroup>
+    <AvaloniaResource Include="Assets\web\**\*" Condition="Exists('Assets\web\index.html')" />
+  </ItemGroup>
+
+  <!-- Build React frontend before dotnet build (skip in CI with -p:SkipWebBuild=true) -->
+  <Target Name="BuildWebFrontend" BeforeTargets="BeforeBuild"
+          Condition="'$(SkipWebBuild)' != 'true' AND Exists('$(MSBuildThisFileDirectory)..\AllAgent.NET.Web\package.json')">
+    <Exec Command="npm run build"
+          WorkingDirectory="$(MSBuildThisFileDirectory)..\AllAgent.NET.Web"
+          ConsoleToMSBuild="true" />
+  </Target>
+</Project>

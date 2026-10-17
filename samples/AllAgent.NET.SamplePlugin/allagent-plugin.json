@@ -1,0 +1,5 @@
+{
+  "sdkVersion": 1,
+  "assembly": "AllAgent.NET.SamplePlugin.dll",
+  "entryType": "AllAgent.NET.SamplePlugin.ExamplePlugin"
+}

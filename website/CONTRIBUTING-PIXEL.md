@@ -56,7 +56,7 @@
 ## 6. 文案与语气
 
 - 全站中文；面向 Windows 开发者，**不吹牛、不写未实现的能力**，每个能力都能对应到仓库里的实现。
-- 术语沿用产品文档：`execute_code`、`CodeAct`、Hyperlight microVM、Monty 沙箱、宿主工具（C#）、`run_shell`、PowerShell 7.6、`doctor`、Skills、MCP、DLL 插件、子代理（explore/general/investigate/modify/review/verify）、权限档位 `full / ask / plan`、数据目录 `.lanagent/data`。
+- 术语沿用产品文档：`execute_code`、`CodeAct`、Hyperlight microVM、Monty 沙箱、宿主工具（C#）、`run_shell`、PowerShell 7.6、`doctor`、Skills、MCP、DLL 插件、子代理（explore/general/investigate/modify/review/verify）、权限档位 `full / ask / plan`、数据目录 `.allagent/data`。
 - 命令一律用等宽字体 + `.panel` 代码块呈现；可复制的内容用 `CopyButton`/`PxButton` 风格。
 
 ## 7. 代码规范

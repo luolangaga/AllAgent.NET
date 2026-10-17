@@ -58,11 +58,11 @@ for item in r["data"]["results"]:
 独立命令行显式开启：
 
 ```powershell
-lanagent chat --full-access
-lanagent run '检查项目并修复构建' --full-access --json
+allagent chat --full-access
+allagent run '检查项目并修复构建' --full-access --json
 ```
 
-Shell 使用随包 .NET 10 worker 内嵌的 PowerShell SDK 7.6.7，不探测或安装系统 PowerShell；worker 启动失败时阻止执行并提示修复软件。宿主 Python 供沙箱运行支持使用，检查可执行性和 3.10–3.14 版本范围；缺少或版本不符时提示通过 winget 安装 Python 3.13，安装成功后提示重启。执行 Python 始终使用实际 Hyperlight microVM，并校验内置 guest 能力；宿主 AST 白名单已停止使用。完整访问权限由宿主工具提供。撤销覆盖工作区内可快照的文件工具修改；外部路径、Shell/MCP 和非只读子代理操作标记为外部行为，不承诺自动撤销。
+Shell 使用随包 .NET 10 worker 内嵌的 PowerShell SDK 7.6.7，不探测或安装系统 PowerShell；worker 启动失败时阻止执行并提示修复软件。`powershell_script` 在同一 worker 上以持久会话执行 PowerShell 代码（对象/流输出、自发现与 Windows 管理），见 [PowerShell 持久会话](powershell-session.zh-CN.md)。宿主 Python 供沙箱运行支持使用，检查可执行性和 3.10–3.14 版本范围；缺少或版本不符时提示通过 winget 安装 Python 3.13，安装成功后提示重启。执行 Python 始终使用实际 Hyperlight microVM，并校验内置 guest 能力；宿主 AST 白名单已停止使用。完整访问权限由宿主工具提供。撤销覆盖工作区内可快照的文件工具修改；外部路径、Shell/MCP 和非只读子代理操作标记为外部行为，不承诺自动撤销。
 
 ## Shell 与 npm
 
@@ -73,7 +73,7 @@ Shell 使用随包 .NET 10 worker 内嵌的 PowerShell SDK 7.6.7，不探测或�
 其他程序可明确配置：
 
 ```powershell
-lanagent chat --allow-shell mytool=C:\Tools\mytool.exe
+allagent chat --allow-shell mytool=C:\Tools\mytool.exe
 ```
 
 检查 npm 版本使用 `exe='npm', args=['--version']`；`['--', 'version']` 是另一组参数。未知程序允许一次只授权当前调用，不会悄悄加入长期信任列表。需要让某程序以后免确认时，显式使用 `--allow-shell`；完全访问模式则跳过所有逐次确认。
@@ -88,11 +88,11 @@ Agent 指令以 Microsoft CodeAct 的单一 `execute_code` / 沙箱内 `call_too
 
 最大轮次功能和 `--max-iterations` 已删除，界面不显示轮次。默认没有总任务时长或固定工具次数限制；Agent 持续执行到模型完成、用户停止或实际错误。
 
-**Esc / Ctrl+C** 停止任务。需要主动限制时，显式设置 `--timeout 秒` 或 `--max-tools 次数`。`--code-timeout 秒` 仍控制单次 Python 的预算，Shell 默认不设单次超时；timeout_seconds=0 表示不限，任意正数表示调用方主动设置的超时，没有人为最大值。
+**Esc / Ctrl+C** 停止任务。需要主动限制时，显式设置 `--timeout 秒` 或 `--max-tools 次数`。`--code-timeout 秒` 仍控制单次 Python 的预算，Shell 默认不设单次超时；timeout_seconds=0 表示不限，任意正数表示调用方主动设置的超时，没有人为最大值。`powershell_script` 默认 120 秒，超时或取消会终止该会话的进程树并在下次调用重建（会话状态丢失）。
 
 - 模型返回 `length`、`max_tokens`、`MAX_TOKENS` 或 `max_output_tokens` 时，显示“自动继续”并续接任务；截断响应中的所有代码调用均不执行，让模型重新生成较小的完整程序。
 - 限流、服务暂不可用、连接提前结束和请求超时自动重试，最多 5 次，等待 2、4、8、16、30 秒；可随时取消。重试仅作用于尚未执行工具的模型请求，不重放已完成的 C# 操作。认证失败等永久错误直接说明原因。
 - 历史达到字符预算的 85% 时，自动总结较早内容，保留任务目标、约束、已完成操作、待办和最近完整的调用/结果对。总结请求不提供工具。原始会话和工具详情不删除；摘要及边界持久化，恢复会话后可继续使用。
 - 整理后立即再次耗尽、总结被截断、模型空回答或异常结束会明确报错并保留历史，避免无进展地循环。超大单条消息、服务端模型上下文限制仍可能要求缩小输入。字符预算是估算，并非各厂商精确 Token 容量。
 
-处理方式参考 [OpenCode 请求重试](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/session/retry.ts)、[OpenCode 会话处理](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/session/processor.ts) 与 [Claude Code 上下文管理](https://code.claude.com/docs/en/how-claude-code-works)。LanAgent 使用 C# 实现，并保留 CodeAct/Hyperlight 的执行边界。用量读取遵循 [OpenAI SSE usage](https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events)、[Anthropic 缓存输入计数](https://platform.claude.com/docs/en/build-with-claude/prompt-caching) 和 [Gemini usageMetadata](https://ai.google.dev/gemini-api/docs/tokens)。
+处理方式参考 [OpenCode 请求重试](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/session/retry.ts)、[OpenCode 会话处理](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/session/processor.ts) 与 [Claude Code 上下文管理](https://code.claude.com/docs/en/how-claude-code-works)。AllAgent.NET 使用 C# 实现，并保留 CodeAct/Hyperlight 的执行边界。用量读取遵循 [OpenAI SSE usage](https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events)、[Anthropic 缓存输入计数](https://platform.claude.com/docs/en/build-with-claude/prompt-caching) 和 [Gemini usageMetadata](https://ai.google.dev/gemini-api/docs/tokens)。

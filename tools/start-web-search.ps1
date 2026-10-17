@@ -1,4 +1,4 @@
-# Optional legacy open-websearch daemon. LanAgent uses built-in C# search by default.
+# Optional legacy open-websearch daemon. AllAgent.NET uses built-in C# search by default.
 param(
     [ValidateRange(1024, 65535)][int]$Port = 3210,
     [string]$Registry = 'https://registry.npmjs.org',
@@ -15,7 +15,7 @@ function Test-SearchReady {
 }
 if (Test-SearchReady) {
     Write-Host "可选搜索服务已就绪：$searchUrl"
-    Write-Host "使用旧服务时，启动 LanAgent 前设置：`$env:LANAGENT_SEARCH_URL='$searchUrl'"
+    Write-Host "使用旧服务时，启动 AllAgent.NET 前设置：`$env:ALLAGENT_SEARCH_URL='$searchUrl'"
     return
 }
 $node = (Get-Command node -ErrorAction Stop).Source
@@ -36,7 +36,7 @@ for ($attempt = 0; $attempt -lt 30; $attempt++) {
     if (Test-SearchReady) {
         Set-Content -LiteralPath (Join-Path $searchRoot 'daemon.pid') -Value $process.Id
         Write-Host "搜索已就绪：$searchUrl（进程 $($process.Id)）"
-        Write-Host "使用旧服务时，启动 LanAgent 前设置：`$env:LANAGENT_SEARCH_URL='$searchUrl'"
+        Write-Host "使用旧服务时，启动 AllAgent.NET 前设置：`$env:ALLAGENT_SEARCH_URL='$searchUrl'"
         return
     }
     if ($process.HasExited) { throw "搜索服务启动失败。查看 $searchRoot/daemon.stderr.log" }

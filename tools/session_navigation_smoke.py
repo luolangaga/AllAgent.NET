@@ -15,14 +15,14 @@ output.mkdir(parents=True)
 parent, child = str(uuid.uuid4()), str(uuid.uuid4())
 def message(session, text):
     return {"id": str(uuid.uuid4()), "conversationId": session, "role": "assistant", "content": text}
-(output / "lanagent.json").write_text(json.dumps({
+(output / "allagent.json").write_text(json.dumps({
     "conversations": [
         {"id": parent, "title": "Parent fixture", "messages": [message(parent, "PARENT-NAVIGATION-PROOF")]},
         {"id": child, "parentConversationId": parent, "agentRole": "explore", "title": "Child fixture",
          "messages": [message(child, "CHILD-NAVIGATION-PROOF")]}
     ], "apiConfigs": [], "skills": [], "appSettings": {}, "mcpServerConfigs": []
 }), encoding="utf-8")
-proc = PtyProcess.spawn([str(root / "src/LanAgent.Terminal/bin/Release/net10.0/lanagent.exe"),
+proc = PtyProcess.spawn([str(root / "src/AllAgent.NET.Terminal/bin/Release/net10.0/allagent.exe"),
                          "chat", "--workspace", str(root), "--data-dir", str(output), "--resume", parent],
                         cwd=str(root), dimensions=(30, 100))
 chunks = queue.Queue()

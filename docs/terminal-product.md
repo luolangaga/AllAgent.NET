@@ -1,4 +1,4 @@
-# LanAgent 终端功能对照与验收
+# AllAgent.NET 终端功能对照与验收
 
 设计参考来自 [OpenCode TUI](https://opencode.ai/docs/tui/) 与 [Claude Code interactive mode](https://code.claude.com/docs/en/interactive-mode)。这是一份功能核对记录；参考产品的云服务、协议和完整插件生态并未全部复制。
 
@@ -11,9 +11,9 @@
 | 输出容量 | 新模型默认 16,384 输出 Token；工具文本 20,000 字符、聚合 JSON 64,000 字符，截断可见且文件支持分页 | ProductRelease 编译通过 |
 | 滚动与状态图标 | Windows 原生 / SGR 滚轮、分区滚动、同方向积压合并、阅读锚点、回到最新；实际 Status 与可配置 Spinner，默认 Mindblown，/spinner 或 /settings 更改 | 滚轮解析与阅读位置测试；真实 ConPTY 80 事件约 95ms；Status 准备与加载设置持久保存 |
 | 后台任务 / 子 Agent | AI 按需派发，默认继承当前模型，也可单次指定或 `/subagents` 保存默认值；独立会话与 microVM、并发队列、结果持久化、取消、人工授权与回答 | 实际父子 microVM；队列、取消、等待和重启中断测试；模型选择隔离测试 |
-| 联网搜索 / 网页抓取 | 内置 C# `web_search`，默认 DuckDuckGo → Bing → 百度失败回退；明确指定多引擎时并行合并去重，最多 10 条；无需 Node/npm、搜索 Key 或守护进程。`web_fetch` 读取公开 HTTP(S) 文本，限制输出、验证 DNS 和重定向，内容按不可信资料处理；设置 `LANAGENT_SEARCH_URL` 可选旧服务 | typed dispatch、错误、截断、私网拦截测试；内置引擎解析与回退验证；真实联网结果受搜索引擎可用性影响 |
+| 联网搜索 / 网页抓取 | 内置 C# `web_search`，默认 DuckDuckGo → Bing → 百度失败回退；明确指定多引擎时并行合并去重，最多 10 条；无需 Node/npm、搜索 Key 或守护进程。`web_fetch` 读取公开 HTTP(S) 文本，限制输出、验证 DNS 和重定向，内容按不可信资料处理；设置 `ALLAGENT_SEARCH_URL` 可选旧服务 | typed dispatch、错误、截断、私网拦截测试；内置引擎解析与回退验证；真实联网结果受搜索引擎可用性影响 |
 | 模型缓存 | 固定指导与项目指令分块、工具固定排序、Anthropic 首/末 system 与历史缓存断点；上下文整理保留全部 system 指令 | 四种协议请求结构、跨项目缓存前缀、上下文总结与恢复测试；实际命中依赖模型与提供商 |
-| DLL 插件 | NuGet LanAgent 标签发现、依赖安装、本地包、启停、卸载、工具 / 模型 / 命令 / 服务扩展 | 实际 NuGet 包和 DLL 加载、禁用、重新启用、路径拒绝测试 |
+| DLL 插件 | NuGet AllAgent.NET 标签发现、依赖安装、本地包、启停、卸载、工具 / 模型 / 命令 / 服务扩展 | 实际 NuGet 包和 DLL 加载、禁用、重新启用、路径拒绝测试 |
 | Hooks | 五个生命周期阶段，执行前否决，5 秒回调预算，持久开关、错误诊断 | 否决无副作用、超时和 After 失败观察测试 |
 | 账号登录 | `/login` 内置 ChatGPT 公共客户端与 Responses、插件登录入口 | 本地回调、JWT 伪造拒绝、账号绑定、DPAPI、刷新与 SSE 中断测试 |
 | OAuth | 公共客户端 PKCE / 设备码、state、刷新、DPAPI，认证插件绑定模型 / HTTP MCP | 本地授权回调、错误 state、刷新、设备等待与认证 MCP 实测 |
@@ -61,10 +61,10 @@ HTML 预览在 `artifacts/tui-preview/`；是用真实 Spectre 组件渲染的�
 ## 重现检查
 
 ```powershell
-dotnet build LanAgent.slnx -c Release -p:SkipWebBuild=true
-dotnet test tests/LanAgent.Tests -c Release
-cd src/LanAgent.Web
+dotnet build AllAgent.NET.slnx -c Release -p:SkipWebBuild=true
+dotnet test tests/AllAgent.NET.Tests -c Release
+cd src/AllAgent.NET.Web
 npm run build
 ```
 
-预览导出：设置 `LANAGENT_TUI_SNAPSHOTS` 为输出目录，再运行 `FullScreenTests`。
+预览导出：设置 `ALLAGENT_TUI_SNAPSHOTS` 为输出目录，再运行 `FullScreenTests`。

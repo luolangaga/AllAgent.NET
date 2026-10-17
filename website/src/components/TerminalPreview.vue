@@ -2,9 +2,9 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 /**
- * TerminalPreview —— 按 LanAgent 终端（Spectre.Console）真实布局还原的会话预览。
+ * TerminalPreview —— 按 AllAgent.NET 终端（Spectre.Console）真实布局还原的会话预览。
  *
- * 配色与结构取自 src/LanAgent.Terminal：
+ * 配色与结构取自 src/AllAgent.NET.Terminal：
  *   TerminalTheme "night"：背景 #11131A、面板 #1A1D27、强调 #7DCFFF、前景 #DCE1EB
  *   FullScreenTerminal：消息区 + 右侧栏（会话信息 / 扩展 / 操作）+ 底部三行 footer，
  *   输入区是 Heavy 圆角面板、标题“输入任务”，审批列表用 “❯ 1. 允许这一次”。
@@ -43,12 +43,12 @@ const SCENES: Scene[] = [
       },
       {
         kind: 'tool',
-        text: 'file_edit · {"path":"src/LanAgent.Core/Tools/SystemTools.cs"}',
+        text: 'file_edit · {"path":"src/AllAgent.NET.Core/Tools/SystemTools.cs"}',
         body: '+3 / -1 · 已写入并校验校验和',
       },
       {
         kind: 'tool',
-        text: 'run_shell · {"exe":"dotnet","args":["test","tests/LanAgent.Tests"]}',
+        text: 'run_shell · {"exe":"dotnet","args":["test","tests/AllAgent.NET.Tests"]}',
         body: 'Passed!  Failed: 0, Passed: 214, Skipped: 3, Total: 217',
       },
       { kind: 'ok', text: '已修正 3 处引用并跑完相关测试。工具卡片保留了实际参数与工作目录。' },
@@ -206,7 +206,7 @@ onBeforeUnmount(() => {
 
       <div ref="host" class="term panel">
         <div class="term-bar">
-          <span class="term-title tiny">lanagent · terminal</span>
+          <span class="term-title tiny">allagent · terminal</span>
           <div class="term-tabs">
             <button
               v-for="(item, i) in SCENES"
@@ -371,7 +371,7 @@ onBeforeUnmount(() => {
   cursor: pointer;
 }
 
-/* ---------- 终端本体：主题色来自 LanAgent.Terminal 的 night 主题 ---------- */
+/* ---------- 终端本体：主题色来自 AllAgent.NET.Terminal 的 night 主题 ---------- */
 .term {
   --term-bg: #11131a;
   --term-surface: #1a1d27;

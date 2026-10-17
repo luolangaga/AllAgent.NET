@@ -39,14 +39,14 @@ class Handler(BaseHTTPRequestHandler):
 server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 session, config = str(uuid.uuid4()), str(uuid.uuid4())
-(output / "lanagent.json").write_text(json.dumps({"conversations": [{"id": session, "title": "Inbox fixture", "messages": []}],
+(output / "allagent.json").write_text(json.dumps({"conversations": [{"id": session, "title": "Inbox fixture", "messages": []}],
     "apiConfigs": [{"id": config, "providerId": "openai", "displayName": "fixture", "protocol": "openai",
         "baseUrl": "http://127.0.0.1:" + str(server.server_port), "defaultModel": "fixture", "models": ["fixture"], "isEnabled": True}],
     "skills": [], "appSettings": {}, "mcpServerConfigs": []}), encoding="utf-8")
 image = output / "correction.png"
 png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jI1kAAAAASUVORK5CYII="
 image.write_bytes(base64.b64decode(png))
-proc = PtyProcess.spawn([str(root / "src/LanAgent.Terminal/bin/Release/net10.0/lanagent.exe"),
+proc = PtyProcess.spawn([str(root / "src/AllAgent.NET.Terminal/bin/Release/net10.0/allagent.exe"),
     "chat", "--workspace", str(root), "--data-dir", str(output), "--resume", session, "--config", config], cwd=str(root), dimensions=(36, 120))
 chunks, raw = queue.Queue(), []
 screen = pyte.Screen(120, 36)
@@ -55,7 +55,7 @@ def screen_text():
     return "\n".join("".join(screen.buffer[y][x].data for x in range(screen.columns)) for y in range(screen.lines))
 def read_state():
     try:
-        return json.loads((output / "lanagent.json").read_text(encoding="utf-8-sig"))
+        return json.loads((output / "allagent.json").read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         return {}
 def pending():

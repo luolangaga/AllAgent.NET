@@ -15,9 +15,9 @@
 独立命令（无需配置模型或启动 Hyperlight）：
 
 ```powershell
-lanagent computer on
-lanagent computer status --json
-lanagent computer off
+allagent computer on
+allagent computer status --json
+allagent computer off
 ```
 
 用户只控制总开关；AI 使用 `computer_mode(mode="background|foreground|isolated", reason="任务需要…")` 自主选择操作模式。每次启动默认后台，不恢复上次的前台模式。`computer_status` 会告诉 AI 开关、模式和独立环境配置状态。旧的 `/computer mode` 命令会提示由 AI 选择，不再要求用户手动切模式。
@@ -69,7 +69,7 @@ if r["ok"]:
 
 支持 action：`click`、`type_text`、`invoke`、`set_value`（使用 text 参数）、`select`、`toggle`、`expand`、`collapse`、`scroll_up`、`scroll_down`。`double_click`、`right_click`、`computer_focus`、`computer_keys` 使用前台或独立环境。快捷键例：`CTRL+S`、`ALT+F4`、`RETURN`。Foreground/isolated 的 type_text 在控件无 Value pattern 时才使用聚焦后的 Unicode 键盘输入。不要猜测 ID 或自动重试可能已经完成的写操作。
 
-内置 [computer-use SKILL.md](../src/LanAgent.Core/Skills/computer-use/SKILL.md) 随 Core 程序集分发，启动时为老用户也补齐；用户已编辑的技能不会被覆盖。Agent 可以 `skill_read(name="computer-use")` 加载，用户也可用 `/computer-use 任务说明` 调用。技能教 AI 自动选模式、软件测试优先后台、定位控件、处理不支持的操作与核验结果。
+内置 [computer-use SKILL.md](../src/AllAgent.NET.Core/Skills/computer-use/SKILL.md) 随 Core 程序集分发，启动时为老用户也补齐；用户已编辑的技能不会被覆盖。Agent 可以 `skill_read(name="computer-use")` 加载，用户也可用 `/computer-use 任务说明` 调用。技能教 AI 自动选模式、软件测试优先后台、定位控件、处理不支持的操作与核验结果。
 
 终端卡片会展示窗口名称和数量、控件数量、所选模式、目标窗口/控件、输入摘要、读回结果和真实执行方式。条件等待成功显示“已观察到预期界面状态”；动作返回显示“任务结果需界面验证”。Python 结束但内部工具失败时，总标题显示“含 N 项操作失败”，不会统一标成成功。
 
@@ -81,7 +81,7 @@ if r["ok"]:
 2. 创建仅自己可读的 token 文件，内容至少 32 字符。在目标桌面终端启动：
 
    ```powershell
-   .\LanAgent.ComputerUse.exe --serve 18765 C:\Agent\computer-token.txt
+   .\AllAgent.NET.ComputerUse.exe --serve 18765 C:\Agent\computer-token.txt
    ```
 
    服务仅监听目标机 `127.0.0.1`。若 HttpListener 报访问拒绝，管理员为运行账户配置该 loopback URL 的 URL ACL；不向公网绑定。
@@ -106,8 +106,8 @@ AI 再根据任务调用 `computer_mode(mode="isolated", reason="需要完整后
 ## 构建与验证
 
 ```powershell
-dotnet build src/LanAgent.Terminal
-dotnet test tests/LanAgent.Tests --filter FullyQualifiedName~ComputerUseTests
+dotnet build src/AllAgent.NET.Terminal
+dotnet test tests/AllAgent.NET.Tests --filter FullyQualifiedName~ComputerUseTests
 ```
 
 Terminal 构建、发布及 .NET Tool 打包均包含 `computer/` Worker。Core 保持 `net10.0`，Windows Worker 为 `net10.0-windows`；库调用者可用 `AgentOptions.ComputerUse.Configure(...)`，并设置 `WorkerPath`。FlaUI Worker 需要 Windows Desktop Runtime；其他 Agent 操作不因此要求该运行时。Worker 在专用 MTA 进程中运行，启用 PerMonitorV2 DPI。

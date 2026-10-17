@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <PackageId>AllAgent.NET.CommandCode</PackageId><Version>1.1.0</Version>
+    <PackageTags>AllAgent.NET;LanAgent;CommandCode;Authentication</PackageTags>
+    <Description>CommandCode reverse proxy and account model provider.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/AllAgent.NET.Core/AllAgent.NET.Core.csproj" PrivateAssets="all" />
+    <None Include="Upstream/LICENSE" Pack="true" PackagePath="allagent/CommandCode-LICENSE" />
+    <None Include="allagent-plugin.json" Pack="true" PackagePath="allagent/" />
+    <None Include="README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+</Project>

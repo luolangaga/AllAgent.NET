@@ -13,7 +13,7 @@ type FooterColumn = {
   links: FooterLink[]
 }
 
-const REPO = 'https://github.com/luolangaga/LanAgent'
+const REPO = 'https://github.com/luolangaga/AllAgent.NET'
 
 const COLUMNS: FooterColumn[] = [
   {
@@ -66,7 +66,7 @@ const COLUMNS: FooterColumn[] = [
         <div class="footer-logo pixel-cut">
           <PixelIcon name="terminal" :size="28" />
         </div>
-        <p class="footer-wordmark">LanAgent</p>
+        <p class="footer-wordmark">AllAgent.NET</p>
         <p class="footer-desc muted">
           面向 Windows 本机工作流的终端 AI Agent：模型只用 <code>execute_code</code> 组织步骤，
           Python 在隔离沙箱里运行，文件、命令与桌面操作由 C# 宿主工具受控执行。
@@ -95,7 +95,7 @@ const COLUMNS: FooterColumn[] = [
 
     <div class="shell footer-bottom">
       <div class="rule"></div>
-      <p class="tiny footer-copy">© 2026 LanAgent · 用 Vue 3 + Pixelium Design 构建</p>
+      <p class="tiny footer-copy">© 2026 AllAgent.NET · 用 Vue 3 + Pixelium Design 构建</p>
     </div>
   </footer>
 </template>

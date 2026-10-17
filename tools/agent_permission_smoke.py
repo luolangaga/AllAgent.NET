@@ -11,7 +11,7 @@ import pyte
 from winpty import PtyProcess
 
 root = Path(__file__).resolve().parents[1]
-executable = os.environ.get("LANAGENT_QA_EXECUTABLE", str(root / "src/LanAgent.Terminal/bin/Release/net10.0/lanagent.exe"))
+executable = os.environ.get("ALLAGENT_DOTNET_QA_EXECUTABLE", str(root / "src/AllAgent.NET.Terminal/bin/Release/net10.0/allagent.exe"))
 output = root / "artifacts/qa/agent-permissions" / uuid.uuid4().hex
 workspace = output / "workspace"
 workspace.mkdir(parents=True)
@@ -53,7 +53,7 @@ threading.Thread(target=server.serve_forever, daemon=True).start()
 session, parent, config = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
 role = {"name": "reviewer", "description": "Review", "instructions": "Read the requested files.", "readOnly": True,
     "permissions": [{"action": "*", "resource": "*", "effect": "ask"}, {"action": "read", "resource": "*.env", "effect": "deny"}]}
-(output / "lanagent.json").write_text(json.dumps({"conversations": [
+(output / "allagent.json").write_text(json.dumps({"conversations": [
     {"id": parent, "title": "Parent", "messages": []},
     {"id": session, "parentConversationId": parent, "agentRole": "reviewer", "title": "Permission fixture", "messages": []}],
     "apiConfigs": [{"id": config, "providerId": "openai", "displayName": "fixture", "protocol": "openai",
