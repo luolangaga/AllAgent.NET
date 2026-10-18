@@ -21,15 +21,18 @@ internal sealed class TerminalArguments
         valued.Add("subagent-model");
         valued.Add("subagent-provider");
         valued.Add("background-concurrency");
-        var flagged = new HashSet<string> { "help", "json", "verbose", "install", "inline", "trust-plugin", "full-access", "ask", "no-initialize" };
+        valued.Add("gui-url");
+        var flagged = new HashSet<string> { "help", "json", "verbose", "install", "inline", "trust-plugin", "full-access", "ask", "no-initialize", "guimode", "gui", "gui-devtools" };
         var index = 0;
-        if (args.Length > 0 && !args[0].StartsWith("--")) { result.Command = args[0]; index++; }
+        // Options may be spelled with a single dash when the name is registered (-guimode);
+        // every other bare token stays the command word or a positional.
+        if (args.Length > 0 && OptionName(args[0], flagged, valued) == null) { result.Command = args[0]; index++; }
         for (; index < args.Length; index++)
         {
             var token = args[index];
             if (token == "--") { result.Positionals.AddRange(args[(index + 1)..]); break; }
-            if (!token.StartsWith("--")) { result.Positionals.Add(token); continue; }
-            var name = token[2..];
+            var name = OptionName(token, flagged, valued);
+            if (name == null) { result.Positionals.Add(token); continue; }
             if (flagged.Contains(name)) { result.Flags.Add(name); continue; }
             if (!valued.Contains(name)) throw new ArgumentException("Unknown option: " + token);
             if (++index >= args.Length) throw new ArgumentException("Missing value: " + token);
@@ -43,11 +46,29 @@ internal sealed class TerminalArguments
             else if (!result.Values.TryAdd(name, args[index])) throw new ArgumentException("Duplicate option: " + token);
         }
         if (result.Flags.Contains("json") && result.Command == "chat") throw new ArgumentException("Use run --json for noninteractive JSON events.");
+        // -guimode / --gui is the silent entry point: a window host is detached and the
+        // terminal returns to the prompt; `allagent gui` keeps the host in the foreground.
+        if (result.GuiMode && result.Command is not ("chat" or "gui")) throw new ArgumentException("-guimode 不能与其他命令同时使用。");
+        if (result.GuiMode) result.Command = "gui";
         _ = result.BackgroundConcurrency;
         return result;
     }
 
+    /// <summary>Resolves an option token, accepting the documented single-dash spelling (-guimode).</summary>
+    private static string? OptionName(string token, HashSet<string> flagged, HashSet<string> valued)
+    {
+        if (token.Length < 2 || token[0] != '-') return null;
+        var name = token[1] == '-' ? token[2..] : token[1..];
+        if (name.Length == 0) return null;
+        if (flagged.Contains(name) || valued.Contains(name)) return name;
+        // Unknown long options stay hard errors so typos never run as positional arguments;
+        // single-dash tokens that match nothing keep their historic meaning as positionals.
+        return token[1] == '-' ? name : null;
+    }
+
     public string? Get(string name) => Values.GetValueOrDefault(name);
+    /// <summary>Requested through -guimode / --guimode / --gui.</summary>
+    public bool GuiMode => Flags.Contains("guimode") || Flags.Contains("gui");
     public string Workspace => Path.GetFullPath(Get("workspace") ?? Environment.CurrentDirectory);
     public string DataDirectory => _dataDirectory ??= Path.GetFullPath(Get("data-dir") ?? AllAgent.NET.Core.Data.LegacyDataPaths.ProjectDirectory(Workspace));
     public string SharedDirectory => _sharedDirectory ??= Path.GetFullPath(Get("data-dir") ?? AllAgent.NET.Core.Data.LegacyDataPaths.SharedDirectory(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)));

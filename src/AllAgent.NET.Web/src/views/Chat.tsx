@@ -11,13 +11,15 @@ import { TodoPanel } from '@/components/TodoPanel'
 import { invoke } from '@/bridge'
 import { useStore } from '@/lib/store'
 import { formatTokens } from '@/lib/format'
+import { matchCommands, runCommand } from '@/lib/commandRouter'
 import { useApiConfigsStore } from '@/stores/apiConfigs'
 import { useApprovalsStore } from '@/stores/approvals'
+import { useCommandsStore } from '@/stores/commands'
 import { useConversationsStore } from '@/stores/conversations'
 import { useSettingsStore } from '@/stores/settings'
 import { useNoticesStore } from '@/stores/ui'
 import { useWorkspaceStore } from '@/stores/workspace'
-import type { ReasoningOptions } from '@/types'
+import type { ImageAttachment, ReasoningOptions } from '@/types'
 
 const ideas = [
   { icon: Code2, title: '一起写代码', description: '从想法到可以运行的实现', prompt: '请帮我实现一个功能。先了解当前项目的结构，再和我确认具体需求。' },
@@ -25,18 +27,19 @@ const ideas = [
   { icon: Compass, title: '探索一个问题', description: '拆解问题，找到下一步', prompt: '请和我一起分析一个问题，先询问我需要解决的问题是什么。' },
 ]
 
-export default function Chat({ ready, onNavigate }: { ready: boolean; onNavigate: (page: string) => void }) {
+export default function Chat({ ready, onNavigate, onPalette }: { ready: boolean; onNavigate: (page: string) => void; onPalette: () => void }) {
   const conv = useStore(useConversationsStore)
   const approvals = useStore(useApprovalsStore)
   const api = useStore(useApiConfigsStore)
   const settings = useStore(useSettingsStore)
   const notices = useStore(useNoticesStore)
   const workspace = useStore(useWorkspaceStore)
+  const commands = useStore(useCommandsStore)
   const [draft, setDraft] = useState('')
+  const [attachments, setAttachments] = useState<ImageAttachment[]>([])
   const [selected, setSelected] = useState<string | null>(null)
   const [visibleCount, setVisibleCount] = useState(30)
   const [reasoning, setReasoning] = useState<ReasoningOptions | null>(null)
-  const bottom = useRef<HTMLDivElement>(null)
   const scroll = useRef<HTMLDivElement>(null)
   const follow = useRef(true)
 
@@ -51,12 +54,27 @@ export default function Chat({ ready, onNavigate }: { ready: boolean; onNavigate
   const messages = conv.messages.filter(message => message.role !== 'system' && message.role !== 'tool')
   const usage = conv.contextUsage
 
+  // Pin to the newest message on the next frame: the composer can still be resizing (the
+  // draft just cleared), and setting scrollTop directly never scrolls ancestor containers
+  // the way a sentinel + scrollIntoView would.
   useEffect(() => {
-    if (follow.current) bottom.current?.scrollIntoView({ behavior: 'instant' as ScrollBehavior })
+    if (!follow.current) return
+    const element = scroll.current
+    if (!element) return
+    const frame = window.requestAnimationFrame(() => { element.scrollTop = element.scrollHeight })
+    return () => window.cancelAnimationFrame(frame)
   }, [messages.length, messages.at(-1)])
 
   useEffect(() => { follow.current = true }, [conv.activeId])
   useEffect(() => { setVisibleCount(30) }, [conv.activeId])
+  // Command catalog powers the slash menu and prefix completion in the composer.
+  useEffect(() => { void commands.loadAll() }, [])
+  // The command palette hands picked skills over as a one-shot draft.
+  useEffect(() => {
+    if (!commands.pendingDraft) return
+    setDraft(commands.pendingDraft)
+    commands.clearDraft()
+  }, [commands.pendingDraft])
   // Real thinking levels come from the provider's reasoning profile, not a fixed on/off list.
   useEffect(() => {
     if (!config?.id) { setReasoning(null); return }
@@ -69,15 +87,55 @@ export default function Chat({ ready, onNavigate }: { ready: boolean; onNavigate
   // Long histories render the newest slice first; earlier messages mount on demand.
   const visibleMessages = messages.length > visibleCount ? messages.slice(messages.length - visibleCount) : messages
 
-  async function send(text: string, meta: PromptMeta) {
+  async function send(text: string, meta: PromptMeta, options?: { display?: string; prompt?: string }) {
     if (!config || busy) return
     follow.current = true
     try {
-      await conv.sendMessage(text, config.id, meta.thinkingEnabled, meta.thinkingBudget, meta.model, meta.reasoningEffort)
+      await conv.sendMessage(options?.display ?? text, config.id, meta.thinkingEnabled, meta.thinkingBudget, meta.model, meta.reasoningEffort, meta.images, options?.prompt)
+      setAttachments([])
     } catch (error) {
-      setDraft(text)
+      // The draft and its images stay put so the user can fix and resend.
+      setDraft(options?.display ?? text)
       notices.report(error)
     }
+  }
+
+  // Slash input runs through the shared command router; returns true when consumed.
+  // User-invocable skills expand to their instructions and run as a task — the terminal's
+  // default branch — while everything else stays a plain command.
+  async function handleCommand(text: string): Promise<boolean> {
+    const trimmed = text.trim()
+    const word = trimmed.split(/\s+/)[0] ?? ''
+    const skill = commands.commands.find(item => item.isSkill && item.text.toLowerCase() === word.toLowerCase())
+    if (skill) {
+      if (!config || busy) { notices.notify('技能暂不可用', '先连接一个模型配置，并等待当前任务结束。'); return true }
+      try {
+        const expanded = await commands.invokeSkill(skill.text.replace(/^\//, ''), trimmed.slice(word.length).trim())
+        setDraft('')
+        // The transcript keeps the original slash command; the expanded instructions plus
+        // referenced images only travel to the model — the same split as the terminal.
+        await send(trimmed, {
+          thinkingEnabled: config.thinkingEnabled,
+          thinkingBudget: config.thinkingBudget,
+          model: config.defaultModel,
+          images: [...attachments, ...expanded.images],
+        }, { prompt: expanded.text })
+      } catch (error) {
+        notices.report(error)
+      }
+      return true
+    }
+    if (!trimmed.includes(' ') && word.length > 1 && !commands.commands.some(item => item.text.toLowerCase() === word.toLowerCase())) {
+      const matches = matchCommands(commands.commands, word)
+      if (matches.length === 1) {
+        const consumed = await runCommand(matches[0].text, { go: onNavigate, openPalette: onPalette })
+        if (consumed) setDraft('')
+        return consumed
+      }
+    }
+    const consumed = await runCommand(trimmed, { go: onNavigate, openPalette: onPalette })
+    if (consumed) setDraft('')
+    return consumed
   }
 
   async function exportConversation() {
@@ -141,7 +199,6 @@ export default function Chat({ ready, onNavigate }: { ready: boolean; onNavigate
               >加载更早的 {Math.min(30, messages.length - visibleMessages.length)} 条消息</Button>
             </div> : null}
             {visibleMessages.map(message => <MessageBubble awaiting={awaiting && message.status === 'streaming'} key={message.id} message={message} />)}
-            <div ref={bottom} />
           </div>
           : <div className="welcome">
             <div className="welcome-mark"><Command size={34} strokeWidth={1.4} /></div>
@@ -186,12 +243,18 @@ export default function Chat({ ready, onNavigate }: { ready: boolean; onNavigate
         title="还没有可用的模型配置"
       /> : null}
       <PromptComposer
+        attachments={attachments}
         busy={busy}
+        commands={commands.commands}
         configs={enabledConfigs}
         draft={draft}
         models={config?.models ?? []}
+        onAttachmentsChange={setAttachments}
+        onCommand={handleCommand}
         onConfigure={() => onNavigate('models')}
         onDraftChange={setDraft}
+        onNotify={notices.notify}
+        onReport={notices.report}
         onSelect={setSelected}
         onSend={(text, meta) => void send(text, meta)}
         onSettings={() => onNavigate('settings')}

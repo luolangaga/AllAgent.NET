@@ -1,5 +1,5 @@
 import { memo, useState } from 'react'
-import { Check, Command, Copy } from 'lucide-react'
+import { Check, Command, Copy, X } from 'lucide-react'
 import { Avatar, AvatarFallback } from './ui/avatar'
 import { Badge } from './ui/badge'
 import { Button } from './ui/b-button'
@@ -8,7 +8,8 @@ import { ThinkingIndicator } from './ui/thinking-indicator'
 import { ReasoningBlock } from './ReasoningBlock'
 import { Markdown } from './Markdown'
 import { ToolTrace } from './ToolTrace'
-import type { Message, ToolCall, ReasoningPart } from '@/types'
+import { dataUrl } from '@/lib/attachments'
+import type { Message, ToolCall, ReasoningPart, ImageAttachment } from '@/types'
 import { formatClock } from '@/lib/format'
 
 const MAX_CONTENT = 150000
@@ -18,7 +19,9 @@ const MAX_REASONING = 120000
 // bubbles keep their references and skip Markdown parsing on subsequent tokens.
 export const MessageBubble = memo(function MessageBubble({ message, awaiting = false }: { message: Message; awaiting?: boolean }) {
   const [copied, setCopied] = useState(false)
+  const [preview, setPreview] = useState<ImageAttachment | null>(null)
   const isUser = message.role === 'user'
+  const images = message.images ?? []
   const streaming = message.status === 'streaming'
   const regular = message.toolCalls?.filter(call => call.name !== 'memory_update') ?? []
   const memories = message.toolCalls?.filter(call => call.name === 'memory_update') ?? []
@@ -67,6 +70,19 @@ export const MessageBubble = memo(function MessageBubble({ message, awaiting = f
         {message.finishReason === 'tool_limit' || message.finishReason === 'context_limit' ? <Badge color="amber" size="sm">已达执行上限</Badge> : null}
       </header>
       <div className="message-surface">
+        {images.length ? <div className="message-images">
+          {images.map((image, index) => <button
+            aria-label={`查看 ${image.name}`}
+            className="message-image"
+            key={`${image.name}-${index}`}
+            onClick={() => setPreview(image)}
+            type="button"
+          >
+            {/* Inline data URLs are already in memory: lazy loading would only risk
+                never firing for a box that has no intrinsic size yet. */}
+            <img alt={image.name} src={dataUrl(image)} />
+          </button>)}
+        </div> : null}
         {hasReasoning && !hasReasoningParts ? <ReasoningBlock part={{ type: 'reasoning', text: reasoning,
           iteration: message.iteration?.current ?? 1, status: streaming && !content && !regular.length ? 'streaming' : 'done' }} /> : null}
         {message.parts?.length ? blocks.map((block, index) => block.type === 'text'
@@ -97,5 +113,10 @@ export const MessageBubble = memo(function MessageBubble({ message, awaiting = f
       </div>
     </div>
     {isUser ? <Avatar name="你" size="sm"><AvatarFallback /></Avatar> : null}
+    {preview ? <div className="image-lightbox" onClick={() => setPreview(null)} role="presentation">
+      <button aria-label="关闭预览" className="image-lightbox-close" onClick={() => setPreview(null)} type="button"><X size={16} /></button>
+      {/* Clicking the picture itself must not close the overlay. */}
+      <img alt={preview.name} onClick={event => event.stopPropagation()} src={dataUrl(preview)} />
+    </div> : null}
   </article>
 })

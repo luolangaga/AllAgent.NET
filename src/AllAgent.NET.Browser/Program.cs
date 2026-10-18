@@ -1,9 +1,15 @@
+using System.IO;
 using System.Text;
 using System.Text.Json;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Markup;
+using System.Windows.Media;
 using AllAgent.NET.Core.Browser;
 using AllAgent.NET.Core.Tools;
 using Microsoft.Web.WebView2.Core;
-using Microsoft.Web.WebView2.WinForms;
+using Microsoft.Web.WebView2.Wpf;
 
 namespace AllAgent.NET.Browser;
 
@@ -21,54 +27,110 @@ internal static class Program
             catch (Exception ex) { Console.WriteLine(ToolResult.Failure("WebView2 Runtime missing: " + ex.Message).ToJson()); Environment.ExitCode = 1; }
             return;
         }
-        ApplicationConfiguration.Initialize();
         var profile = args.Length == 2 && args[0] == "--profile" ? args[1] : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AllAgent.NET", "browser-use");
-        using var window = new BrowserWindow(profile);
-        Application.Run(window);
+        var application = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
+        application.Run(new BrowserWindow(profile));
     }
 }
 
-internal sealed class BrowserWindow(string profile) : Form, IBrowserConnection
+/// <summary>
+/// WPF browser worker: one WebView2 per tab, driven over the LANBROWSER line protocol on
+/// stdin/stdout. The window is the automation surface, so a visible top-level window and a
+/// responsive message pump are part of the contract.
+/// </summary>
+internal sealed class BrowserWindow : Window, IBrowserConnection
 {
-    private readonly TabControl _tabs = new() { Dock = DockStyle.Fill };
-    private readonly ToolStripTextBox _address = new() { AutoSize = false, Width = 650 };
+    private static readonly Brush ChromeBrush = new SolidColorBrush(Color.FromRgb(0x1B, 0x1B, 0x20));
+    private static readonly Brush SurfaceBrush = new SolidColorBrush(Color.FromRgb(0x26, 0x26, 0x2D));
+
+    private readonly string _profile;
+    private readonly TabControl _tabs = new() { Background = Brushes.Transparent, BorderThickness = new Thickness(0) };
+    private readonly TextBox _address = new()
+    {
+        Background = Brushes.Transparent, BorderThickness = new Thickness(0), Foreground = Brushes.White,
+        CaretBrush = Brushes.White, VerticalContentAlignment = VerticalAlignment.Center, FontSize = 12.5
+    };
     private readonly Dictionary<string, WebView2> _views = [];
-    private CoreWebView2Environment? _environment;
+    private readonly Dictionary<TabItem, string> _ids = [];
     private readonly CancellationTokenSource _lifetime = new();
+    private readonly Dictionary<string, (CoreWebView2ScriptDialogOpeningEventArgs Args, CoreWebView2Deferral Deferral)> _dialogs = [];
+    private CoreWebView2Environment? _environment;
     private BrowserAutomationSession? _session;
     private bool _disposed;
-    private readonly Dictionary<string, (CoreWebView2ScriptDialogOpeningEventArgs Args, CoreWebView2Deferral Deferral)> _dialogs = [];
     private TaskCompletionSource _dialogOpened = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public BrowserWindow(string profile)
+    {
+        _profile = profile;
+        Title = "AllAgent Browser · WebView2";
+        Width = 1180; Height = 820; MinWidth = 640; MinHeight = 420;
+        Background = ChromeBrush;
+        Content = BuildLayout();
+        Loaded += OnLoadedAsync;
+        Closed += OnClosed;
+    }
+
     public JsonElement? Dialog => _dialogs.TryGetValue(ActiveTabId, out var pending)
         ? JsonSerializer.SerializeToElement(new { type = pending.Args.Kind.ToString(), message = pending.Args.Message, defaultPrompt = pending.Args.DefaultText }) : null;
-    public string ActiveTabId => _tabs.SelectedTab?.Name ?? "";
+    public string ActiveTabId => _tabs.SelectedItem is TabItem selected && _ids.TryGetValue(selected, out var id) ? id : "";
     private WebView2 Current => _views.TryGetValue(ActiveTabId, out var view) ? view : throw new InvalidOperationException("No active tab. Open a new tab.");
 
-    protected override async void OnShown(EventArgs e)
+    private UIElement BuildLayout()
     {
-        base.OnShown(e);
-        Text = "AllAgent Browser · WebView2"; Width = 1180; Height = 820;
-        var toolbar = new ToolStrip { Dock = DockStyle.Top };
-        toolbar.Items.Add("←", null, (_, _) => { if (Current.CanGoBack) Current.GoBack(); });
-        toolbar.Items.Add("→", null, (_, _) => { if (Current.CanGoForward) Current.GoForward(); });
-        toolbar.Items.Add("↻", null, (_, _) => Current.Reload());
-        toolbar.Items.Add(_address);
-        toolbar.Items.Add("打开", null, (_, _) => NavigateAddress());
-        toolbar.Items.Add("+", null, async (_, _) => { try { await NewTabAsync(_lifetime.Token); } catch (Exception ex) { _address.Text = ex.Message; } });
-        toolbar.Items.Add("关闭标签", null, async (_, _) => await CloseTabAsync(ActiveTabId, _lifetime.Token));
-        _address.KeyDown += (_, key) => { if (key.KeyCode == Keys.Enter) { key.SuppressKeyPress = true; NavigateAddress(); } };
-        Controls.Add(_tabs); Controls.Add(toolbar);
-        _tabs.SelectedIndexChanged += (_, _) => { if (_views.TryGetValue(ActiveTabId, out var view)) _address.Text = view.Source?.ToString() ?? "about:blank"; };
+        var toolbar = new StackPanel
+        {
+            Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(8, 0, 8, 0), Height = 38
+        };
+        toolbar.Children.Add(ToolbarButton("\uE72B", "后退", () => { if (Current.CanGoBack) Current.GoBack(); }));
+        toolbar.Children.Add(ToolbarButton("\uE72A", "前进", () => { if (Current.CanGoForward) Current.GoForward(); }));
+        toolbar.Children.Add(ToolbarButton("\uE72C", "刷新", () => Current.Reload()));
+        var address = new Border
+        {
+            Background = SurfaceBrush, CornerRadius = new CornerRadius(6), Margin = new Thickness(6, 0, 6, 0),
+            Height = 28, MinWidth = 320, VerticalAlignment = VerticalAlignment.Center, Padding = new Thickness(10, 0, 10, 0), Child = _address
+        };
+        toolbar.Children.Add(address);
+        toolbar.Children.Add(ToolbarButton("\uE8A7", "打开地址", NavigateAddress));
+        toolbar.Children.Add(ToolbarButton("\uE710", "新建标签", async () => { try { await NewTabAsync(_lifetime.Token); } catch (Exception ex) { _address.Text = ex.Message; } }));
+        toolbar.Children.Add(ToolbarButton("\uE8BB", "关闭标签", async () => await CloseTabAsync(ActiveTabId, _lifetime.Token)));
+        _address.Style = (Style)XamlReader.Parse(AddressStyle);
+        _address.KeyDown += (_, key) => { if (key.Key == Key.Enter) { key.Handled = true; NavigateAddress(); } };
+        _tabs.SelectionChanged += (_, _) => { if (_views.TryGetValue(ActiveTabId, out var view)) _address.Text = view.Source?.ToString() ?? "about:blank"; };
+        _tabs.ItemContainerStyle = (Style)XamlReader.Parse(TabStyle);
+
+        var dock = new DockPanel { LastChildFill = true };
+        var bar = new Border { Background = ChromeBrush, BorderBrush = SurfaceBrush, BorderThickness = new Thickness(0, 0, 0, 1), Child = toolbar };
+        DockPanel.SetDock(bar, Dock.Top);
+        dock.Children.Add(bar);
+        dock.Children.Add(_tabs);
+        return dock;
+    }
+
+    private static Button ToolbarButton(string glyph, string tooltip, Action action)
+    {
+        var button = new Button { Content = glyph, ToolTip = tooltip, Style = (Style)XamlReader.Parse(ButtonStyle) };
+        button.Click += (_, _) =>
+        {
+            try { action(); }
+            catch (Exception ex) { Console.Error.WriteLine(ex.Message); }
+        };
+        return button;
+    }
+
+    private async void OnLoadedAsync(object sender, RoutedEventArgs e)
+    {
+        Loaded -= OnLoadedAsync;
         try
         {
-            Directory.CreateDirectory(profile);
-            _environment = await CoreWebView2Environment.CreateAsync(userDataFolder: Path.Combine(profile, "webview2"));
+            Directory.CreateDirectory(_profile);
+            _environment = await CoreWebView2Environment.CreateAsync(userDataFolder: Path.Combine(_profile, "webview2"));
             await NewTabAsync(_lifetime.Token);
             _session = new BrowserAutomationSession(this);
             while (!_lifetime.IsCancellationRequested)
             {
-                // Standard input may be a synchronous Windows pipe despite the async
-                // API. Never enter its read on the WinForms message-pump thread.
+                // Standard input may be a synchronous Windows pipe despite the async API.
+                // Never enter its read on the message-pump thread.
                 var line = await Task.Run(async () => await Console.In.ReadLineAsync(_lifetime.Token));
                 if (line == null) break;
                 var close = false;
@@ -129,9 +191,12 @@ internal sealed class BrowserWindow(string profile) : Form, IBrowserConnection
     {
         ct.ThrowIfCancellationRequested();
         var id = Guid.NewGuid().ToString("N");
-        var tab = new TabPage("新标签") { Name = id };
-        var view = new WebView2 { Dock = DockStyle.Fill };
-        tab.Controls.Add(view); _tabs.TabPages.Add(tab); _tabs.SelectedTab = tab;
+        var page = new TabItem { Header = "新标签" };
+        var view = new WebView2();
+        page.Content = view;
+        _ids[page] = id;
+        _tabs.Items.Add(page);
+        _tabs.SelectedItem = page;
         try
         {
             await view.EnsureCoreWebView2Async(_environment).WaitAsync(ct);
@@ -139,7 +204,11 @@ internal sealed class BrowserWindow(string profile) : Form, IBrowserConnection
             view.CoreWebView2.Settings.AreDevToolsEnabled = false;
             view.CoreWebView2.Settings.AreDefaultScriptDialogsEnabled = false;
             view.CoreWebView2.ScriptDialogOpening += (_, dialog) => { _dialogs[id] = (dialog, dialog.GetDeferral()); _dialogOpened.TrySetResult(); };
-            view.CoreWebView2.DocumentTitleChanged += (_, _) => { tab.Text = view.CoreWebView2.DocumentTitle[..Math.Min(35, view.CoreWebView2.DocumentTitle.Length)]; };
+            view.CoreWebView2.DocumentTitleChanged += (_, _) =>
+            {
+                var title = view.CoreWebView2.DocumentTitle;
+                page.Header = title[..Math.Min(35, title.Length)];
+            };
             view.CoreWebView2.SourceChanged += (_, _) => { if (id == ActiveTabId) _address.Text = view.CoreWebView2.Source; };
             view.CoreWebView2.NewWindowRequested += async (_, request) =>
             {
@@ -151,12 +220,18 @@ internal sealed class BrowserWindow(string profile) : Form, IBrowserConnection
             view.CoreWebView2.WindowCloseRequested += async (_, _) => await CloseTabAsync(id, _lifetime.Token);
             return id;
         }
-        catch { _tabs.TabPages.Remove(tab); view.Dispose(); tab.Dispose(); throw; }
+        catch
+        {
+            _ids.Remove(page);
+            _tabs.Items.Remove(page);
+            view.Dispose();
+            throw;
+        }
     }
     public Task SwitchTabAsync(string id, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
-        _tabs.SelectedTab = _tabs.TabPages.Cast<TabPage>().FirstOrDefault(t => t.Name == id) ?? throw new InvalidOperationException("Tab no longer exists.");
+        _tabs.SelectedItem = TabFor(id) ?? throw new InvalidOperationException("Tab no longer exists.");
         return Task.CompletedTask;
     }
     public Task CloseTabAsync(string id, CancellationToken ct)
@@ -165,12 +240,88 @@ internal sealed class BrowserWindow(string profile) : Form, IBrowserConnection
         if (_views.Remove(id, out var view))
         {
             if (_dialogs.Remove(id, out var dialog)) dialog.Deferral.Complete();
-            var tab = _tabs.TabPages.Cast<TabPage>().First(t => t.Name == id);
-            _tabs.TabPages.Remove(tab); view.Dispose(); tab.Dispose();
+            if (TabFor(id) is { } page) { _ids.Remove(page); _tabs.Items.Remove(page); }
+            view.Dispose();
         }
         return Task.CompletedTask;
     }
-    protected override void OnFormClosed(FormClosedEventArgs e)
-    { _lifetime.Cancel(); foreach (var view in _views.Values) view.Dispose(); _views.Clear(); base.OnFormClosed(e); }
-    public ValueTask DisposeAsync() { if (!_disposed) { _disposed = true; Close(); } return ValueTask.CompletedTask; }
+    private TabItem? TabFor(string id) => _ids.FirstOrDefault(entry => entry.Value == id).Key;
+    private void OnClosed(object? sender, EventArgs e)
+    {
+        _lifetime.Cancel();
+        foreach (var view in _views.Values) view.Dispose();
+        _views.Clear(); _ids.Clear();
+    }
+    public ValueTask DisposeAsync()
+    {
+        if (!_disposed)
+        {
+            _disposed = true;
+            if (Dispatcher.CheckAccess()) Close();
+            else Dispatcher.Invoke(Close);
+        }
+        return ValueTask.CompletedTask;
+    }
+
+    private const string ButtonStyle = """
+        <Style xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" TargetType="Button">
+          <Setter Property="Width" Value="30" />
+          <Setter Property="Height" Value="28" />
+          <Setter Property="Margin" Value="1,0" />
+          <Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets" />
+          <Setter Property="FontSize" Value="12" />
+          <Setter Property="Foreground" Value="#C3C3CC" />
+          <Setter Property="Cursor" Value="Hand" />
+          <Setter Property="Focusable" Value="False" />
+          <Setter Property="Template">
+            <Setter.Value>
+              <ControlTemplate TargetType="Button">
+                <Border x:Name="Surface" Background="Transparent" CornerRadius="6">
+                  <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Border>
+                <ControlTemplate.Triggers>
+                  <Trigger Property="IsMouseOver" Value="True">
+                    <Setter TargetName="Surface" Property="Background" Value="#2E2E36" />
+                    <Setter Property="Foreground" Value="White" />
+                  </Trigger>
+                </ControlTemplate.Triggers>
+              </ControlTemplate>
+            </Setter.Value>
+          </Setter>
+        </Style>
+        """;
+
+    private const string AddressStyle = """
+        <Style xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" TargetType="TextBox">
+          <Setter Property="SelectionBrush" Value="#4C8DFF" />
+          <Setter Property="FontFamily" Value="Segoe UI, Microsoft YaHei UI" />
+        </Style>
+        """;
+
+    private const string TabStyle = """
+        <Style xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" TargetType="TabItem">
+          <Setter Property="Foreground" Value="#B8B8C2" />
+          <Setter Property="FontSize" Value="12" />
+          <Setter Property="FontFamily" Value="Segoe UI, Microsoft YaHei UI" />
+          <Setter Property="Padding" Value="12,5" />
+          <Setter Property="Template">
+            <Setter.Value>
+              <ControlTemplate TargetType="TabItem">
+                <Border x:Name="Surface" Background="Transparent" CornerRadius="6,6,0,0" Margin="2,2,0,0" Padding="{TemplateBinding Padding}">
+                  <ContentPresenter ContentSource="Header" VerticalAlignment="Center" />
+                </Border>
+                <ControlTemplate.Triggers>
+                  <Trigger Property="IsMouseOver" Value="True">
+                    <Setter TargetName="Surface" Property="Background" Value="#26262D" />
+                  </Trigger>
+                  <Trigger Property="IsSelected" Value="True">
+                    <Setter TargetName="Surface" Property="Background" Value="#33333C" />
+                    <Setter Property="Foreground" Value="White" />
+                  </Trigger>
+                </ControlTemplate.Triggers>
+              </ControlTemplate>
+            </Setter.Value>
+          </Setter>
+        </Style>
+        """;
 }

@@ -184,4 +184,22 @@ describe('WebSocket bridge', () => {
     expect(reconnects).toHaveLength(1)
     vi.useRealTimers()
   })
+
+  it('uses the socket inside a WebView host when an explicit bridge address is present', async () => {
+    // The WPF GUI window wraps the page in WebView2, which exposes window.chrome.webview,
+    // but the backend lives in the terminal process: the explicit socket must win.
+    window.history.replaceState({}, '', '/?bridge=ws%3A%2F%2F127.0.0.1%3A4398%2Fbridge')
+    const { connectionState, invoke, isNativeHost } = await import('../src/bridge')
+    expect(host.chrome).toBeDefined()
+    expect(isNativeHost()).toBe(false)
+    expect(connectionState()).toBe('connecting')
+    const socket = FakeWebSocket.instances.at(-1)!
+    expect(socket.url).toBe('ws://127.0.0.1:4398/bridge')
+    socket.open()
+    const pending = invoke<string[]>('conversations.list')
+    expect(socket.sent).toHaveLength(1)
+    const request = JSON.parse(socket.sent[0]) as Request
+    socket.deliver(JSON.stringify({ id: request.id, type: 'response', result: ['ok'] }))
+    await expect(pending).resolves.toEqual(['ok'])
+  })
 })

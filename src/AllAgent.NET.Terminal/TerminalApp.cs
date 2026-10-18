@@ -184,6 +184,39 @@ internal static class TerminalApp
                     webUi = null;
                     return 0;
                 }
+                case "gui":
+                {
+                    try
+                    {
+                        if (!WebUiSession.AssetsAvailable) throw new InvalidOperationException("Web UI 资产缺失：" + WebUiSession.DefaultWebRoot + "。请重新构建后再试。");
+                        if (!GuiShell.Available) throw new InvalidOperationException("GUI 组件缺失：" + GuiShell.Path + "。请重新构建后再试。");
+                        if (args.GuiMode && !TerminalSession.GuiHost)
+                        {
+                            // Silent launch: a hidden copy of this host owns the window session, so the
+                            // terminal returns to the prompt immediately and the window outlives it.
+                            using var hidden = System.Diagnostics.Process.Start(TerminalSession.StartInfo(raw, "gui"))
+                                ?? throw new InvalidOperationException("无法启动 GUI 后台进程。");
+                            return 0;
+                        }
+                        if (!GuiShell.TryAcquireInstance(dataDir)) throw new InvalidOperationException("已有一个 AllAgent.NET 窗口在运行。");
+                        webUi = StartWebUi();
+                        await using var window = webUi;
+                        if (!TerminalSession.GuiHost) TerminalOutput.Write(new Panel(new Text(
+                            $"GUI 工作台已启动：{webUi.Url}\n工作区：{options.WorkspaceRoot}\n关闭窗口即退出；终端 Ctrl+C 亦可结束。")).Header("Web UI · GUI"));
+                        var exit = await GuiShell.RunAsync(
+                            GuiShell.Url(args.Get("gui-url"), webUi.Port), GuiShell.Title(options.WorkspaceRoot),
+                            GuiShell.CacheDirectory(args.SharedDirectory), args.Flags.Contains("gui-devtools"));
+                        webUi = null;
+                        return exit;
+                    }
+                    catch (Exception ex)
+                    {
+                        // The detached host has no console: a fatal error must surface as a dialog.
+                        if (!TerminalSession.GuiHost) throw;
+                        GuiShell.ShowFatal("AllAgent.NET 无法启动 GUI：" + ex.Message);
+                        return 1;
+                    }
+                }
                 case "tasks": await taskManager.ExecuteAsync(args.Positionals); return 0;
                 case "tools":
                 {
@@ -983,6 +1016,9 @@ internal static class TerminalApp
         allagent browser tutorial            详细连接教程
         allagent browser mode builtin|chromium
         allagent web-ui                       浏览器工作台：/web-ui 启动、/web-ui status、/web-ui stop
+        allagent -guimode                     原生窗口工作台：静默后台启动，关窗即退出
+        allagent gui [--gui-url URL]          前台运行同一个窗口（Ctrl+C 退出；--gui-url 指向 Vite 开发服务器）
+        allagent gui --gui-devtools           窗口内启用开发者工具
         allagent computer on|off|status        电脑操作开关（默认关闭）
         操作模式由 AI 根据任务自动选择；/computer-use 加载内置电脑操作技能
         allagent computer isolated URL Token文件路径（独立 Windows Worker 隧道）

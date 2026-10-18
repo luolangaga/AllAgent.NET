@@ -42,7 +42,9 @@ internal static class NativeFolderPicker
         _ = CoInitializeEx(IntPtr.Zero, ApartmentThreaded);
         try
         {
+            // GUI mode runs without a console; the picker is owned by the foreground window there.
             var owner = GetConsoleWindow();
+            if (owner == IntPtr.Zero) owner = GetForegroundWindow();
             if (owner != IntPtr.Zero) SetForegroundWindow(owner);
             return TryModern(title, owner) ?? Legacy(title, owner);
         }
@@ -202,6 +204,9 @@ internal static class NativeFolderPicker
 
     [DllImport("user32.dll")]
     private static extern bool SetForegroundWindow(IntPtr window);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
 
     [DllImport("ole32.dll")]
     private static extern int CoInitializeEx(IntPtr reserved, uint coInit);

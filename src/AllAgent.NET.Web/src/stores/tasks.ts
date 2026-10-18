@@ -7,6 +7,9 @@ export const useTasksStore = defineStore('tasks', () => {
   const tasks = ref<BackgroundTask[]>([])
   const loading = ref(false)
   const loaded = ref(false)
+  // Global task-detail modal: any surface (Tasks page, chat sub-agent cards) opens it by id,
+  // and the modal always renders the live task from this store.
+  const detailId = ref<string | null>(null)
 
   const activeTasks = computed(() => tasks.value.filter(task => taskIsActive(task.state)))
 
@@ -29,9 +32,12 @@ export const useTasksStore = defineStore('tasks', () => {
     return invoke<BackgroundTask>('tasks.get', { id })
   }
 
+  function openDetail(id: string) { detailId.value = id }
+  function closeDetail() { detailId.value = null }
+
   // Background children change state without a user-initiated stream; keep the
   // list and the sidebar badge in sync.
   bridgeEvents.on('tasks.updated', () => { void loadAll().catch(() => {}) })
 
-  return { tasks, loading, loaded, activeTasks, loadAll, cancel, detail }
+  return { tasks, loading, loaded, activeTasks, detailId, loadAll, cancel, detail, openDetail, closeDetail }
 })

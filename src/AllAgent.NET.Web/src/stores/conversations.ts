@@ -1,5 +1,5 @@
 import { defineStore, ref, computed } from '@/lib/store'
-import type { ContextUsage, Conversation, Message, TodoItem, ToolCall } from '@/types'
+import type { ContextUsage, Conversation, ImageAttachment, Message, TodoItem, ToolCall } from '@/types'
 import { bridgeEvents, invoke, type BridgeEvents } from '@/bridge'
 import { parseObject, restoreMessages, toolFailed } from '@/utils/execution'
 
@@ -374,15 +374,16 @@ export const useConversationsStore = defineStore('conversations', () => {
     if (streamingMessageId.value === assistantId) detachStream = detach
   }
 
-  async function sendMessage(content: string, apiConfigId: string, thinkingEnabled = false, thinkingBudget = 8000, model?: string, reasoningEffort?: string) {
+  async function sendMessage(content: string, apiConfigId: string, thinkingEnabled = false, thinkingBudget = 8000, model?: string, reasoningEffort?: string, images?: ImageAttachment[], prompt?: string) {
     if (sending.value || streamingMessageId.value) throw new Error('已有对话正在生成')
     if (!content.trim()) throw new Error('消息不能为空')
+    const attachments = images?.length ? images : undefined
     sending.value = true
     let conversationId = ''
     let assistantId = ''
     try {
       conversationId = await ensureConversation()
-      const userMessage: Message = { id: crypto.randomUUID(), role: 'user', content, createdAt: new Date().toISOString(), status: 'done' }
+      const userMessage: Message = { id: crypto.randomUUID(), role: 'user', content, createdAt: new Date().toISOString(), status: 'done', images: attachments }
       assistantId = crypto.randomUUID()
       const assistantMessage: Message = { id: assistantId, role: 'assistant', content: '', createdAt: new Date().toISOString(), status: 'streaming', toolCalls: [] }
       selectionVersion++
@@ -399,11 +400,13 @@ export const useConversationsStore = defineStore('conversations', () => {
         streamId = await invoke<string>('chat.startStream', {
           conversationId,
           message: content,
+          prompt: prompt ?? null,
           apiConfigId,
           thinkingEnabled,
           thinkingBudget,
           model: model ?? null,
           reasoningEffort: reasoningEffort ?? null,
+          images: attachments ?? null,
         })
       } catch (error) {
         bridgeEvents.off('*', buffer)

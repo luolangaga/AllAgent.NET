@@ -9,6 +9,7 @@
     <AssemblyName>allagent</AssemblyName>
     <CopyAgentSandbox>true</CopyAgentSandbox>
     <CopyBrowserWorker>true</CopyBrowserWorker>
+    <CopyGuiShell>true</CopyGuiShell>
     <CopyComputerWorker>true</CopyComputerWorker>
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>allagent</ToolCommandName>
@@ -28,13 +29,14 @@
     <ProjectReference Include="../../plugins/AllAgent.NET.CommandCode/AllAgent.NET.CommandCode.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
     <None Include="../../docs/nuget-tool.zh-CN.md" Pack="true" PackagePath="/README.md" />
     <ProjectReference Include="../AllAgent.NET.Core/AllAgent.NET.Core.csproj" />
+    <ProjectReference Include="../AllAgent.NET.Gui/AllAgent.NET.Gui.csproj" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" SetTargetFramework="TargetFramework=net10.0-windows" />
     <ProjectReference Include="../AllAgent.NET.ComputerUse/AllAgent.NET.ComputerUse.csproj" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" SetTargetFramework="TargetFramework=net10.0-windows" />
     <ProjectReference Include="../AllAgent.NET.Sandbox/AllAgent.NET.Sandbox.csproj" ReferenceOutputAssembly="false" />
     <PackageReference Include="Spectre.Console" Version="0.57.2" />
   </ItemGroup>
   <!-- Web workspace assets: built by Vite, served by /web-ui (and the web-ui command) from web/ next to the host. -->
   <PropertyGroup>
-    <WebUiSourceDirectory>$(MSBuildThisFileDirectory)..\AllAgent.NET.Desktop\Assets\web\</WebUiSourceDirectory>
+    <WebUiSourceDirectory>$(MSBuildThisFileDirectory)..\AllAgent.NET.Web\dist\</WebUiSourceDirectory>
   </PropertyGroup>
   <!-- Build React frontend before dotnet build (skip in CI with -p:SkipWebBuild=true). -->
   <Target Name="BuildWebFrontend" BeforeTargets="BeforeBuild"

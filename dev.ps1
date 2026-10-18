@@ -1,8 +1,10 @@
-# Start Vite dev server and Avalonia app together
+# Start the Vite dev server and the native GUI window together.
+$root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $viteJob = Start-Job -ScriptBlock {
-    Set-Location "C:\Users\luolan\AllAgent.NET\src\AllAgent.NET.Web"
+    param($web)
+    Set-Location $web
     npm run dev
-}
+} -ArgumentList (Join-Path $root 'src\AllAgent.NET.Web')
 
 Write-Host "Waiting for Vite to start..." -ForegroundColor Cyan
 Start-Sleep -Seconds 4
@@ -15,9 +17,9 @@ try {
     Write-Host "Vite may still be starting..." -ForegroundColor Yellow
 }
 
-Write-Host "Starting AllAgent.NET desktop app..." -ForegroundColor Cyan
-Set-Location "C:\Users\luolan\AllAgent.NET"
-dotnet run --project src/AllAgent.NET.Desktop/AllAgent.NET.Desktop.csproj -p:SkipWebBuild=true
+Write-Host "Starting the AllAgent.NET window (close it to stop)..." -ForegroundColor Cyan
+Set-Location $root
+dotnet run --project src/AllAgent.NET.Terminal -- gui --gui-url http://127.0.0.1:5173/
 
 # Cleanup
 Stop-Job $viteJob

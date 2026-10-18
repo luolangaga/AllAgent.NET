@@ -1,6 +1,8 @@
 import { defineStore, ref } from '@/lib/store'
-import type { InstalledPluginInfo, PluginAuthInfo, PluginPackageInfo, PluginStatusInfo, PluginsSnapshot, HookInfo } from '@/types'
+import type { InstalledPluginInfo, PluginAuthInfo, PluginPackageInfo, PluginSearchResult, PluginStatusInfo, PluginsSnapshot, HookInfo } from '@/types'
 import { invoke } from '@/bridge'
+
+const PAGE_SIZE = 10
 
 export const usePluginsStore = defineStore('plugins', () => {
   const plugins = ref<PluginStatusInfo[]>([])
@@ -13,6 +15,9 @@ export const usePluginsStore = defineStore('plugins', () => {
   const searching = ref(false)
   const searchResults = ref<PluginPackageInfo[]>([])
   const query = ref('')
+  const page = ref(0)
+  const totalHits = ref(0)
+  const searched = ref(false)
 
   async function loadAll() {
     try {
@@ -47,11 +52,15 @@ export const usePluginsStore = defineStore('plugins', () => {
     await run(() => invoke('plugins.remove', { packageId }))
   }
 
-  async function search(text: string) {
+  async function search(text: string, targetPage = 0) {
     searching.value = true
     query.value = text
     try {
-      searchResults.value = await invoke<PluginPackageInfo[]>('plugins.search', { query: text })
+      const result = await invoke<PluginSearchResult>('plugins.search', { query: text, skip: targetPage * PAGE_SIZE, take: PAGE_SIZE })
+      searchResults.value = result.packages ?? []
+      totalHits.value = result.totalHits ?? searchResults.value.length
+      page.value = targetPage
+      searched.value = true
     } finally {
       searching.value = false
     }
@@ -69,5 +78,5 @@ export const usePluginsStore = defineStore('plugins', () => {
     await run(() => invoke('plugins.setHookEnabled', { name, enabled }))
   }
 
-  return { plugins, providers, authentication, hooks, loaded, available, busy, searching, searchResults, query, loadAll, setEnabled, remove, search, install, importPackage, setHook }
+  return { plugins, providers, authentication, hooks, loaded, available, busy, searching, searchResults, query, page, pageSize: PAGE_SIZE, totalHits, searched, loadAll, setEnabled, remove, search, install, importPackage, setHook }
 })

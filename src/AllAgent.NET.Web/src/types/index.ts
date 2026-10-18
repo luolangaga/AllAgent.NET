@@ -54,6 +54,22 @@ export interface Message {
   /** Ordered live output: text stays at the point where it was emitted. */
   parts?: MessagePart[]
   iteration?: { current: number; maximum: number; toolCalls: number }
+  /** Images attached to a user turn; mirrors the host's ImageAttachment record. */
+  images?: ImageAttachment[] | null
+}
+
+/** Inline image carried by a user message. */
+export interface ImageAttachment {
+  name: string
+  mediaType: string
+  base64: string
+}
+
+/** Workspace-relative path offered by the composer's `@` picker. */
+export interface WorkspaceFileEntry {
+  path: string
+  name: string
+  isDirectory: boolean
 }
 
 export type ToolCallStatus = 'running' | 'done' | 'error' | 'cancelled'
@@ -249,6 +265,8 @@ export interface PluginStatusInfo {
   version: string
   enabled: boolean
   error?: string | null
+  tools?: string[] | null
+  commands?: string[] | null
 }
 
 export interface PluginPackageInfo {
@@ -257,6 +275,11 @@ export interface PluginPackageInfo {
   description: string
   authors: string
   downloads: number
+}
+
+export interface PluginSearchResult {
+  totalHits: number
+  packages: PluginPackageInfo[]
 }
 
 export interface PluginAuthInfo {
@@ -281,4 +304,54 @@ export interface InstalledPluginInfo {
   version: string
   directory: string
   enabled: boolean
+}
+
+// Account login state from the terminal /login list (OAuth providers, paste-in keys, API presets).
+export interface AuthProviderInfo {
+  id: string
+  name: string
+  kind: 'oauth' | 'interactive' | 'apikey' | string
+  loggedIn: boolean
+  account: string
+  message: string
+  modelConnectionAvailable: boolean
+  inputPrompt?: string | null
+  providerId?: string | null
+  configId?: string | null
+  pending?: boolean
+}
+
+// Tool catalog entry with source attribution (host / plugin package / MCP server / skill).
+export interface ToolInfo {
+  name: string
+  description: string
+  risk: 'read' | 'write' | 'execute' | string
+  parametersJson: string
+  source: 'host' | 'plugin' | 'mcp' | 'skill' | string
+  owner: string
+}
+
+export interface ToolsSnapshot {
+  tools: ToolInfo[]
+  errors: string[]
+}
+
+// Web command catalog projected from the terminal's slash commands, plugin commands and skills.
+export interface CommandInfo {
+  text: string
+  description: string
+  usage?: string
+  advanced?: boolean
+  isSkill?: boolean
+  aliases?: string
+  terminalOnly?: boolean
+  target?: string
+}
+
+// Expansion of a user-invocable skill: the instructions wrapped around the task arguments,
+// plus any images referenced by those arguments. Only the prompt goes to the model — the
+// transcript keeps the original slash command.
+export interface SkillInvokeResult {
+  text: string
+  images: ImageAttachment[]
 }

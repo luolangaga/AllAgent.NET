@@ -6,6 +6,7 @@ import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from './
 import { Badge } from './ui/badge'
 import { CodeBlock } from './ui/code-block'
 import { Alert } from './ui/alert'
+import { SubagentCard } from './SubagentCard'
 import type { ToolCall, ToolCallStatus } from '@/types'
 import { parseArguments, parseObject } from '@/utils/execution'
 
@@ -120,6 +121,8 @@ function TraceItem({ call }: { call: ToolCall }) {
 export function ToolTrace({ calls, defaultOpen }: { calls: ToolCall[]; defaultOpen?: string[] }) {
   if (!calls.length) return null
   return <Accordion className="tool-trace" defaultValue={defaultOpen} multiple>
-    {calls.map(call => <TraceItem key={call.id} call={call} />)}
+    {calls.map(call => call.name === 'subagent'
+      ? <SubagentCard call={call} key={call.id} />
+      : <TraceItem call={call} key={call.id} />)}
   </Accordion>
 }

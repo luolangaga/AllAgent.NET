@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Cpu, Pencil, Plus, Trash2, Wand2 } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Cpu, KeyRound, LogIn, Pencil, Plus, Trash2, Wand2 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/b-button'
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
@@ -7,12 +7,14 @@ import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/b-switch'
 import { Confirm, Field, Modal, Picker, TextArea } from '@/components/shared'
 import { EmptyState, PageShell } from '@/components/PageShell'
+import { bridgeEvents } from '@/bridge'
 import { formatTokens, providerLabel } from '@/lib/format'
 import { useStore } from '@/lib/store'
 import { useApiConfigsStore } from '@/stores/apiConfigs'
+import { useAuthStore } from '@/stores/auth'
 import { useNoticesStore } from '@/stores/ui'
 import { usePluginsStore } from '@/stores/plugins'
-import type { ApiConfig, ReasoningOptions } from '@/types'
+import type { ApiConfig, AuthProviderInfo, ReasoningOptions } from '@/types'
 
 const providers = [
   { value: 'openai', label: 'OpenAI', url: 'https://api.openai.com/v1' },
@@ -32,6 +34,7 @@ const defaultConfig: ApiConfig = {
 export default function Models() {
   const store = useStore(useApiConfigsStore)
   const plugins = useStore(usePluginsStore)
+  const auth = useStore(useAuthStore)
   const notices = useStore(useNoticesStore)
   const [editing, setEditing] = useState<ApiConfig | null>(null)
   const [modelsText, setModelsText] = useState('')
@@ -39,6 +42,12 @@ export default function Models() {
   const [remove, setRemove] = useState<ApiConfig | null>(null)
   const [busy, setBusy] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
+  const [interactive, setInteractive] = useState<AuthProviderInfo | null>(null)
+  const [secret, setSecret] = useState('')
+
+  useEffect(() => { if (!auth.loaded) void auth.loadAll() }, [])
+  // Login flows write account model catalogs into ApiConfigs; refresh the cards when they settle.
+  useEffect(() => { bridgeEvents.on('auth.changed', () => { void store.loadAll().catch(() => {}) }) }, [])
 
   const update = (patch: Partial<ApiConfig>) => setEditing(current => (current ? { ...current, ...patch } : current))
 
@@ -66,6 +75,14 @@ export default function Models() {
     if (config.id) {
       void store.reasoningOptions(config.id).then(setReasoning).catch(() => setReasoning(null))
     }
+  }
+
+  // API-key presets in the account list open the matching config, or a prefilled new one.
+  function openPreset(provider: AuthProviderInfo) {
+    const existing = provider.configId ? store.configs.find(config => config.id === provider.configId) : undefined
+    if (existing) { openEditor(existing); return }
+    const preset = providers.find(item => item.value === provider.providerId)
+    openEditor({ ...defaultConfig, providerId: provider.providerId ?? 'openai', baseUrl: preset?.url ?? defaultConfig.baseUrl })
   }
 
   async function run(action: () => Promise<unknown>) {
@@ -114,6 +131,57 @@ export default function Models() {
       <span>{store.configs.length} 个配置 · {store.configs.filter(config => config.isEnabled).length} 个已启用</span>
       <span>OpenAI · Anthropic · Gemini · Ollama 兼容端点 · 支持插件提供商</span>
     </div>
+    {auth.available ? <Card className="list-card account-card">
+      <div className="list-row">
+        <div className="resource-icon"><KeyRound size={20} /></div>
+        <div className="list-content">
+          <div className="resource-title">
+            <h3>账号登录</h3>
+            <Badge size="sm" variant="dot">{auth.providers.filter(provider => provider.loggedIn).length} 个可用</Badge>
+          </div>
+          <p className="list-description">与终端 /login 列表一致：OAuth 账号点击登录后在本机浏览器完成授权；API Key 型提供商直接填写密钥。登录成功后会自动接入账号模型目录。</p>
+        </div>
+      </div>
+      <div className="divide-list">{auth.providers.map(provider => <div className="list-row" key={provider.id}>
+        <div className="list-content">
+          <div className="resource-title">
+            <h3>{provider.name}</h3>
+            <Badge color="gray" size="sm" variant="dot">{provider.kind === 'oauth' ? 'OAuth 账号' : provider.kind === 'interactive' ? '插件 · Key' : 'API Key'}</Badge>
+            {provider.loggedIn
+              ? <Badge color="green" size="sm" variant="dot">已登录</Badge>
+              : <Badge color="gray" size="sm">{provider.kind === 'apikey' ? '未配置' : '未登录'}</Badge>}
+            {provider.pending ? <Badge color="blue" size="sm" variant="dot">等待授权</Badge> : null}
+          </div>
+          <p className="list-description">{[provider.account, provider.message].filter(Boolean).join(' · ') || (provider.loggedIn ? '已就绪' : '尚未登录')}</p>
+        </div>
+        <div className="list-actions">
+          {provider.kind === 'apikey' ? <Button
+            disabled={auth.busyId === provider.id}
+            onClick={() => openPreset(provider)}
+            size="sm"
+            variant="outline"
+          >{provider.loggedIn ? '管理' : '填写 API Key'}</Button>
+            : provider.loggedIn ? <Button
+              disabled={auth.busyId === provider.id}
+              onClick={() => void run(() => auth.logout(provider.id)).then(ok => { if (ok) notices.notify('已退出登录', provider.name, 'success') })}
+              size="sm"
+              variant="ghost"
+            >退出登录</Button>
+              : <Button
+                disabled={auth.busyId === provider.id || provider.pending}
+                icon={<LogIn size={14} />}
+                onClick={() => {
+                  if (provider.kind === 'interactive') { setSecret(''); setInteractive(provider); return }
+                  void run(() => auth.login(provider.id)).then(ok => {
+                    if (ok) notices.notify('已开始登录', '如已打开浏览器请完成授权；完成后状态会自动刷新。')
+                  })
+                }}
+                size="sm"
+                variant="outline"
+              >{provider.pending ? '等待授权…' : '登录'}</Button>}
+        </div>
+      </div>)}</div>
+    </Card> : null}
     {!store.configs.length
       ? <EmptyState title="连接你的第一个模型">填写 API 地址、密钥与模型名称，然后回到对话页开始工作。</EmptyState>
       : <div className="resource-grid">{store.configs.map(config => <Card key={config.id}>
@@ -289,5 +357,30 @@ export default function Models() {
       onConfirm={() => run(() => store.remove(remove.id))}
       title={`删除「${remove.displayName}」？`}
     /> : null}
+    {interactive ? <Modal
+      footer={<>
+        <Button onClick={() => setInteractive(null)} variant="outline">取消</Button>
+        <Button
+          disabled={!secret.trim()}
+          loading={auth.busyId === interactive.id}
+          onClick={() => void run(() => auth.loginInput(interactive.id, secret.trim())).then(ok => {
+            if (ok) { setInteractive(null); notices.notify('登录成功', interactive.name, 'success') }
+          })}
+        >验证并保存</Button>
+      </>}
+      onClose={() => setInteractive(null)}
+      size="sm"
+      title={`登录 ${interactive.name}`}
+    >
+      <Field
+        description="密钥仅保存在本机凭据库（Windows DPAPI 加密）。"
+        label={interactive.inputPrompt ?? 'API Key'}
+        onChange={setSecret}
+        placeholder="粘贴密钥"
+        required
+        type="password"
+        value={secret}
+      />
+    </Modal> : null}
   </PageShell>
 }

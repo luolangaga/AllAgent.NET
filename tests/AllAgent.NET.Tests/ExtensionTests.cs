@@ -94,12 +94,22 @@ public sealed class ExtensionTests
     [Fact]
     public async Task NuGetDiscoveryUsesV3ResourcesAndAcceptedPluginTag()
     {
-        using var w = new TestWorkspace(); using var client = new HttpClient(new FixtureHandler(request => request.RequestUri!.AbsolutePath == "/index.json" ? """
-            {"resources":[{"@type":"SearchQueryService/3.5.0","@id":"https://fixture/query"}]}
-            """ : """
-            {"data":[{"id":"valid","version":"1.0.0","description":"plugin","authors":["author"],"tags":["AllAgent.NET"],"totalDownloads":2},{"id":"wrong","version":"1.0.0","description":"not plugin","tags":["AllAgentOther"]}]}
-            """));
-        var result = await new NuGetPluginInstaller(w.Root, client, "https://fixture/index.json").SearchAsync("tools"); Assert.Equal("valid", Assert.Single(result).Id);
+        using var w = new TestWorkspace();
+        string? searchQuery = null;
+        using var client = new HttpClient(new FixtureHandler(request =>
+        {
+            if (request.RequestUri!.AbsolutePath == "/index.json") return """{"resources":[{"@type":"SearchQueryService/3.5.0","@id":"https://fixture/query"}]}""";
+            searchQuery = Uri.UnescapeDataString(request.RequestUri.Query);
+            return """{"totalHits":1,"data":[{"id":"valid","version":"1.0.0","description":"plugin","authors":["author"],"tags":["AllAgent.NET"],"totalDownloads":2},{"id":"wrong","version":"1.0.0","description":"not plugin","tags":["AllAgentOther"]}]}""";
+        }));
+        var result = await new NuGetPluginInstaller(w.Root, client, "https://fixture/index.json").SearchAsync("tools");
+        Assert.Equal("valid", Assert.Single(result.Packages).Id);
+        Assert.Equal(1, result.TotalHits);
+        // Parentheses collapse the tag field syntax into an empty full-text search on nuget.org.
+        Assert.DoesNotContain("(", searchQuery!);
+        Assert.Contains("tags:AllAgent.NET", searchQuery);
+        Assert.Contains("tags:LanAgent", searchQuery);
+        Assert.Contains("tools", searchQuery);
     }
     [Fact]
     public async Task LegacyLanAgentTagRemainsValidForImportAndDiscovery()
@@ -117,10 +127,11 @@ public sealed class ExtensionTests
             var query = Uri.UnescapeDataString(request.RequestUri.Query);
             Assert.Contains("AllAgent.NET", query);
             Assert.Contains("LanAgent", query);
-            return """{"data":[{"id":"legacy","version":"1.0.0","description":"legacy","authors":["author"],"tags":["LanAgent"],"totalDownloads":1}]}""";
+            Assert.DoesNotContain("(", query);
+            return """{"totalHits":1,"data":[{"id":"legacy","version":"1.0.0","description":"legacy","authors":["author"],"tags":["LanAgent"],"totalDownloads":1}]}""";
         }));
         var result = await new NuGetPluginInstaller(w.Root, client, "https://fixture/index.json").SearchAsync();
-        Assert.Equal("legacy", Assert.Single(result).Id);
+        Assert.Equal("legacy", Assert.Single(result.Packages).Id);
     }
 
     [Fact]

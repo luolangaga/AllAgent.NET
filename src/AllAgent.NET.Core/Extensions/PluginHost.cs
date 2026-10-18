@@ -7,7 +7,7 @@ using AllAgent.NET.Core.Tools;
 namespace AllAgent.NET.Core.Extensions;
 
 public sealed record InstalledPlugin(string PackageId, string Version, string Directory, bool Enabled = true);
-public sealed record PluginStatus(string Id, string Name, string PackageId, string Version, bool Enabled, string? Error);
+public sealed record PluginStatus(string Id, string Name, string PackageId, string Version, bool Enabled, string? Error, IReadOnlyList<string>? Tools = null, IReadOnlyList<string>? Commands = null);
 
 public sealed class PluginHost : IAsyncDisposable
 {
@@ -50,7 +50,14 @@ public sealed class PluginHost : IAsyncDisposable
             }
         }
     }
-    public IReadOnlyList<PluginStatus> Status => Installed.Select(p => { lock (_sync) { var loaded = _loaded.FirstOrDefault(l => l.Package.PackageId.Equals(p.PackageId, StringComparison.OrdinalIgnoreCase)); return new PluginStatus(loaded?.Plugin.Id ?? p.PackageId, loaded?.Plugin.Name ?? p.PackageId, p.PackageId, p.Version, p.Enabled, _errors.GetValueOrDefault(p.PackageId)); } }).ToArray();
+    public IReadOnlyList<PluginStatus> Status => Installed.Select(p => { lock (_sync) { var loaded = _loaded.FirstOrDefault(l => l.Package.PackageId.Equals(p.PackageId, StringComparison.OrdinalIgnoreCase)); return new PluginStatus(loaded?.Plugin.Id ?? p.PackageId, loaded?.Plugin.Name ?? p.PackageId, p.PackageId, p.Version, p.Enabled, _errors.GetValueOrDefault(p.PackageId),
+        loaded == null ? [] : loaded.Context.Tools.SelectMany(t => t.Definitions).Select(d => d.Name).ToArray(),
+        loaded == null ? [] : loaded.Context.Commands.Select(c => c.Name).ToArray()); } }).ToArray();
+    /// <summary>Every loaded plugin tool with the package it belongs to, for source attribution in tool catalogs.</summary>
+    public IReadOnlyList<(string PackageId, AgentToolDescriptor Tool)> PluginTools
+    {
+        get { lock (_sync) return _loaded.SelectMany(l => l.Context.Tools.SelectMany(t => t.Definitions).Select(d => (l.Package.PackageId, d))).ToArray(); }
+    }
     public IReadOnlyList<IAiProvider> Providers { get { lock (_sync) return _loaded.SelectMany(l => l.Context.Providers).ToArray(); } }
     public IReadOnlyList<ModelFooterProvider> FooterProviders { get { lock (_sync) return _loaded.SelectMany(l => l.Context.FooterProviders).ToArray(); } }
     public IReadOnlyList<PluginCommand> Commands { get { lock (_sync) return _loaded.SelectMany(l => l.Context.Commands).ToArray(); } }

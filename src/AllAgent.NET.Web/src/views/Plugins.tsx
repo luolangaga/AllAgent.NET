@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Puzzle, Search, Trash2, Upload } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Puzzle, Search, Trash2, Upload } from 'lucide-react'
 import { Alert } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/b-button'
@@ -11,7 +11,7 @@ import { EmptyState, PageShell } from '@/components/PageShell'
 import { useStore } from '@/lib/store'
 import { usePluginsStore } from '@/stores/plugins'
 import { useNoticesStore } from '@/stores/ui'
-import type { PluginStatusInfo } from '@/types'
+import type { PluginPackageInfo, PluginStatusInfo } from '@/types'
 
 function readBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -27,8 +27,11 @@ export default function Plugins() {
   const notices = useStore(useNoticesStore)
   const [query, setQuery] = useState('')
   const [remove, setRemove] = useState<PluginStatusInfo | null>(null)
+  const [install, setInstall] = useState<PluginPackageInfo | null>(null)
 
   useEffect(() => { void store.loadAll() }, [])
+
+  const pages = Math.max(1, Math.ceil(store.totalHits / store.pageSize))
 
   async function run(action: () => Promise<unknown>, success?: string) {
     try {
@@ -68,6 +71,8 @@ export default function Plugins() {
               {plugin.error ? <Badge color="red" size="sm" variant="dot">加载失败</Badge> : null}
             </div>
             {plugin.error ? <Alert appearance="warning" dismissible={false} message={plugin.error} timeout={0} title="插件错误" /> : null}
+            {plugin.tools?.length ? <p className="list-description list-detail-line">工具：{plugin.tools.join(' · ')}</p> : null}
+            {plugin.commands?.length ? <p className="list-description list-detail-line">命令：{plugin.commands.map(name => `/ext ${name}`).join(' · ')}</p> : null}
           </div>
           <div className="list-actions">
             <Switch
@@ -115,8 +120,9 @@ export default function Plugins() {
         <div className="plugin-search">
           <Input
             aria-label="搜索插件"
+            onKeyDown={event => { if (event.key === 'Enter') void run(() => store.search(query.trim())) }}
             onValueChange={setQuery}
-            placeholder="搜索插件包，例如 commandcode、workbuddy…"
+            placeholder="搜索插件包，例如 commandcode、workbuddy；留空浏览全部"
             size="sm"
             value={query}
           />
@@ -128,24 +134,49 @@ export default function Plugins() {
             variant="outline"
           >搜索</Button>
         </div>
-        {store.searchResults.length > 0 ? <div className="divide-list">{store.searchResults.map(pkg => <div className="list-row" key={`${pkg.id}@${pkg.version}`}>
-          <div className="list-content">
-            <div className="resource-title">
-              <h3 className="mono">{pkg.id}</h3>
-              <Badge size="sm" variant="dot">{pkg.version}</Badge>
-              {pkg.authors ? <Badge color="gray" size="sm" variant="dot">{pkg.authors}</Badge> : null}
+        {store.searchResults.length > 0 ? <div className="divide-list">{store.searchResults.map(pkg => {
+          const installed = store.plugins.some(plugin => plugin.packageId.toLowerCase() === pkg.id.toLowerCase())
+          return <div className="list-row" key={`${pkg.id}@${pkg.version}`}>
+            <div className="list-content">
+              <div className="resource-title">
+                <h3 className="mono">{pkg.id}</h3>
+                <Badge size="sm" variant="dot">{pkg.version}</Badge>
+                {pkg.authors ? <Badge color="gray" size="sm" variant="dot">{pkg.authors}</Badge> : null}
+                {installed ? <Badge color="green" size="sm" variant="dot">已安装</Badge> : null}
+                {pkg.downloads > 0 ? <Badge color="gray" size="sm">{pkg.downloads.toLocaleString('zh')} 次下载</Badge> : null}
+              </div>
+              <p className="list-description">{pkg.description || '暂无描述'}</p>
             </div>
-            <p className="list-description">{pkg.description || '暂无描述'}</p>
+            <div className="list-actions">
+              <Button
+                disabled={store.busy}
+                onClick={() => setInstall(pkg)}
+                size="sm"
+                variant="outline"
+              >{installed ? '重新安装' : '安装'}</Button>
+            </div>
           </div>
-          <div className="list-actions">
-            <Button
-              disabled={store.busy}
-              onClick={() => void run(() => store.install(pkg.id, pkg.version), `已安装 ${pkg.id}`)}
-              size="sm"
-              variant="outline"
-            >安装</Button>
-          </div>
-        </div>)}</div> : store.query ? <p className="list-description plugin-empty">没有匹配“{store.query}”的插件包。</p> : null}
+        })}</div> : store.searched ? <p className="list-description plugin-empty">
+          {store.query ? `没有匹配“${store.query}”的插件包。` : '还没有发布带 AllAgent.NET / LanAgent 标签的插件包。'}
+        </p> : null}
+        {store.searched && store.totalHits > 0 ? <div className="plugin-pager">
+          <Button
+            disabled={store.page <= 0 || store.searching}
+            icon={<ChevronLeft size={14} />}
+            onClick={() => void run(() => store.search(store.query, store.page - 1))}
+            size="sm"
+            variant="ghost"
+          >上一页</Button>
+          <span className="plugin-pager-status">共 {store.totalHits} 个包 · 第 {store.page + 1} / {pages} 页</span>
+          <Button
+            disabled={store.page >= pages - 1 || store.searching}
+            icon={<ChevronRight size={14} />}
+            iconLabel="下一页"
+            onClick={() => void run(() => store.search(store.query, store.page + 1))}
+            size="sm"
+            variant="ghost"
+          >下一页</Button>
+        </div> : null}
       </Card>
 
       <Card className="list-card">
@@ -176,10 +207,18 @@ export default function Plugins() {
     </>}
 
     {remove ? <Confirm
+      confirmLabel="卸载"
       description="插件会先停用再移出清单；文件保留在共享目录以便恢复。"
       onClose={() => setRemove(null)}
       onConfirm={() => run(() => store.remove(remove.packageId), '插件已卸载')}
       title={`卸载插件「${remove.name}」？`}
+    /> : null}
+    {install ? <Confirm
+      confirmLabel="安装"
+      description={`${install.version} · 安装后会立即启用：DLL 将以当前用户权限运行；AllAgent.NET 标签不代表官方认证。`}
+      onClose={() => setInstall(null)}
+      onConfirm={() => run(() => store.install(install.id, install.version), `已安装 ${install.id}`).then(() => setInstall(null))}
+      title={`安装并启用 ${install.id}？`}
     /> : null}
   </PageShell>
 }

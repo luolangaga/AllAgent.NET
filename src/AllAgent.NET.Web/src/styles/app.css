@@ -331,7 +331,9 @@ nav { display: flex; flex-direction: column; gap: 1px; }
 
 .chat { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .chat-scroll { overflow-y: auto; flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.messages { width: min(840px, 100%); margin: 0 auto; padding: 18px 24px 8px; display: flex; flex-direction: column; }
+/* `margin-top: auto` keeps short transcripts pinned to the bottom of the scroll area the
+   way the terminal does; once the content overflows the auto margin collapses to 0. */
+.messages { width: min(840px, 100%); margin: auto auto 0; padding: 18px 24px 8px; display: flex; flex-direction: column; flex-shrink: 0; }
 .conversation-heading {
   display: flex; justify-content: space-between; align-items: flex-end; gap: 14px;
   border-bottom: 1px solid var(--border); padding-bottom: 10px; margin-bottom: 10px;
@@ -386,6 +388,34 @@ nav { display: flex; flex-direction: column; gap: 1px; }
 }
 .tool-child { margin-left: 12px; padding-left: 10px; border-left: 2px solid color-mix(in oklab, var(--border) 75%, transparent); }
 
+/* Sub-agent calls get their own card: live step preview, click through to the task dialog. */
+.subagent-card {
+  margin: 6px 0 10px; max-width: 560px; overflow: hidden;
+  border: 1px solid var(--border); border-radius: 14px;
+  background: color-mix(in oklab, var(--surface) 96%, transparent);
+}
+.subagent-card-head {
+  display: flex; align-items: center; gap: 8px; padding: 9px 12px;
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 55%, transparent);
+}
+.subagent-title { font-size: 12.5px; font-weight: 600; letter-spacing: -0.01em; }
+.subagent-count { margin-left: auto; font-size: 11px; color: var(--muted-foreground); }
+.subagent-note { margin-left: auto; font-size: 11px; color: var(--destructive); }
+.subagent-rows { display: flex; flex-direction: column; }
+.subagent-row {
+  display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
+  padding: 9px 12px; border: none; background: transparent; color: inherit; font: inherit;
+}
+button.subagent-row { cursor: pointer; }
+button.subagent-row:hover { background: color-mix(in oklab, var(--muted) 62%, transparent); }
+.subagent-row + .subagent-row { border-top: 1px solid color-mix(in oklab, var(--border) 40%, transparent); }
+.subagent-row-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.subagent-row-title { font-size: 12.5px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.subagent-row-detail { font-size: 11px; color: var(--muted-foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.subagent-state { flex-shrink: 0; font-size: 11px; color: var(--muted-foreground); }
+.subagent-time { flex-shrink: 0; font-size: 10.5px; color: color-mix(in oklab, var(--muted-foreground) 75%, transparent); }
+.subagent-chevron { flex-shrink: 0; color: color-mix(in oklab, var(--muted-foreground) 65%, transparent); }
+
 .chat > .todo-bar { width: min(840px, 100%); margin: 0 auto; padding: 10px 24px 0; flex-shrink: 0; }
 .todo-header {
   display: flex; align-items: center; gap: 10px; width: 100%;
@@ -409,7 +439,7 @@ nav { display: flex; flex-direction: column; gap: 1px; }
 .todo-empty { font-size: 12.5px; color: var(--muted-foreground); margin: 6px 0; }
 
 .composer-wrap { flex-shrink: 0; width: min(840px, 100%); margin: 0 auto; padding: 8px 24px 14px; display: flex; flex-direction: column; gap: 8px; }
-.composer-area { display: flex; flex-direction: column; }
+.composer-area { display: flex; flex-direction: column; position: relative; }
 .composer-area [aria-label="Use voice input"] { display: none; }
 .composer-meta {
   display: flex; justify-content: space-between; align-items: center; gap: 12px;
@@ -491,6 +521,145 @@ nav { display: flex; flex-direction: column; gap: 1px; }
 .markdown hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
 .hljs { background: transparent !important; }
 .dark .hljs { color: var(--foreground); }
+
+/* ── Tool registry ───────────────────────────────────────────────────────── */
+
+.tool-filters { display: flex; flex-direction: column; gap: 10px; padding: 14px 20px 12px; }
+.tool-filters [data-slot="input-shell"] { width: 100%; }
+.tool-source-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.tool-row .list-description { margin-top: 3px; }
+.tool-params { margin-top: 8px; }
+.tool-params summary {
+  cursor: pointer; font-size: 11px; color: var(--muted-foreground); width: fit-content;
+  padding: 2px 0; list-style: none; display: inline-flex; align-items: center; gap: 5px;
+}
+.tool-params summary::before { content: "▸"; font-size: 10px; transition: transform 0.15s ease; }
+.tool-params[open] summary::before { transform: rotate(90deg); }
+.tool-params summary:hover { color: var(--foreground); }
+.tool-params [data-slot="code-block"] { margin-top: 6px; }
+.list-detail-line { margin-top: 3px; }
+
+/* ── Plugin store pager ──────────────────────────────────────────────────── */
+
+.plugin-pager {
+  display: flex; align-items: center; justify-content: center; gap: 14px;
+  padding: 10px 20px 16px; border-top: 1px solid color-mix(in oklab, var(--border) 80%, transparent);
+}
+.plugin-pager-status { font-size: 11.5px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+
+/* ── Command palette & slash menu ────────────────────────────────────────── */
+
+.palette-hint { font-size: 11px; color: var(--muted-foreground); margin: 8px 0 4px; }
+.palette-list { display: flex; flex-direction: column; gap: 14px; max-height: min(52vh, 460px); overflow-y: auto; margin-top: 8px; }
+.palette-group { display: flex; flex-direction: column; gap: 4px; }
+.palette-group-title { font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted-foreground); }
+.palette-row {
+  display: flex; align-items: center; gap: 8px; text-align: left; width: 100%;
+  border: 1px solid transparent; border-radius: 10px; padding: 7px 10px; cursor: pointer;
+  background: transparent; color: inherit; font: inherit;
+}
+.palette-row:hover { background: color-mix(in oklab, var(--muted) 70%, transparent); border-color: var(--border); }
+.palette-row.is-terminal-only { opacity: 0.62; }
+.palette-command { font-size: 12.5px; font-weight: 500; flex-shrink: 0; }
+.palette-desc { font-size: 11.5px; color: var(--muted-foreground); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.palette-alias { font-size: 10.5px; color: color-mix(in oklab, var(--muted-foreground) 75%, transparent); flex-shrink: 0; }
+
+/* Slash command completer — floats above the composer, keyboard-driven. */
+.composer-input { position: relative; }
+.slash-pop {
+  position: absolute; left: 0; right: 0; bottom: calc(100% + 10px); z-index: 60;
+  display: flex; flex-direction: column; gap: 6px;
+  animation: slash-pop-in 160ms cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+@keyframes slash-pop-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+.slash-menu {
+  display: flex; flex-direction: column; gap: 2px; padding: 6px;
+  border: 1px solid color-mix(in oklab, var(--border) 88%, transparent);
+  border-radius: 16px;
+  background: color-mix(in oklab, var(--surface) 94%, transparent);
+  backdrop-filter: blur(12px) saturate(1.15);
+  box-shadow: 0 24px 48px -20px rgb(0 0 0 / 0.28), 0 4px 12px -6px rgb(0 0 0 / 0.12);
+  max-height: 268px; overflow-y: auto;
+}
+.slash-item {
+  display: flex; align-items: center; gap: 10px; text-align: left; width: 100%;
+  border: none; border-radius: 11px; padding: 8px 11px; cursor: pointer;
+  background: transparent; color: inherit; font: inherit;
+}
+.slash-item:hover { background: color-mix(in oklab, var(--muted) 72%, transparent); }
+.slash-item.is-active { background: var(--accent); box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--border) 70%, transparent); }
+.slash-dot { width: 6px; height: 6px; border-radius: 999px; flex-shrink: 0; background: color-mix(in oklab, #16a34a 72%, var(--foreground)); }
+.slash-dot.is-skill { background: color-mix(in oklab, #3b82f6 72%, var(--foreground)); }
+.slash-name { font-size: 12.5px; font-weight: 600; letter-spacing: -0.01em; flex-shrink: 0; }
+.slash-desc { font-size: 11.5px; color: var(--muted-foreground); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.slash-usage {
+  font-size: 10.5px; color: color-mix(in oklab, var(--muted-foreground) 70%, transparent);
+  flex-shrink: 1; min-width: 0; max-width: 34%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.slash-hint { display: flex; align-items: center; gap: 4px; padding: 0 10px; font-size: 10.5px; color: var(--muted-foreground); }
+.slash-hint span {
+  font-family: var(--font-mono); font-size: 9.5px; line-height: 1.5; padding: 1px 5px;
+  border: 1px solid var(--border); border-radius: 5px;
+  background: color-mix(in oklab, var(--surface) 80%, transparent);
+}
+/* Section headers inside the completer: 命令 / 插件 / 技能, like the terminal hint panel. */
+.slash-group { display: flex; flex-direction: column; gap: 2px; }
+.slash-group + .slash-group { margin-top: 7px; border-top: 1px solid color-mix(in oklab, var(--border) 55%, transparent); padding-top: 7px; }
+.slash-group-title { padding: 2px 11px 1px; font-size: 10px; font-weight: 600; letter-spacing: 0.09em; color: color-mix(in oklab, var(--muted-foreground) 85%, transparent); }
+
+/* `@` file references reuse the slash popup chrome with file rows. */
+.mention-icon { display: inline-grid; place-items: center; width: 16px; flex-shrink: 0; color: var(--muted-foreground); }
+.slash-item.is-active .mention-icon { color: var(--foreground); }
+.mention-empty { padding: 10px 12px; font-size: 12px; color: var(--muted-foreground); }
+
+/* Image attachments — pasted, dropped or picked, sent with the next message. */
+.composer-file { display: none; }
+.composer-attachments { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 0 2px 8px; }
+.attachment-chip {
+  display: inline-flex; align-items: center; gap: 7px; max-width: 264px;
+  padding: 4px 6px 4px 4px; font-size: 11.5px;
+  border: 1px solid var(--border); border-radius: 10px;
+  background: color-mix(in oklab, var(--surface) 92%, transparent);
+}
+.attachment-chip img { width: 28px; height: 28px; flex-shrink: 0; border-radius: 7px; object-fit: cover; }
+.attachment-chip.is-busy { padding: 4px 10px; color: var(--muted-foreground); }
+.attachment-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attachment-size { flex-shrink: 0; font-size: 10.5px; color: var(--muted-foreground); }
+.attachment-remove {
+  display: grid; place-items: center; width: 18px; height: 18px; flex-shrink: 0; cursor: pointer;
+  border: none; border-radius: 6px; background: transparent; color: var(--muted-foreground);
+}
+.attachment-remove:hover { background: var(--muted); color: var(--foreground); }
+.attachment-total { padding-left: 2px; font-size: 10.5px; color: var(--muted-foreground); }
+.composer-drop {
+  position: absolute; inset: 0; z-index: 55; display: grid; place-items: center; pointer-events: none;
+  border: 1.5px dashed color-mix(in oklab, var(--foreground) 32%, transparent);
+  border-radius: 28px; font-size: 12.5px;
+  background: color-mix(in oklab, var(--surface) 88%, transparent);
+  backdrop-filter: blur(3px);
+}
+
+/* Images inside a sent message, with a click-to-zoom overlay. */
+.message-images { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 7px; }
+.message-image {
+  max-width: 220px; min-width: 132px; min-height: 80px; padding: 0; overflow: hidden; line-height: 0; cursor: zoom-in;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--muted);
+}
+.message-image img { display: block; width: auto; height: auto; max-width: 220px; max-height: 150px; object-fit: cover; }
+.message-image:hover { border-color: color-mix(in oklab, var(--foreground) 24%, var(--border)); }
+.image-lightbox {
+  position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 40px 24px;
+  background: rgb(0 0 0 / 0.62); backdrop-filter: blur(3px);
+  animation: slash-pop-in 140ms cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+.image-lightbox img { max-width: min(1100px, 94vw); max-height: 86vh; border-radius: 12px; box-shadow: 0 30px 80px -30px rgb(0 0 0 / 0.6); }
+.image-lightbox-close {
+  position: absolute; top: 18px; right: 20px; display: grid; place-items: center; width: 32px; height: 32px; cursor: pointer;
+  border: 1px solid rgb(255 255 255 / 0.25); border-radius: 999px; background: rgb(0 0 0 / 0.35); color: #fff;
+}
 
 /* ── Responsive ──────────────────────────────────────────────────────────── */
 

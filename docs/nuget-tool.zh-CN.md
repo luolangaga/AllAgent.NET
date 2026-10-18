@@ -22,6 +22,17 @@ allagent doctor --install
 allagent chat --workspace C:\Projects\MyProject
 ```
 
+原生窗口工作台（WPF + WebView2 外壳随包分发在 `gui/`，需要已安装 Microsoft Edge WebView2 Runtime）：
+
+```powershell
+allagent -guimode                  # 静默启动：命令行立即返回，关闭窗口即结束会话
+allagent gui                       # 前台运行同一个窗口，Ctrl+C 结束
+allagent gui --gui-devtools        # 打开窗口内开发者工具
+allagent -guimode --workspace C:\Projects\MyProject
+```
+
+窗口内是与 `/web-ui` 完全相同的 Web 工作台（同一工作区、模型配置、权限与后台任务，支持工作区切换、插件与技能管理）；标题栏提供刷新、**在浏览器中打开**与窗口控制。同一数据目录只允许一个窗口，重复启动会提示已在运行。
+
 进入聊天后按 F2 配置模型或使用 `/login`。更新和卸载：
 
 每次运行 `allagent` 都启动独立聊天界面：输入框、当前会话、模型选择、权限和窗口尺寸属于各自的进程。同一工作区默认共用隐藏目录 `.allagent/data`，历史在打开会话列表、恢复会话以及保存时刷新。共享 manifest 的读取、修改、原子提交和历史清理由跨进程锁保护；独立会话同时写入不会互相覆盖。另一终端更新或删除了同一会话时，旧对象保存会报冲突，需要重新打开，避免覆盖历史。公共 Python 环境、插件、用户技能和登录凭据继续复用 AppData。

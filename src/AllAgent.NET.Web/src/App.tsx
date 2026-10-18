@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   AlertTriangle, Blocks, ChevronRight, Command, FolderOpen, ListTodo, MessageSquare, Moon, PanelLeft,
-  Pencil, Plug, Plus, Puzzle, Search, Settings as SettingsIcon, SlidersHorizontal, Sun, Trash2,
+  Pencil, Plug, Plus, Puzzle, Search, Settings as SettingsIcon, SlidersHorizontal, Sun, Trash2, Wrench,
 } from 'lucide-react'
 import { Badge } from './components/ui/badge'
 import { Button } from './components/ui/b-button'
@@ -9,8 +9,10 @@ import { Input } from './components/ui/input'
 import { StatusDot } from './components/ui/status-dot'
 import { Tooltip } from './components/ui/b-tooltip'
 import { Field, Confirm, Modal } from './components/shared'
+import { CommandPalette } from './components/CommandPalette'
 import { Notices } from './components/Notices'
 import { PendingInteractions } from './components/PendingInteractions'
+import { TaskDetailModal } from './components/TaskDetailModal'
 import { WorkspaceSwitcher } from './components/WorkspaceSwitcher'
 import { useStore } from './lib/store'
 import { connectionLabel, useConnection } from './lib/useConnection'
@@ -34,12 +36,14 @@ import Plugins from './views/Plugins'
 import Settings from './views/Settings'
 import Skills from './views/Skills'
 import Tasks from './views/Tasks'
+import Tools from './views/Tools'
 import type { Conversation } from './types'
 
 const navigation = [
   { id: 'chat', label: '对话', icon: MessageSquare },
   { id: 'models', label: '模型与 API', icon: SlidersHorizontal },
   { id: 'skills', label: '技能', icon: Blocks },
+  { id: 'tools', label: '工具', icon: Wrench },
   { id: 'plugins', label: '插件', icon: Puzzle },
   { id: 'mcp', label: 'MCP 服务', icon: Plug },
   { id: 'tasks', label: '任务', icon: ListTodo },
@@ -83,6 +87,7 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [ready, setReady] = useState(false)
+  const [palette, setPalette] = useState(false)
   const [rename, setRename] = useState<Conversation | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [remove, setRemove] = useState<Conversation | null>(null)
@@ -189,6 +194,10 @@ export default function App() {
       if ((event.ctrlKey || event.metaKey) && event.key === 'k') {
         event.preventDefault()
         search.current?.focus()
+      }
+      if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === 'p') {
+        event.preventDefault()
+        setPalette(open => !open)
       }
     }
     window.addEventListener('keydown', key)
@@ -353,6 +362,9 @@ export default function App() {
         <ChevronRight className="breadcrumb-slash" size={13} />
         <strong>{navigation.find(item => item.id === page)?.id === 'chat' ? activeTitle : navigation.find(item => item.id === page)?.label ?? '对话'}</strong>
         <div className="topbar-right">
+          <Tooltip content="命令面板 · Ctrl+Shift+P">
+            <Button iconLabel="命令面板" onClick={() => setPalette(true)} size="icon-sm" variant="ghost"><Command size={14} /></Button>
+          </Tooltip>
           {tasks.activeTasks.length ? <Button
             icon={<StatusDot animate size="sm" tone="active" />}
             onClick={() => go('tasks')}
@@ -385,11 +397,12 @@ export default function App() {
       </div> : null}
       {page === 'models' ? <Models />
         : page === 'skills' ? <Skills />
-          : page === 'plugins' ? <Plugins />
-            : page === 'mcp' ? <Mcp />
-              : page === 'tasks' ? <Tasks />
-                : page === 'settings' ? <Settings />
-                  : <Chat onNavigate={go} ready={ready} />}
+          : page === 'tools' ? <Tools />
+            : page === 'plugins' ? <Plugins />
+              : page === 'mcp' ? <Mcp />
+                : page === 'tasks' ? <Tasks />
+                  : page === 'settings' ? <Settings />
+                    : <Chat onNavigate={go} onPalette={() => setPalette(true)} ready={ready} />}
     </main>
 
     {rename ? <Modal
@@ -413,5 +426,7 @@ export default function App() {
     <Notices />
     <PendingInteractions />
     <WorkspaceSwitcher />
+    <TaskDetailModal />
+    <CommandPalette host={{ go, openPalette: () => setPalette(true) }} onClose={() => setPalette(false)} open={palette} />
   </div>
 }

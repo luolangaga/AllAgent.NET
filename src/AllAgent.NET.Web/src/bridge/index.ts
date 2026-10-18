@@ -22,6 +22,7 @@ type BridgePayloads = {
   'workspace.changed': { workspace: string; dataDirectory: string }
   'workspace.folderPicked': { path: string | null; error?: string | null }
   'tasks.updated': { conversationId: string }
+  'auth.changed': { id: string; error?: string | null }
 }
 export type BridgeEvents = { [K in keyof BridgePayloads]: BridgePayloads[K] & { sequence?: number; timestamp?: string } }
 
@@ -37,7 +38,7 @@ interface BridgeRequest {
 
 interface BridgeResponse {
   id?: string
-  type?: 'response' | 'event' | 'tasks.updated' | 'workspace.changed' | 'workspace.folderPicked'
+  type?: 'response' | 'event' | 'tasks.updated' | 'workspace.changed' | 'workspace.folderPicked' | 'auth.changed'
   eventName?: string
   streamId?: string
   sequence?: number
@@ -120,6 +121,11 @@ function dispatch(json: string) {
       path: msg.path ? String(msg.path) : null,
       error: msg.error ? String(msg.error) : null,
     })
+    return
+  }
+  if (msg.type === 'auth.changed') {
+    // Login flows settle outside the RPC that started them; the result arrives as this notification.
+    bridgeEvents.emit('auth.changed', { id: String(msg.id ?? ''), error: msg.error ? String(msg.error) : null })
     return
   }
   if (msg.type === 'event' && msg.eventName) {
@@ -249,13 +255,22 @@ export function reconnect() {
 }
 
 function initTransport(): Transport | null {
+  // An explicit ?bridge= address always wins. Windows that wrap this page in WebView2 (the
+  // WPF GUI host) expose window.chrome.webview, but the backend lives in the terminal
+  // process, so such a page must talk to the loopback socket instead of the native bridge.
+  const target = bridgeSocketTarget()
+  if (target?.explicit) {
+    socketTarget = target
+    connectSocket(target.url)
+    window.addEventListener('beforeunload', () => { keepReconnecting = false })
+    return wsTransport
+  }
   const webview = webViewTransport()
   if (webview) {
     setConnection('native')
     return webview
   }
-  const target = bridgeSocketTarget()
-  if (target && (target.explicit || !import.meta.env.DEV)) {
+  if (target && !import.meta.env.DEV) {
     socketTarget = target
     connectSocket(target.url)
     window.addEventListener('beforeunload', () => { keepReconnecting = false })
@@ -302,6 +317,6 @@ export async function invoke<T = unknown>(method: string, params?: unknown, time
       try { resolve(mock.call(method, params) as T) } catch (error) { reject(error) }
       return
     }
-    reject(new Error('本地后端未连接。请在 AllAgent.NET 桌面应用中打开本界面，或在终端运行 allagent 后使用 /web-ui 启动浏览器工作台。'))
+    reject(new Error('本地后端未连接。请在终端运行 allagent 后使用 /web-ui，或运行 allagent -guimode 打开原生窗口。'))
   })
 }

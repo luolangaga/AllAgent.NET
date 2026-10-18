@@ -51,6 +51,26 @@
       </ResolvedFileToPublish>
     </ItemGroup>
   </Target>
+  <Target Name="CopyGuiShellFiles" AfterTargets="Build" Condition="'$(CopyGuiShell)' == 'true'">
+    <MSBuild Projects="$(MSBuildThisFileDirectory)src/AllAgent.NET.Gui/AllAgent.NET.Gui.csproj" Targets="GetTargetPath" Properties="Configuration=$(Configuration);RuntimeIdentifier=$(RuntimeIdentifier)" RemoveProperties="TargetFramework">
+      <Output TaskParameter="TargetOutputs" ItemName="GuiShellTarget" />
+    </MSBuild>
+    <PropertyGroup><GuiShellBuildDirectory>@(GuiShellTarget->'%(RootDir)%(Directory)')</GuiShellBuildDirectory></PropertyGroup>
+    <Error Condition="'$(GuiShellBuildDirectory)' == '' or !Exists('$(GuiShellBuildDirectory)AllAgent.NET.Gui.dll')" Text="WPF GUI shell is missing; build its project before copying." />
+    <ItemGroup><GuiShellFiles Include="$(GuiShellBuildDirectory)**/*" /></ItemGroup>
+    <Copy SourceFiles="@(GuiShellFiles)" DestinationFiles="@(GuiShellFiles->'$(OutDir)gui/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="IncludeGuiShellPublishFiles" AfterTargets="ComputeFilesToPublish" Condition="'$(CopyGuiShell)' == 'true'">
+    <PropertyGroup><GuiShellPublishDirectory>$(MSBuildProjectDirectory)/obj/$(Configuration)/$(TargetFramework)/gui-publish/</GuiShellPublishDirectory></PropertyGroup>
+    <MSBuild Projects="$(MSBuildThisFileDirectory)src/AllAgent.NET.Gui/AllAgent.NET.Gui.csproj" Targets="Publish" RemoveProperties="TargetFramework" Properties="TargetFramework=net10.0-windows;Configuration=$(Configuration);PublishDir=$(GuiShellPublishDirectory);CopyGuiShell=false;PublishSingleFile=false;SelfContained=$(SelfContained);RuntimeIdentifier=$(RuntimeIdentifier)" />
+    <ItemGroup>
+      <GuiShellPublishFiles Include="$(GuiShellPublishDirectory)**/*" Exclude="$(GuiShellPublishDirectory)**/everything/**;$(GuiShellPublishDirectory)**/ref/**;$(GuiShellPublishDirectory)**/runtimes/linux*/**;$(GuiShellPublishDirectory)**/runtimes/osx*/**;$(GuiShellPublishDirectory)**/*.pdb;$(GuiShellPublishDirectory)**/*.so;$(GuiShellPublishDirectory)**/*.dylib" />
+      <ResolvedFileToPublish Include="@(GuiShellPublishFiles)">
+        <RelativePath>gui/%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
   <Target Name="CopyComputerWorkerFiles" AfterTargets="Build" Condition="'$(CopyComputerWorker)' == 'true'">
     <MSBuild Projects="$(MSBuildThisFileDirectory)src/AllAgent.NET.ComputerUse/AllAgent.NET.ComputerUse.csproj" Targets="GetTargetPath" Properties="Configuration=$(Configuration);RuntimeIdentifier=$(RuntimeIdentifier)" RemoveProperties="TargetFramework">
       <Output TaskParameter="TargetOutputs" ItemName="ComputerWorkerTarget" />

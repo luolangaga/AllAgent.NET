@@ -94,8 +94,8 @@ AllAgent.NET 是**面向 Windows 本机工作流**的终端 AI Agent：模型侧
 
 ### 10. 界面与分发型态明确
 - 终端：Spectre.Console 全屏 TUI + 鼠标事件（`ConsoleModes.cs:15-34`）、F1/F2/F3 菜单、Ctrl+E 执行详情、`F2` 切模型（README 日常使用表）。
-- 桌面：Avalonia 11.2 + WebView2，Release 用内置 `EmbeddedWebServer` 服务 `avares` 资源，Debug 指 Vite（`Desktop/App.axaml.cs`）。
-- 分发：`dotnet tool install --global AllAgent.NET.Terminal`（`ToolCommandName=allagent`，`RollForward=Major`），发布 `-r win-x64 --self-contained`；`sandbox/`、`computer/` 随包分发（`.csproj`、`Directory.Build.targets`）。
+- 桌面：`allagent -guimode` 打开 WPF + WebView2 原生窗口（圆角、Mica、自绘导航栏），窗口内运行同一套 Web 工作台；后端仍在终端宿主进程，页面经 loopback WebSocket 通信，`allagent gui --gui-url` 可指向 Vite 开发服务器。
+- 分发：`dotnet tool install --global AllAgent.NET.Terminal`（`ToolCommandName=allagent`，`RollForward=Major`），发布 `-r win-x64 --self-contained`；`sandbox/`、`computer/`、`browser/`、`gui/` 随包分发（`.csproj`、`Directory.Build.targets`）。
 - 【实测】Debug 产物含 `computer\AllAgent.NET.ComputerUse.exe`；release 产物含 `sandbox\`。
 
 ---

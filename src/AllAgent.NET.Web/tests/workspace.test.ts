@@ -105,7 +105,7 @@ describe('plugins store', () => {
           authentication: [{ id: 'codex', name: 'ChatGPT 账号' }],
           hooks: [{ name: 'turn-start', enabled: true }],
         })
-        case 'plugins.search': return reply(request, [{ id: 'AllAgent.NET.WorkBuddy', version: '1.0.2', description: 'work buddy', authors: 'AllAgent.NET', downloads: 42 }])
+        case 'plugins.search': return reply(request, { totalHits: 12, packages: [{ id: 'AllAgent.NET.WorkBuddy', version: '1.0.2', description: 'work buddy', authors: 'AllAgent.NET', downloads: 42 }] })
         case 'plugins.setEnabled': return reply(request, true)
         default: return reply(request, true)
       }
@@ -123,12 +123,23 @@ describe('plugins store', () => {
     expect(store.hooks[0]?.name).toBe('turn-start')
   })
 
-  it('searches the NuGet store and toggles enablement', async () => {
+  it('searches the NuGet store with pagination and toggles enablement', async () => {
+    const requests: Request[] = []
+    const base = handle
+    handle = request => { requests.push(request); return base(request) }
     const { usePluginsStore } = await import('../src/stores/plugins')
     const store = usePluginsStore()
     await store.loadAll()
     await store.search('workbuddy')
     expect(store.searchResults[0]?.id).toBe('AllAgent.NET.WorkBuddy')
+    expect(store.totalHits).toBe(12)
+    expect(store.page).toBe(0)
+    const first = requests.find(request => request.method === 'plugins.search')
+    expect(first?.params).toMatchObject({ query: 'workbuddy', skip: 0, take: 10 })
+    await store.search('workbuddy', 1)
+    const second = requests.filter(request => request.method === 'plugins.search').at(-1)
+    expect(second?.params).toMatchObject({ skip: 10, take: 10 })
+    expect(store.page).toBe(1)
     await store.setEnabled('AllAgent.NET.CommandCode', false)
     expect(store.busy).toBe(false)
     expect(store.plugins[0]?.enabled).toBe(true)
@@ -141,5 +152,118 @@ describe('plugins store', () => {
     await store.loadAll()
     expect(store.available).toBe(false)
     expect(store.loaded).toBe(true)
+  })
+})
+
+describe('tool catalog store', () => {
+  beforeEach(() => {
+    handle = request => {
+      switch (request.method) {
+        case 'tools.list': return reply(request, {
+          errors: [],
+          tools: [
+            { name: 'execute_code', description: '运行代码', risk: 'execute', parametersJson: '{"type":"object"}', source: 'host', owner: '' },
+            { name: 'sample_clock', description: '示例插件工具', risk: 'read', parametersJson: '{"type":"object"}', source: 'plugin', owner: 'AllAgent.NET.SamplePlugin' },
+          ],
+        })
+        default: return reply(request, true)
+      }
+    }
+  })
+
+  it('loads host and plugin tools with source attribution', async () => {
+    const { useToolsStore } = await import('../src/stores/tools')
+    const store = useToolsStore()
+    await store.loadAll()
+    expect(store.available).toBe(true)
+    expect(store.tools).toHaveLength(2)
+    expect(store.tools[1]).toMatchObject({ name: 'sample_clock', source: 'plugin', owner: 'AllAgent.NET.SamplePlugin' })
+    expect(store.errors).toEqual([])
+  })
+
+  it('surfaces host-side catalog errors without failing the page', async () => {
+    handle = request => reply(request, { tools: [], errors: ['工具目录暂不可用：python 缺失'] })
+    const { useToolsStore } = await import('../src/stores/tools')
+    const store = useToolsStore()
+    await store.loadAll()
+    expect(store.available).toBe(true)
+    expect(store.errors[0]).toContain('工具目录暂不可用')
+  })
+})
+
+describe('command catalog store', () => {
+  it('loads the terminal command list and hides on unavailability', async () => {
+    handle = request => request.method === 'commands.list'
+      ? reply(request, [
+          { text: '/help', description: '打开命令面板' },
+          { text: '/permissions', description: '切换权限模式', usage: '[ask|full|plan]' },
+          { text: '/session', description: '选择或恢复会话', aliases: '/sessions /resume' },
+        ])
+      : reply(request, true)
+    const { useCommandsStore } = await import('../src/stores/commands')
+    const store = useCommandsStore()
+    await store.loadAll()
+    expect(store.available).toBe(true)
+    expect(store.commands.map(item => item.text)).toEqual(['/help', '/permissions', '/session'])
+    expect(store.commands[2]?.aliases).toBe('/sessions /resume')
+
+    handle = request => reply(request, null, 'Unknown method: commands.list')
+    vi.resetModules()
+    host.chrome = { webview: { postMessage: (json: string) => handle(JSON.parse(json)) } }
+    const { useCommandsStore: reload } = await import('../src/stores/commands')
+    const fallback = reload()
+    await fallback.loadAll()
+    expect(fallback.available).toBe(false)
+    expect(fallback.commands).toEqual([])
+  })
+})
+
+describe('account login store', () => {
+  beforeEach(() => {
+    handle = request => {
+      switch (request.method) {
+        case 'auth.providers': return reply(request, [
+          { id: 'codex', name: 'ChatGPT 账号', kind: 'oauth', loggedIn: false, account: '', message: '未登录', modelConnectionAvailable: true, pending: false },
+          { id: 'openai', name: 'OpenAI', kind: 'apikey', loggedIn: false, account: '', message: '尚未配置', modelConnectionAvailable: true, providerId: 'openai' },
+        ])
+        case 'auth.login': return reply(request, true)
+        case 'auth.logout': return reply(request, { id: 'codex', name: 'ChatGPT 账号', kind: 'oauth', loggedIn: false, account: '', message: '', modelConnectionAvailable: true })
+        default: return reply(request, true)
+      }
+    }
+  })
+
+  it('lists login providers with status and starts browser login', async () => {
+    const requests: Request[] = []
+    const base = handle
+    handle = request => { requests.push(request); return base(request) }
+    const { useAuthStore } = await import('../src/stores/auth')
+    const store = useAuthStore()
+    await store.loadAll()
+    expect(store.available).toBe(true)
+    expect(store.providers).toHaveLength(2)
+    expect(store.providers[0]).toMatchObject({ id: 'codex', kind: 'oauth', loggedIn: false })
+    await store.login('codex')
+    const login = requests.find(request => request.method === 'auth.login')
+    expect(login?.params).toMatchObject({ id: 'codex', newAccount: false })
+    await store.logout('codex')
+    expect(store.busyId).toBeNull()
+  })
+
+  it('refreshes the provider list when the host reports a settled login', async () => {
+    let calls = 0
+    handle = request => {
+      if (request.method === 'auth.providers') {
+        calls += 1
+        return reply(request, [{ id: 'codex', name: 'ChatGPT 账号', kind: 'oauth', loggedIn: calls > 1, account: calls > 1 ? 'me@example.com' : '', message: '', modelConnectionAvailable: true }])
+      }
+      return reply(request, true)
+    }
+    const { useAuthStore } = await import('../src/stores/auth')
+    const store = useAuthStore()
+    await store.loadAll()
+    host.__bridgeCallback(JSON.stringify({ type: 'auth.changed', id: 'codex', error: null }))
+    await vi.waitFor(() => expect(store.providers[0]?.loggedIn).toBe(true))
+    expect(store.providers[0]?.account).toBe('me@example.com')
   })
 })

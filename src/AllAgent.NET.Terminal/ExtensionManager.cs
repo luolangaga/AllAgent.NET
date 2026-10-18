@@ -41,9 +41,10 @@ internal sealed class ExtensionManager(PluginHost host, BackgroundTasks tasks, s
         if (action == "list") { ListPlugins(); return; }
         if (action == "search")
         {
-            var found = await ManagementUi.Busy("搜索 NuGet · AllAgent 标签", token => installer.SearchAsync(string.Join(' ', words.Skip(1)), ct: token), ct);
-            ManagementUi.Output(ui, found, () => { var table = new Table().AddColumn("包 / 版本").AddColumn("作者 / 简介"); foreach (var package in found) table.AddRow(Markup.Escape(package.Id + " · " + package.Version), Markup.Escape(package.Authors + "\n" + package.Description)); TerminalOutput.Write(table); });
-            if (found.Count == 0) { ManagementUi.Success(ui, "没有匹配的 AllAgent 标签插件；也可以安装本地 .nupkg。"); return; }
+            var search = await ManagementUi.Busy("搜索 NuGet · AllAgent.NET / LanAgent 标签", token => installer.SearchAsync(string.Join(' ', words.Skip(1)), ct: token), ct);
+            var found = search.Packages;
+            ManagementUi.Output(ui, search, () => { var table = new Table().AddColumn("包 / 版本").AddColumn("作者 / 简介"); foreach (var package in found) table.AddRow(Markup.Escape(package.Id + " · " + package.Version), Markup.Escape(package.Authors + "\n" + package.Description)); TerminalOutput.Write(table); });
+            if (found.Count == 0) { ManagementUi.Success(ui, "没有匹配的 AllAgent.NET / LanAgent 标签插件；也可以安装本地 .nupkg。"); return; }
             if (ui.Interactive && !ui.Json)
             {
                 var choice = ManagementUi.Choose("选择安装或返回", found.Select(p => p.Id + " · " + p.Version).Prepend("返回").ToArray());

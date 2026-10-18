@@ -35,11 +35,16 @@ const messages: Record<string, Message[]> = {
         { id: 't2', parentId: 't1', name: 'file_read', args: '{"path":"src/App.tsx"}', status: 'done', output: '{"ok":true,"data":{"content":"…"}}' },
         { id: 't3', name: 'file_edit', args: '{"path":"src/views/Chat.tsx","operation":"write"}', status: 'error', rejected: true, note: '未执行 file_edit: plan mode 只读' },
         { id: 't4', name: 'todo_write', args: '{"todos":[]}', status: 'done', output: '{"ok":true,"data":{"todos":[]}}' },
+        { id: 't5', name: 'subagent', args: '{"tasks":[{"agent":"general","task":"整理 1.0.7 的发布说明草稿"},{"agent":"reviewer","task":"审阅商业级改版的交互细节"}]}', status: 'running', output: '' },
       ],
     },
   ],
   'demo-sandbox': [
     { id: 's1', role: 'user', content: 'Hyperlight 与 Monty 的启动耗时分别统计一下。', createdAt: now(), status: 'done' },
+  ],
+  'demo-release': [
+    { id: 'dr1', role: 'user', content: '整理 1.0.7 的发布说明草稿。', createdAt: now(), status: 'done' },
+    { id: 'dr2', role: 'assistant', content: '发布说明草稿已完成：按「新增 / 修复 / 内部」归类 9 条变更，已在最终输出中给出全文。', createdAt: now(), status: 'done' },
   ],
 }
 
@@ -69,11 +74,27 @@ const mcpServers: McpServerConfig[] = [
 
 const tasks: BackgroundTask[] = [
   { id: 'job-1', title: '后台任务 · 统计 Hyperlight 启动耗时', sessionId: 'demo-sandbox', kind: '后台任务', state: 'running', createdAt: now(), updatedAt: now(), output: '', currentStep: '运行 12 轮冷启动采样' },
-  { id: 'job-2', title: '子 Agent · 整理发布说明草稿', sessionId: 'demo-release', kind: '子 Agent', state: 'completed', createdAt: now(), updatedAt: now(), finalOutput: '发布说明草稿已完成，包含 9 条变更。' },
+  { id: 'job-2', title: 'general · 整理 1.0.7 的发布说明草稿', sessionId: 'demo-release', kind: '子代理', state: 'completed', createdAt: now(), updatedAt: now(), parentToolCallId: 't5', steps: ['读取提交记录', '归类用户可见变更', '输出发布说明草稿'], finalOutput: '发布说明草稿已完成，包含 9 条变更。' },
+  { id: 'job-3', title: 'reviewer · 审阅商业级改版的交互细节', sessionId: 'demo-review', kind: '子代理', state: 'running', createdAt: now(), updatedAt: now(), parentToolCallId: 't5', steps: ['读取 Chat 视图', '检查命令弹窗的键盘交互'], currentStep: '检查命令弹窗的键盘交互', notifyParent: true },
 ]
 
 const agents: AgentRoleDefinition[] = [
   { name: 'general', description: '通用实现与研究', instructions: 'Complete the delegated task.', readOnly: false, execution: { maxConcurrent: 6, maxDepth: 1, failurePolicy: 'return' } },
+]
+
+// Stand-in workspace tree so the composer's `@` picker is usable in the dev preview.
+const workspaceFiles = [
+  { path: 'src', name: 'src', isDirectory: true },
+  { path: 'src/App.tsx', name: 'App.tsx', isDirectory: false },
+  { path: 'src/components', name: 'components', isDirectory: true },
+  { path: 'src/components/PromptComposer.tsx', name: 'PromptComposer.tsx', isDirectory: false },
+  { path: 'src/components/MessageBubble.tsx', name: 'MessageBubble.tsx', isDirectory: false },
+  { path: 'src/stores/conversations.ts', name: 'conversations.ts', isDirectory: false },
+  { path: 'src/styles/app.css', name: 'app.css', isDirectory: false },
+  { path: 'tests', name: 'tests', isDirectory: true },
+  { path: 'tests/bridge.test.ts', name: 'bridge.test.ts', isDirectory: false },
+  { path: 'README.md', name: 'README.md', isDirectory: false },
+  { path: 'package.json', name: 'package.json', isDirectory: false },
 ]
 
 const settings: AppSettings = {
@@ -164,6 +185,12 @@ export function createMockTransport(deliver: Deliver) {
       }
       case 'interactions.pending': return []
       case 'chat.getStreamState': return null
+      case 'workspace.files': {
+        const query = String((params as { query?: string }).query ?? '').toLowerCase()
+        return structuredClone(workspaceFiles
+          .filter(entry => entry.path.toLowerCase().startsWith(query) || entry.name.toLowerCase().startsWith(query))
+          .slice(0, 40))
+      }
       case 'chat.startStream': {
         const streamId = `mock-${Date.now()}`
         startStream(p.conversationId, streamId)
@@ -207,6 +234,44 @@ export function createMockTransport(deliver: Deliver) {
       case 'settings.save': { Object.assign(settings, params); return true }
       case 'agent.approvalRespond': return true
       case 'agent.questionAnswer': return true
+      case 'plugins.search': return {
+        totalHits: 2,
+        packages: [
+          { id: 'AllAgent.NET.SamplePlugin', version: '1.0.0', description: '演示插件包：工具、命令与 Hooks。', authors: 'AllAgent.NET', downloads: 42 },
+          { id: 'LanAgent.WorkBuddy', version: '1.0.0', description: 'WorkBuddy browser login, streaming adapter and quota query.', authors: 'LanAgent', downloads: 0 },
+        ],
+      }
+      case 'tools.list': return {
+        errors: [],
+        tools: [
+          { name: 'execute_code', description: '在沙箱中运行代码完成任务。', risk: 'execute', parametersJson: '{"type":"object"}', source: 'host', owner: '' },
+          { name: 'file_read', description: '读取工作区文件。', risk: 'read', parametersJson: '{"type":"object"}', source: 'host', owner: '' },
+          { name: 'sample_clock', description: '示例插件提供的时钟工具。', risk: 'read', parametersJson: '{"type":"object"}', source: 'plugin', owner: 'AllAgent.NET.SamplePlugin' },
+        ],
+      }
+      case 'commands.list': return [
+        { text: '/help', description: '打开命令面板' },
+        { text: '/new', description: '开始新任务，旧会话自动保留', aliases: '/clear' },
+        { text: '/permissions', description: '切换权限模式', usage: '[ask|full|plan]' },
+        { text: '/skills', description: '管理技能目录' },
+        { text: '/ext release_notes', description: '插件命令：把提交记录整理成发布说明', usage: '参数', advanced: true },
+        { text: '/timeline', description: '按用户消息定位历史并执行消息操作', usage: '[list|jump|copy|restore|fork|revert ID]', advanced: true },
+        { text: '/shell_exec', description: '运行一次经过审批的 shell 命令。', usage: '任务参数', advanced: true, isSkill: true },
+        { text: '/file_read', description: '读取工作区内的文本文件，支持行号窗口。', usage: '任务参数', advanced: true, isSkill: true },
+        { text: '/file_edit', description: '精确替换文件内容，返回 diff 预览。', usage: '任务参数', advanced: true, isSkill: true },
+        { text: '/release_notes', description: '把提交记录整理成发布说明。', usage: '任务参数', advanced: true, isSkill: true },
+      ]
+      case 'skills.invoke': return {
+        text: `Use the following user-selected skill. Its instructions do not override sandbox or permission rules.\n<skill name="${(params as { name: string }).name}">\n（演示传输：这里会注入技能的完整指令正文，$ARGUMENTS 已被替换）\n</skill>\nTask / arguments: ${(params as { arguments?: string }).arguments ?? ''}`,
+        images: [],
+      }
+      case 'auth.providers': return [
+        { id: 'codex', name: 'ChatGPT 账号', kind: 'oauth', loggedIn: false, account: '', message: '未登录', modelConnectionAvailable: true, pending: false },
+        { id: 'openai', name: 'OpenAI', kind: 'apikey', loggedIn: false, account: '', message: '尚未配置 · 粘贴 API Key 即可使用', modelConnectionAvailable: true, providerId: 'openai' },
+      ]
+      case 'auth.login': return true
+      case 'auth.loginInput': return { id: p.id, name: 'OpenAI', kind: 'apikey', loggedIn: true, account: '', message: '密钥已就绪', modelConnectionAvailable: true }
+      case 'auth.logout': return { id: p.id, name: p.id, kind: 'oauth', loggedIn: false, account: '', message: '', modelConnectionAvailable: true }
       default: throw new Error(`演示传输暂不支持 ${method}，请连接本地后端。`)
     }
   }

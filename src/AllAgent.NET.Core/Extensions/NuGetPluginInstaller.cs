@@ -11,6 +11,8 @@ namespace AllAgent.NET.Core.Extensions;
 
 public sealed record PluginPackage(string Id, string Version, string Description, string Authors, long Downloads);
 
+public sealed record PluginSearchResult(long TotalHits, IReadOnlyList<PluginPackage> Packages);
+
 /// <summary>NuGet V3 search + dependency installation. Never invokes MSBuild, install scripts or package executables.</summary>
 public sealed class NuGetPluginInstaller(string dataDirectory, HttpClient? http = null, string source = "https://api.nuget.org/v3/index.json")
 {
@@ -25,15 +27,42 @@ public sealed class NuGetPluginInstaller(string dataDirectory, HttpClient? http 
     private async Task<string> ResourceAsync(string type, CancellationToken ct)
     {
         using var doc = JsonDocument.Parse(await _http.GetStringAsync(source, ct));
-        var resource = doc.RootElement.GetProperty("resources").EnumerateArray().First(r => r.GetProperty("@type").GetString()!.StartsWith(type, StringComparison.Ordinal));
-        return resource.GetProperty("@id").GetString()!;
+        var candidates = doc.RootElement.GetProperty("resources").EnumerateArray()
+            .Select(r => (Type: r.GetProperty("@type").GetString() ?? "", Url: r.GetProperty("@id").GetString() ?? ""))
+            .Where(r => r.Type.StartsWith(type, StringComparison.Ordinal) && r.Url.Length > 0)
+            .ToArray();
+        // Prefer the newest stable service version; a prerelease resource may be listed first.
+        var stable = candidates.Where(r => !r.Type.Contains('-')).OrderByDescending(r => r.Type, StringComparer.Ordinal).ToArray();
+        return (stable.Length > 0 ? stable : candidates.OrderByDescending(r => r.Type, StringComparer.Ordinal).ToArray()).First().Url;
     }
-    public async Task<IReadOnlyList<PluginPackage>> SearchAsync(string query = "", int skip = 0, CancellationToken ct = default)
+    // The NuGet search service does not understand parentheses: wrapping the tag filter in
+    // them collapses the field syntax and turns the query into a full-text search that
+    // matches nothing useful. Keep the tag OR chain bare and append keywords with a space.
+    private string TagQuery => string.Join(" OR ", AcceptedPluginTags.Select(tag => $"tags:{tag}"));
+    public async Task<PluginSearchResult> SearchAsync(string query = "", int skip = 0, int take = 30, CancellationToken ct = default)
     {
         var url = await ResourceAsync("SearchQueryService", ct);
-        var tagQuery = string.Join(" OR ", AcceptedPluginTags.Select(tag => $"tags:{tag}"));
-        using var doc = JsonDocument.Parse(await _http.GetStringAsync(url + "?q=" + Uri.EscapeDataString($"({tagQuery}) {query}") + "&take=30&skip=" + Math.Max(0, skip) + "&prerelease=false", ct));
-        return doc.RootElement.GetProperty("data").EnumerateArray().Where(p => HasPluginTag(Tags(p))).Select(p => new PluginPackage(p.GetProperty("id").GetString()!, p.GetProperty("version").GetString()!, p.GetProperty("description").GetString() ?? "", p.TryGetProperty("authors", out var a) ? a.ToString() : "", p.TryGetProperty("totalDownloads", out var d) ? d.GetInt64() : 0)).ToArray();
+        var keyword = (query ?? string.Empty).Trim();
+        var count = Math.Clamp(take, 1, 100);
+        var offset = Math.Max(0, skip);
+        async Task<(long Total, IReadOnlyList<PluginPackage> Items)> FetchAsync(string queryText, int pageSkip, int pageTake)
+        {
+            using var doc = JsonDocument.Parse(await _http.GetStringAsync(
+                url + "?q=" + Uri.EscapeDataString(queryText) + "&take=" + pageTake + "&skip=" + pageSkip + "&prerelease=false", ct));
+            var total = doc.RootElement.TryGetProperty("totalHits", out var hits) ? hits.GetInt64() : 0;
+            var items = doc.RootElement.GetProperty("data").EnumerateArray().Where(p => HasPluginTag(Tags(p))).Select(p =>
+                new PluginPackage(p.GetProperty("id").GetString()!, p.GetProperty("version").GetString()!, p.GetProperty("description").GetString() ?? "", p.TryGetProperty("authors", out var a) ? a.ToString() : "", p.TryGetProperty("totalDownloads", out var d) ? d.GetInt64() : 0)).ToArray();
+            return (total, items);
+        }
+        var (total, packages) = await FetchAsync(keyword.Length == 0 ? TagQuery : TagQuery + " " + keyword, offset, count);
+        if (keyword.Length == 0 || total > 0) return new PluginSearchResult(total, packages);
+        // Chinese keywords and partial ids often tokenize to zero hits server-side; fall back
+        // to filtering the complete tag listing locally so any substring still matches.
+        var (_, all) = await FetchAsync(TagQuery, 0, 100);
+        var matches = all.Where(p => p.Id.Contains(keyword, StringComparison.OrdinalIgnoreCase)
+            || p.Description.Contains(keyword, StringComparison.OrdinalIgnoreCase)
+            || p.Authors.Contains(keyword, StringComparison.OrdinalIgnoreCase)).ToArray();
+        return new PluginSearchResult(matches.Length, matches.Skip(offset).Take(count).ToArray());
     }
     private static IEnumerable<string> Tags(JsonElement package) => package.TryGetProperty("tags", out var tags) ? tags.ValueKind == JsonValueKind.Array ? tags.EnumerateArray().Select(t => t.GetString() ?? "") : SplitTags(tags.GetString()) : [];
     private static IEnumerable<string> SplitTags(string? tags) => (tags ?? string.Empty).Split([' ', ',', ';'], StringSplitOptions.RemoveEmptyEntries);

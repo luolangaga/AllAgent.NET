@@ -14,11 +14,22 @@ internal static class TerminalSession
     private const string ModeVariable = "ALLAGENT_INTERNAL_TERMINAL_MODE";
     private const byte Input = 1, Resize = 2, Output = 3, Hello = 4, Exit = 5;
     internal const int MaxPacket = 1024 * 1024;
+
+    /// <summary>True inside the hidden host process that owns a GUI window session.</summary>
+    internal static bool GuiHost { get; private set; }
+
     public static async Task<int> RunAsync(string[] raw)
     {
         var mode = Environment.GetEnvironmentVariable(ModeVariable);
         Environment.SetEnvironmentVariable(ModeVariable, null);
-        if (mode == "host") return await TerminalApp.RunAsync(raw);
+        if (mode is "host" or "gui")
+        {
+            GuiHost = mode == "gui";
+            // The GUI host has no console of its own; a broken inherited handle must never
+            // fault the session, and diagnostics belong to the log file.
+            if (GuiHost) GuiShell.SilenceOutput();
+            return await TerminalApp.RunAsync(raw);
+        }
         try
         {
             var args = TerminalArguments.Parse(raw);
@@ -34,7 +45,7 @@ internal static class TerminalSession
         catch (Exception ex) { Console.Error.WriteLine("AllAgent: " + ex.Message); return 1; }
     }
     internal static string PipeName(string directory) => "allagent-session-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory)).ToUpperInvariant())))[..32];
-    private static ProcessStartInfo StartInfo(string[] raw, string mode)
+    internal static ProcessStartInfo StartInfo(string[] raw, string mode)
     {
         var executable = Environment.ProcessPath ?? throw new InvalidOperationException("无法定位 AllAgent 程序。");
         var info = new ProcessStartInfo(executable) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = Environment.CurrentDirectory };

@@ -182,25 +182,32 @@ dotnet publish src/AllAgent.NET.Terminal -c Release -r win-x64 --self-contained 
 
 发布后保留整个输出目录及 `sandbox/` 子目录。宿主 Python 仍需满足要求，保留随包 `powershell/` 目录；无虚拟化时使用 Monty。
 
-桌面端使用 Avalonia + React / Iconiq UI，在两个终端分别启动：
+原生窗口工作台由终端宿主提供（WPF + WebView2，窗口内直接运行同一套 Web 工作台）：
 
 ```powershell
-# 终端 1：安装根目录和 Web 项目依赖，启动 Vite
-npm install
+allagent -guimode                 # 静默打开原生窗口：命令行立即返回，关闭窗口即退出
+allagent gui                      # 前台运行同一个窗口，Ctrl+C 结束
+allagent gui --gui-devtools       # 窗口内启用开发者工具
+```
+
+开发 Web 界面时在两个终端分别启动：
+
+```powershell
+# 终端 1：安装 Web 依赖并启动 Vite
 npm --prefix src/AllAgent.NET.Web install
 npm --prefix src/AllAgent.NET.Web run dev
 
-# 终端 2：启动桌面宿主，使用 Vite 开发服务
-dotnet run --project src/AllAgent.NET.Desktop -p:SkipWebBuild=true
+# 终端 2：窗口指向 Vite 开发服务（支持热更新）
+dotnet run --project src/AllAgent.NET.Terminal -- gui --gui-url http://127.0.0.1:5173/
 ```
 
 | 项目 | 职责 |
 |---|---|
 | `AllAgent.NET.Core` | UI 无关的 Agent 引擎、模型服务、数据与宿主工具 |
-| `AllAgent.NET.Terminal` | Spectre.Console 终端界面 |
+| `AllAgent.NET.Terminal` | Spectre.Console 终端界面（`/web-ui`、`-guimode` 工作台宿主） |
 | `AllAgent.NET.Sandbox` | Hyperlight 隔离执行 worker |
 | `AllAgent.NET.ToolGenerator` | C# 工具 Schema 与类型化分发生成器 |
-| `AllAgent.NET.Desktop` / `AllAgent.NET.Web` | Avalonia 桌面宿主与 React / Iconiq UI 聊天界面 |
+| `AllAgent.NET.Gui` / `AllAgent.NET.Web` | WPF + WebView2 原生窗口外壳与 React / Iconiq UI 聊天界面 |
 | `AllAgent.NET.Tests` | 工具边界、生命周期、终端行为及实际微虚拟机测试 |
 
 `AllAgent.NET.Core` 可嵌入其他 .NET 应用；扩展工具通过 `[AgentTool]` 注册，模型统一经 `execute_code` 调用。Hyperlight 相关依赖目前包含预览版本，升级需重新验证实际虚拟机测试。

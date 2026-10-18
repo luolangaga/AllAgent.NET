@@ -3,54 +3,16 @@ import { ListTodo, RefreshCw, Trash2 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/b-button'
 import { Card } from '@/components/ui/card'
-import { CodeBlock } from '@/components/ui/code-block'
-import { Skeleton } from '@/components/ui/skeleton'
 import { StatusDot } from '@/components/ui/status-dot'
-import { MessageBubble } from '@/components/MessageBubble'
-import { Modal } from '@/components/shared'
 import { EmptyState, PageShell } from '@/components/PageShell'
-import { formatDateTime, formatRelative, taskIsActive, taskState, taskStateLabel, taskStateTone } from '@/lib/format'
+import { formatRelative, taskIsActive, taskState, taskStateLabel, taskStateTone } from '@/lib/format'
 import { useStore } from '@/lib/store'
-import { invoke } from '@/bridge'
-import { restoreMessages } from '@/utils/execution'
 import { useTasksStore } from '@/stores/tasks'
 import { useNoticesStore } from '@/stores/ui'
-import type { BackgroundTask, Message } from '@/types'
-
-/** Sub-agent output renders with the same message components as the main chat. */
-function TaskTranscript({ task }: { task: BackgroundTask }) {
-  const notices = useStore(useNoticesStore)
-  const [messages, setMessages] = useState<Message[] | null>(null)
-
-  useEffect(() => {
-    let active = true
-    setMessages(null)
-    invoke<Message[]>('conversations.getMessages', { conversationId: task.sessionId })
-      .then(loaded => {
-        if (active) setMessages(restoreMessages(loaded).filter(message => message.role !== 'system' && message.role !== 'tool'))
-      })
-      .catch(error => {
-        if (active) {
-          setMessages([])
-          notices.report(error)
-        }
-      })
-    return () => { active = false }
-  }, [task.sessionId])
-
-  if (messages === null) return <div className="messages"><Skeleton className="h-5 w-1/3" /><Skeleton className="mt-4 h-24 w-full" /></div>
-  if (!messages.length) return <p className="list-description">子代理还没有输出；任务执行中会持续在这里追加。</p>
-  return <div className="messages">{messages.map(message => <MessageBubble key={message.id} message={message} />)}</div>
-}
-
-function detailTitle(task: BackgroundTask): string {
-  return `${task.kind} · ${taskStateLabel(task.state)}`
-}
 
 export default function Tasks() {
   const store = useStore(useTasksStore)
   const notices = useStore(useNoticesStore)
-  const [detail, setDetail] = useState<BackgroundTask | null>(null)
   const [busy, setBusy] = useState(false)
 
   useEffect(() => { void store.loadAll().catch(notices.report) }, [])
@@ -85,7 +47,7 @@ export default function Tasks() {
           {sorted.map(task => <button
             className="list-row task-row"
             key={task.id}
-            onClick={() => setDetail(task)}
+            onClick={() => store.openDetail(task.id)}
             type="button"
           >
             <div className="resource-icon"><ListTodo size={18} /></div>
@@ -119,27 +81,5 @@ export default function Tasks() {
           </button>)}
         </div>
       </Card>}
-
-    {detail ? <Modal
-      description={`${detailTitle(detail)} · 子代理会话 ${detail.sessionId.slice(0, 8)}`}
-      onClose={() => setDetail(null)}
-      size="full"
-      title={detail.title}
-    >
-      <div className="task-detail-meta">
-        <Badge size="sm" variant="dot">{taskStateLabel(detail.state)}</Badge>
-        <span>创建 {formatDateTime(detail.createdAt)}</span>
-        <span>更新 {formatDateTime(detail.updatedAt)}</span>
-        {detail.notifyParent ? <Badge color="blue" size="sm" variant="dot">完成通知父会话</Badge> : null}
-      </div>
-      {detail.error ? <CodeBlock code={detail.error} language="text" maxHeight={200} /> : null}
-      <div className="task-transcript">
-        <TaskTranscript task={detail} />
-      </div>
-      {detail.finalOutput ? <details className="task-output">
-        <summary>最终输出</summary>
-        <CodeBlock code={detail.finalOutput} language="text" maxHeight={320} />
-      </details> : null}
-    </Modal> : null}
   </PageShell>
 }

@@ -6,7 +6,6 @@ artifacts/
 build/
 dist/
 deploy/
-dotnet10-vue-app/
 AllAgent.NET/
 .claude/
 .commandcode/
@@ -24,6 +23,5 @@ AllAgent.NET/
 **/.allagent/
 **/.allagent-legacy/
 SatelliteInterference.spec
-src/AllAgent.NET.Desktop/Assets/web/
 **/TestResults/
 **/*.dmp

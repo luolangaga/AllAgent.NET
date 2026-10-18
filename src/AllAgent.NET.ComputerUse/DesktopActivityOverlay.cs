@@ -11,7 +11,6 @@ using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 using WpfApplication = System.Windows.Application;
-using Screen = System.Windows.Forms.Screen;
 using Rectangle = System.Windows.Shapes.Rectangle;
 using Color = System.Windows.Media.Color;
 using Brushes = System.Windows.Media.Brushes;
@@ -39,7 +38,7 @@ internal static class DesktopActivityOverlay
             {
                 var app = new WpfApplication { ShutdownMode = ShutdownMode.OnExplicitShutdown };
                 if (renderPath != null) { RenderPreview(renderPath); app.Shutdown(); return; }
-                var windows = Screen.AllScreens.Select(screen => new IndicatorWindow(screen.Bounds)).ToArray();
+                var windows = Monitors().Select(bounds => new IndicatorWindow(bounds)).ToArray();
                 var visible = new Stopwatch();
                 var closing = false;
                 var exit = new DispatcherTimer();
@@ -243,4 +242,20 @@ internal static class DesktopActivityOverlay
     { if (nint.Size == 8) SetWindowLongPtr64(hwnd, index, value); else SetWindowLong32(hwnd, index, (int)value); }
     [DllImport("user32.dll")] private static extern bool SetWindowPos(nint hwnd, nint after, int x, int y, int width, int height, uint flags);
     [DllImport("user32.dll")] private static extern bool IsWindowVisible(nint hwnd);
+
+    /// <summary>Monitor rectangles in virtual-screen coordinates; the overlay covers every screen.</summary>
+    private static System.Drawing.Rectangle[] Monitors()
+    {
+        var monitors = new List<System.Drawing.Rectangle>();
+        EnumDisplayMonitors(0, 0, (nint monitor, nint dc, ref NativeRect rect, nint data) =>
+        {
+            monitors.Add(new System.Drawing.Rectangle(rect.Left, rect.Top, rect.Right - rect.Left, rect.Bottom - rect.Top));
+            return true;
+        }, 0);
+        return monitors.Count == 0 ? [new System.Drawing.Rectangle(0, 0, 1, 1)] : [.. monitors];
+    }
+
+    [StructLayout(LayoutKind.Sequential)] private struct NativeRect { public int Left, Top, Right, Bottom; }
+    private delegate bool MonitorEnum(nint monitor, nint dc, ref NativeRect rect, nint data);
+    [DllImport("user32.dll")] private static extern bool EnumDisplayMonitors(nint dc, nint clip, MonitorEnum callback, nint data);
 }

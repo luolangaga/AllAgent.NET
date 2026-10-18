@@ -1,6 +1,6 @@
 namespace AllAgent.NET.Terminal;
 
-internal sealed record CommandHint(string Text, string Description, string Usage = "", bool Advanced = false, bool IsSkill = false)
+internal sealed record CommandHint(string Text, string Description, string Usage = "", bool Advanced = false, bool IsSkill = false, string Aliases = "")
 {
     public string MarkerMarkup => !Text.StartsWith('/') ? "" : IsSkill ? "[blue]● 技能[/] " : "[green]● 命令[/] ";
 }
@@ -53,16 +53,16 @@ internal static class CommandCatalog
         new("/mcp enable", "启用服务", "名称"), new("/mcp disable", "禁用并断开", "名称"), new("/mcp remove", "移除服务", "名称"),
         new("/mcp import", "导入 mcpServers 配置", "路径"), new("/mcp export", "导出脱敏配置", "路径"),
         new("/mcp prompts", "列出服务提示模板", "名称"), new("/mcp prompt", "加载提示模板并发起任务", "名称 模板 [参数JSON]"), new("/mcp resources", "列出资源", "名称"), new("/mcp read", "读取文本资源", "名称 URI"),
-        new("/providers", "提供商配置管理"), new("/providers edit", "编辑地址、Key、协议和参数", "名称"),
+        new("/providers", "提供商配置管理", Aliases: "/config"), new("/providers edit", "编辑地址、Key、协议和参数", "名称"),
         new("/providers refresh", "自动获取模型列表", "名称"), new("/providers models", "手动编辑模型列表", "名称"), new("/providers show", "查看脱敏配置", "名称"),
         new("/providers enable", "启用提供商", "名称"), new("/providers disable", "禁用提供商", "名称"), new("/providers remove", "删除提供商", "名称"),
         new("/model", "切换提供商与模型", "[配置名] [模型 ID]"), new("/models", "查看可用模型"), new("/effort", "设置思考强度或预算", "[级别] [预算]"),
-        new("/new", "开始新任务，旧会话自动保留"), new("/session", "选择或恢复会话 · F3", "[ID]"),
+        new("/new", "开始新任务，旧会话自动保留", Aliases: "/clear"), new("/session", "选择或恢复会话 · F3", "[ID]", Aliases: "/sessions /resume"),
         new("/exit", "退出聊天 · 空输入 Ctrl+C 两次或 Ctrl+D 同样可用"), new("/quit", "同 /exit"),
         new("/workspace", "查看或切换当前工作目录", "[文件夹路径]"),
         new("/rename", "重命名当前会话", "标题"), new("/branch", "复制当前会话并切换", "[标题]"), new("/history", "查看当前对话"), new("/export", "导出 Markdown 或 JSON", "[路径.md|路径.json] [--no-thinking] [--no-tools]"),
         new("/context", "上下文占用与消息统计"), new("/stats", "按模型查看累计输入、输出和总 Token 用量"), new("/compact", "模型总结并归档旧上下文", "[重点]"),
-        new("/checkpoints", "查看任务检查点"), new("/diff", "查看文件工具修改预览", "[检查点 ID]"), new("/undo", "撤销上一轮对话和文件修改"), new("/redo", "重做已撤销任务"),
+        new("/checkpoints", "查看任务检查点"), new("/diff", "查看文件工具修改预览", "[检查点 ID]"), new("/undo", "撤销上一轮对话和文件修改", Aliases: "/rewind"), new("/redo", "重做已撤销任务"),
         new("/status", "模型、工作区、权限与连接状态"), new("/permissions", "切换权限模式", "[ask|full|plan]"), new("/permissions full", "完全访问 · 不逐次审核"), new("/plan", "切换只读规划模式"),
         new("/tools", "查看当前 C# 工具契约"), new("/doctor", "检查 Python、库环境、ripgrep 与执行环境", "[install 修复环境]"),
         new("/browser", "浏览器操作 · 默认开启 · 外置连接向导", "[on|off|status|connect|tutorial|mode builtin|chromium|cdp URL|executable PATH]"),

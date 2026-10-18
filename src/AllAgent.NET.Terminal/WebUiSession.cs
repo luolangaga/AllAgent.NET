@@ -19,7 +19,8 @@ public sealed record SessionPermissionParams(string Mode);
 public sealed record SessionSandboxParams(string Mode);
 public sealed record PluginToggleParams(string PackageId, bool Enabled);
 public sealed record PluginRemoveParams(string PackageId);
-public sealed record PluginSearchParams(string Query);
+public sealed record PluginSearchParams(string Query, int Skip = 0, int Take = 10);
+public sealed record PluginRunCommandParams(string Name, List<string> Args);
 public sealed record PluginInstallParams(string Id, string Version);
 public sealed record PluginImportParams(string FileName, string Base64);
 public sealed record HookToggleParams(string Name, bool Enabled);
@@ -28,6 +29,16 @@ public sealed record PluginProviderInfo(string ProviderId);
 public sealed record PluginAuthInfo(string Id, string Name);
 public sealed record HookInfo(string Name, bool Enabled);
 public sealed record PluginsSnapshot(IReadOnlyList<PluginStatus> Plugins, IReadOnlyList<PluginProviderInfo> Providers, IReadOnlyList<PluginAuthInfo> Authentication, IReadOnlyList<HookInfo> Hooks);
+
+// Account login state, mirroring the terminal's /login list (providers + API-key presets).
+public sealed record AuthProviderInfo(string Id, string Name, string Kind, bool LoggedIn, string Account, string Message, bool ModelConnectionAvailable, string? InputPrompt = null, string? ProviderId = null, string? ConfigId = null, bool Pending = false);
+public sealed record AuthLoginParams(string Id, bool NewAccount = false);
+public sealed record AuthInputParams(string Id, string Secret);
+public sealed record AuthLogoutParams(string Id);
+public sealed record AuthStatusParams(string Id);
+
+// Web command catalog, projected from the terminal's slash commands, plugin commands and skills.
+public sealed record CommandInfo(string Text, string Description, string Usage = "", bool Advanced = false, bool IsSkill = false, string Aliases = "");
 
 // Workspace list with session counts. Every conversation belongs to exactly one
 // workspace, so the sidebar groups by these entries instead of a flat list.
@@ -41,7 +52,10 @@ public sealed record SkillNameParams(string Name);
 public sealed record SkillToggleParams(string Name, bool Enabled);
 public sealed record SkillCreateParams(string Name, string Description, string Instructions, string Scope);
 public sealed record SkillImportParams(string Content, string Scope);
+public sealed record SkillInvokeParams(string Name, string Arguments);
+public sealed record SkillInvokeResult(string Text, IReadOnlyList<ImageAttachment> Images);
 public sealed record WorkspaceCreateParams(string Name);
+public sealed record WorkspaceFilesParams(string Query = "", int Limit = 40);
 
 /// <summary>The terminal's own workspace runtime, shared when the browser stays on the same workspace.</summary>
 internal sealed record WebUiTerminalHost(
@@ -245,11 +259,19 @@ internal sealed class WebUiSession : IAsyncDisposable
         });
         _dispatcher.Register<WorkspaceInfo>("workspace.get", _ => Task.FromResult(Info()));
         _dispatcher.Register<List<WorkspaceInfo>>("workspace.recent", _ => Task.FromResult(Recent()));
+        // `@`-reference completion in the browser composer: workspace-relative paths only.
+        _dispatcher.Register<WorkspaceFilesParams, IReadOnlyList<WorkspaceFileEntry>>("workspace.files", (parameters, _) =>
+            Task.FromResult(WorkspaceFiles.Match(_bundle.Workspace, parameters.Query, parameters.Limit)));
         _dispatcher.Register<PluginsSnapshot>("plugins.list", _ => Task.FromResult(PluginSnapshot()));
         _dispatcher.Register<PluginToggleParams, bool>("plugins.setEnabled", async (parameters, _) => { await _plugins.SetEnabledAsync(parameters.PackageId, parameters.Enabled); return true; });
         _dispatcher.Register<PluginRemoveParams, bool>("plugins.remove", async (parameters, _) => { await _plugins.RemoveAsync(parameters.PackageId); return true; });
-        _dispatcher.Register<PluginSearchParams, IReadOnlyList<PluginPackage>>("plugins.search", (parameters, ct) => installer.SearchAsync(parameters.Query, 0, ct));
+        _dispatcher.Register<PluginSearchParams, PluginSearchResult>("plugins.search", (parameters, ct) => installer.SearchAsync(parameters.Query, parameters.Skip, parameters.Take, ct));
         _dispatcher.Register<PluginInstallParams, InstalledPlugin>("plugins.install", async (parameters, ct) => await Adopt(await installer.InstallAsync(parameters.Id, parameters.Version, ct), ct));
+        _dispatcher.Register<PluginRunCommandParams, string>("plugins.runCommand", async (parameters, ct) =>
+        {
+            var command = _plugins.Commands.SingleOrDefault(c => c.Name == parameters.Name) ?? throw new ArgumentException("插件命令不存在；请先在插件页启用对应插件。");
+            return ToolResult.Clip(await command.Execute(parameters.Args.ToArray(), ct), 16000);
+        });
         _dispatcher.Register<PluginImportParams, InstalledPlugin>("plugins.import", async (parameters, ct) => await Adopt(await installer.ImportAsync(WriteImportFile(parameters), ct), ct));
         _dispatcher.Register<HookToggleParams, bool>("plugins.setHookEnabled", (parameters, _) => { _plugins.SetHookEnabled(parameters.Name, parameters.Enabled); return Task.FromResult(true); });
         _dispatcher.Register<SessionControlState>("session.controls", _ => Task.FromResult(ControlState()));
@@ -343,6 +365,47 @@ internal sealed class WebUiSession : IAsyncDisposable
             ImportSkillText(catalog, parameters.Content, parameters.Scope);
             return Task.FromResult(true);
         });
+        // User-invocable skills mirror the terminal's default slash branch exactly
+        // (PromptReferences.ExpandSkillAsync): references in the arguments expand first,
+        // then the skill instructions are injected around them.
+        _dispatcher.Register<SkillInvokeParams, SkillInvokeResult>("skills.invoke", async (parameters, ct) =>
+        {
+            var input = await PromptReferences.ExpandWithImagesAsync(parameters.Arguments ?? "", _bundle.Workspace, ct, allowExplicitExternalImages: true);
+            return new SkillInvokeResult(catalog.Invoke(parameters.Name, input.Text), input.Images);
+        });
+
+        // Account login: the terminal's /login list, driven from the browser. OAuth opens the
+        // system browser on the host and reports back through the `auth.changed` event.
+        var auth = new WebAuthService(_bundle.Store, _bundle.DataDirectory, _plugins, _pusher, () => _bundle.Agents.HasActiveRuns || _bundle.Tasks.Active);
+        _dispatcher.Register<List<AuthProviderInfo>>("auth.providers", (ct) => auth.ListAsync(ct));
+        _dispatcher.Register<AuthLoginParams, bool>("auth.login", (parameters, _) => Task.FromResult(auth.Login(parameters.Id, parameters.NewAccount)));
+        _dispatcher.Register<AuthInputParams, AuthProviderInfo>("auth.loginInput", (parameters, ct) => auth.LoginWithInputAsync(parameters.Id, parameters.Secret, ct));
+        _dispatcher.Register<AuthLogoutParams, AuthProviderInfo>("auth.logout", (parameters, ct) => auth.LogoutAsync(parameters.Id, ct));
+        _dispatcher.Register<AuthStatusParams, AuthProviderInfo>("auth.status", (parameters, ct) => auth.StatusAsync(parameters.Id, ct));
+
+        // Slash command catalog for the web command palette: built-ins plus plugin commands
+        // and user-invocable skills — the same sources that feed the terminal's hint panel.
+        _dispatcher.Register<List<CommandInfo>>("commands.list", _ => Task.FromResult(CommandList()));
+
+        // Tool catalog with plugin attribution on top of the shared host + MCP listing.
+        var pluginOwners = _plugins.PluginTools.ToDictionary(item => item.Tool.Name, item => item.PackageId, StringComparer.Ordinal);
+        _dispatcher.Register<ToolsSnapshotDto>("tools.list", async (ct) =>
+        {
+            var snapshot = await registrar.ListToolsAsync(ct);
+            if (pluginOwners.Count == 0) return snapshot;
+            return snapshot with { Tools = snapshot.Tools.Select(tool => pluginOwners.TryGetValue(tool.Name, out var packageId) ? tool with { Source = "plugin", Owner = packageId } : tool).ToArray() };
+        });
+    }
+
+    private List<CommandInfo> CommandList()
+    {
+        var commands = CommandCatalog.Builtins
+            .Select(hint => new CommandInfo(hint.Text, hint.Description, hint.Usage, hint.Advanced, hint.IsSkill, hint.Aliases))
+            .ToList();
+        commands.AddRange(_plugins.Commands.Select(command => new CommandInfo("/ext " + command.Name, command.Description, "参数", Advanced: true)));
+        commands.AddRange(_bundle.Catalog.List().Where(skill => skill.Enabled && skill.UserInvocable)
+            .Select(skill => new CommandInfo("/" + skill.Name, skill.Description, "任务参数", Advanced: true, IsSkill: true)));
+        return commands;
     }
 
     private List<WorkbenchConversation> WorkbenchList()

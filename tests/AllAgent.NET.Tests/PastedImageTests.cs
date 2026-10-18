@@ -1,3 +1,4 @@
+using AllAgent.NET.Core.Services;
 using AllAgent.NET.Terminal;
 using Xunit;
 

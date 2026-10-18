@@ -34,6 +34,8 @@ public sealed class AgentService : IAsyncDisposable
     public BackgroundTasks Jobs { get; }
     public bool IsRunning(Guid conversationId) => _conversations.ContainsKey(conversationId);
     public BrowserUseState BrowserUse => _options.BrowserUse;
+    /// <summary>Root the runs of this service are confined to; hosts resolve `@` references against it.</summary>
+    public string WorkspaceRoot => _options.WorkspaceRoot;
     /// <summary>True while any top-level run is active; hosts use it to block configuration changes mid-run.</summary>
     public bool HasActiveRuns => !_conversations.IsEmpty;
     /// <summary>Optional host hook: registers extra tool sets on each freshly created runtime (plugin tools, MCP resources, …).</summary>
@@ -42,6 +44,15 @@ public sealed class AgentService : IAsyncDisposable
     /// browser runs, child runs and bridge model-management requests.</summary>
     public Func<ApiConfig, IAiProvider>? ProviderResolver { get; set; }
     internal IAiProvider ResolveProvider(ApiConfig config) => ProviderResolver?.Invoke(config) ?? _factory.GetProvider(config);
+    /// <summary>Tool catalog for the active host configuration: built-ins plus whatever the
+    /// runtime initializer and MCP service contribute. Builds a throwaway runtime.</summary>
+    public async Task<IReadOnlyList<AgentToolDescriptor>> ListToolDefinitionsAsync(CancellationToken ct = default)
+    {
+        await using var runtime = await AgentRuntime.CreateAsync(_options, ct);
+        if (_mcp != null) runtime.Tools.Register(new McpToolSet(_mcp));
+        RuntimeInitializer?.Invoke(runtime);
+        return runtime.Tools.Definitions;
+    }
     public async ValueTask DisposeAsync()
     {
         Jobs.Completed -= OnJobCompleted;
@@ -86,7 +97,8 @@ public sealed class AgentService : IAsyncDisposable
     }
 
     public string StartStream(Guid conversationId, string userMessage, ApiConfig config,
-        Func<string, AgentEvent, Task> onEvent, CancellationToken externalCt = default, bool internalMessage = false)
+        Func<string, AgentEvent, Task> onEvent, CancellationToken externalCt = default, bool internalMessage = false,
+        IReadOnlyList<ImageAttachment>? images = null, string? inputText = null)
     {
         if (!_conversations.TryAdd(conversationId, 0)) throw new InvalidOperationException("This conversation already has an active run.");
         _lastConfig[conversationId] = config;
@@ -140,7 +152,8 @@ public sealed class AgentService : IAsyncDisposable
                 var probe = await runtime.ProbeSandboxAsync(source.Token);
                 if (!probe.Ok) throw new InvalidOperationException(probe.Error);
                 var engine = new AgentEngine(_store, new RequestRoutingAiProvider(ResolveProvider), runtime.CodeAct, runtimeOptions);
-                await foreach (var evt in engine.RunAsync(conversationId, userMessage, config, source.Token, internalMessage: internalMessage))
+                await foreach (var evt in engine.RunAsync(conversationId, userMessage, config, source.Token,
+                    internalMessage: internalMessage, images: images, inputText: inputText))
                 {
                     if (evt is AgentDone done) terminal = done;
                     else if (evt is AgentError error) failure = error;

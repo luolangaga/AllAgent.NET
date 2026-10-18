@@ -1,0 +1,127 @@
+<Window x:Class="AllAgent.NET.Gui.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
+        Title="AllAgent.NET"
+        Width="1320" Height="860" MinWidth="780" MinHeight="540"
+        WindowStyle="None" ResizeMode="CanResize" WindowStartupLocation="CenterScreen"
+        UseLayoutRounding="True" SnapsToDevicePixels="True" TextOptions.TextFormattingMode="Display"
+        FontFamily="Segoe UI Variable Text, Segoe UI, Microsoft YaHei UI"
+        Background="{DynamicResource ChromeSurface}">
+  <WindowChrome.WindowChrome>
+    <WindowChrome CaptionHeight="36" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="0" UseAeroCaptionButtons="False" />
+  </WindowChrome.WindowChrome>
+  <Window.Resources>
+    <SolidColorBrush x:Key="ChromeSurface" Color="Transparent" />
+    <SolidColorBrush x:Key="ChromeForeground" Color="#FFE8E8EC" />
+    <SolidColorBrush x:Key="ChromeMuted" Color="#FF9A9AA4" />
+    <SolidColorBrush x:Key="ChromeHover" Color="#1AFFFFFF" />
+    <SolidColorBrush x:Key="ChromeBorder" Color="#24FFFFFF" />
+
+    <Style x:Key="ChromeIconButton" TargetType="Button">
+      <Setter Property="Width" Value="32" />
+      <Setter Property="Height" Value="28" />
+      <Setter Property="Margin" Value="1,0" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Foreground" Value="{DynamicResource ChromeMuted}" />
+      <Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets" />
+      <Setter Property="FontSize" Value="12" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="Focusable" Value="False" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Surface" Background="{TemplateBinding Background}" CornerRadius="6">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Surface" Property="Background" Value="{DynamicResource ChromeHover}" />
+                <Setter Property="Foreground" Value="{DynamicResource ChromeForeground}" />
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="Surface" Property="Opacity" Value="0.7" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style x:Key="ChromeWindowButton" TargetType="Button">
+      <Setter Property="Width" Value="46" />
+      <Setter Property="Height" Value="36" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Foreground" Value="{DynamicResource ChromeForeground}" />
+      <Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets" />
+      <Setter Property="FontSize" Value="10" />
+      <Setter Property="Cursor" Value="Arrow" />
+      <Setter Property="Focusable" Value="False" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Surface" Background="{TemplateBinding Background}">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Surface" Property="Background" Value="{DynamicResource ChromeHover}" />
+              </Trigger>
+              <MultiTrigger>
+                <MultiTrigger.Conditions>
+                  <Condition Property="IsMouseOver" Value="True" />
+                  <Condition Property="Tag" Value="close" />
+                </MultiTrigger.Conditions>
+                <Setter TargetName="Surface" Property="Background" Value="#C42B1C" />
+                <Setter Property="Foreground" Value="White" />
+              </MultiTrigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="Surface" Property="Opacity" Value="0.75" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+  </Window.Resources>
+
+  <Border x:Name="Root" Background="{DynamicResource ChromeSurface}" BorderBrush="{DynamicResource ChromeBorder}" BorderThickness="1">
+    <DockPanel LastChildFill="True">
+      <Grid DockPanel.Dock="Top" Height="36" Background="Transparent">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+
+        <StackPanel Grid.Column="0" Orientation="Horizontal" Margin="12,0,8,0" VerticalAlignment="Center" WindowChrome.IsHitTestVisibleInChrome="False">
+          <Border Width="18" Height="18" CornerRadius="5">
+            <Border.Background>
+              <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                <GradientStop Color="#FF7C5CFF" Offset="0" />
+                <GradientStop Color="#FF3BA9FF" Offset="1" />
+              </LinearGradientBrush>
+            </Border.Background>
+            <TextBlock Text="&#x25C6;" FontSize="8" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" />
+          </Border>
+          <TextBlock x:Name="TitleText" Margin="8,0,0,0" VerticalAlignment="Center" FontSize="12.5" FontWeight="SemiBold"
+                     Foreground="{DynamicResource ChromeForeground}" TextTrimming="CharacterEllipsis" />
+        </StackPanel>
+
+        <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Stretch"
+                    WindowChrome.IsHitTestVisibleInChrome="True">
+          <Border Width="1" Height="16" Margin="4,0,6,0" VerticalAlignment="Center" Background="{DynamicResource ChromeBorder}" />
+          <Button x:Name="RefreshButton" Style="{StaticResource ChromeIconButton}" Content="&#xE72C;" ToolTip="刷新界面" />
+          <Button x:Name="BrowserButton" Style="{StaticResource ChromeIconButton}" Content="&#xE8A7;" ToolTip="在浏览器中打开当前页面" />
+          <Button x:Name="DevToolsButton" Style="{StaticResource ChromeIconButton}" Content="&#xE943;" ToolTip="开发者工具" Visibility="Collapsed" />
+          <Border Width="1" Height="16" Margin="6,0,4,0" VerticalAlignment="Center" Background="{DynamicResource ChromeBorder}" />
+          <Button x:Name="MinimizeButton" Style="{StaticResource ChromeWindowButton}" Content="&#xE921;" ToolTip="最小化" />
+          <Button x:Name="MaximizeButton" Style="{StaticResource ChromeWindowButton}" Content="&#xE922;" ToolTip="最大化" />
+          <Button x:Name="CloseButton" Style="{StaticResource ChromeWindowButton}" Tag="close" Content="&#xE8BB;" ToolTip="关闭" />
+        </StackPanel>
+      </Grid>
+
+      <wv2:WebView2 x:Name="View" />
+    </DockPanel>
+  </Border>
+</Window>

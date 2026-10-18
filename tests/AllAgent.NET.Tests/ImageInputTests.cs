@@ -1,6 +1,7 @@
 using System.Text.Json;
 using AllAgent.NET.Core.Data;
 using AllAgent.NET.Core.Models;
+using AllAgent.NET.Core.Services;
 using AllAgent.NET.Core.Services.AI;
 using AllAgent.NET.Terminal;
 using Microsoft.AspNetCore.Http;

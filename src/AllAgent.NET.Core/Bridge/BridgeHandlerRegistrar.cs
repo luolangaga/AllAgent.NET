@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -15,7 +17,7 @@ namespace AllAgent.NET.Core.Bridge;
 
 // DTOs
 public record ConversationDto(Guid Id, string Title, string ModelId, string ProviderId, DateTime CreatedAt, DateTime UpdatedAt);
-public record MessageDto(Guid Id, string Role, string Content, string? ToolCallsJson, string? ToolCallId, string? ToolName, string? ReasoningContent, DateTime CreatedAt, string? HostToolTraceJson, bool IsHostActivity = false, bool IsInterrupted = false);
+public record MessageDto(Guid Id, string Role, string Content, string? ToolCallsJson, string? ToolCallId, string? ToolName, string? ReasoningContent, DateTime CreatedAt, string? HostToolTraceJson, bool IsHostActivity = false, bool IsInterrupted = false, IReadOnlyList<ImageAttachment>? Images = null);
 public record TaskParams(string Id);
 public record SkillDto(Guid Id, string Name, string Description, string ParametersJson, string? CommandTemplate, string Type, bool IsEnabled);
 public record ApiConfigDto(Guid Id, string ProviderId, string DisplayName, string BaseUrl, string ApiKey, string DefaultModel, double Temperature, int MaxTokens, bool IsEnabled, string? ExtraHeadersJson, bool ThinkingEnabled, int ThinkingBudget,
@@ -24,6 +26,8 @@ public record ApiConfigDto(Guid Id, string ProviderId, string DisplayName, strin
     int EffectiveContextTokens = 0, string EffectiveProtocol = "");
 public record McpServerConfigDto(string Id, string Name, string Command, string Arguments, bool IsEnabled, DateTime CreatedAt, bool IsConnected = false);
 public record SettingsDto(string Theme, string Language, string DefaultModel, bool StreamingEnabled, string DefaultProviderId, bool BrowserUseEnabled = true, string BrowserUseMode = "builtin", string BrowserExecutablePath = "", string BrowserCdpUrl = "");
+public record ToolInfoDto(string Name, string Description, string Risk, string ParametersJson, string Source, string Owner);
+public record ToolsSnapshotDto(IReadOnlyList<ToolInfoDto> Tools, IReadOnlyList<string> Errors);
 
 // Request params
 public record CreateConversationParams(string Title = "New Conversation");
@@ -31,7 +35,7 @@ public record RenameConversationParams(Guid Id, string Title);
 public record DeleteConversationParams(Guid Id);
 public record GetMessagesParams(Guid ConversationId);
 public record SetTodosParams(Guid ConversationId, List<TodoItem> Todos);
-public record StartStreamParams(Guid ConversationId, string Message, Guid ApiConfigId, bool ThinkingEnabled = false, int ThinkingBudget = 8000, string? Model = null, string? ReasoningEffort = null);
+public record StartStreamParams(Guid ConversationId, string Message, Guid ApiConfigId, bool ThinkingEnabled = false, int ThinkingBudget = 8000, string? Model = null, string? ReasoningEffort = null, List<ImageAttachment>? Images = null, string? Prompt = null);
 public record CancelStreamParams(string StreamId);
 public record ImportSkillParams(string Json);
 public record ImportSkillZipParams(string Base64Zip);
@@ -137,6 +141,41 @@ public class BridgeHandlerRegistrar
         _dispatcher.Register<DeleteMcpServerConfigParams, bool>("mcpServers.delete", DeleteMcpServerConfigAsync);
         _dispatcher.Register<ConnectMcpServerParams, bool>("mcpServers.connect", ConnectMcpServerAsync);
         _dispatcher.Register<ConnectMcpServerParams, bool>("mcpServers.disconnect", async (p, ct) => { await _mcpToolService.DisconnectServerAsync(p.Id); return true; });
+
+        // Tools catalog
+        _dispatcher.Register<ToolsSnapshotDto>("tools.list", ListToolsAsync);
+    }
+
+    // ── Tools catalog ──────────────────────────────────────────────────────────
+
+    /// <summary>Every tool the current host configuration exposes, with source attribution so
+    /// the web tool browser can tell built-ins from MCP server tools. Hosts with plugin
+    /// support re-register `tools.list` and layer their own attribution on top.</summary>
+    public async Task<ToolsSnapshotDto> ListToolsAsync(CancellationToken ct)
+    {
+        var errors = new List<string>();
+        // MCP tools are namespaced as mcp_<server-hash>_<tool>; rebuild the mapping to attribute them.
+        var mcpOwners = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var server in _mcpToolService.GetAllServerTools())
+        {
+            var prefix = "mcp_" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(server.ServerId)))[..8].ToLowerInvariant();
+            foreach (var tool in server.Tools) mcpOwners[prefix + "_" + tool.Name] = server.Name;
+        }
+        var tools = new List<ToolInfoDto>();
+        try
+        {
+            foreach (var definition in await _agentService.ListToolDefinitionsAsync(ct))
+            {
+                var source = mcpOwners.TryGetValue(definition.Name, out var server) ? "mcp"
+                    : definition.Name.StartsWith("skill_", StringComparison.Ordinal) ? "skill" : "host";
+                tools.Add(new ToolInfoDto(definition.Name, definition.Description, definition.Risk.ToString().ToLowerInvariant(), definition.Parameters.GetRawText(), source, server ?? ""));
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            errors.Add("工具目录暂不可用：" + ex.Message);
+        }
+        return new ToolsSnapshotDto(tools.OrderBy(tool => tool.Name, StringComparer.Ordinal).ToArray(), errors);
     }
 
     // ── Conversations ──────────────────────────────────────────────────────────
@@ -196,13 +235,27 @@ public class BridgeHandlerRegistrar
 
     // ── Chat Streaming ─────────────────────────────────────────────────────────
 
-    private Task<string> StartStreamAsync(StartStreamParams p, CancellationToken ct)
+    private async Task<string> StartStreamAsync(StartStreamParams p, CancellationToken ct)
     {
         if (_store.GetConversation(p.ConversationId) == null) throw new ArgumentException("会话不存在。");
         if (string.IsNullOrWhiteSpace(p.Message)) throw new ArgumentException("消息不能为空。");
         var config = _store.GetApiConfig(p.ApiConfigId)
             ?? throw new Exception($"ApiConfig {p.ApiConfigId} not found");
         if (!config.IsEnabled) throw new InvalidOperationException("所选模型配置已停用。");
+
+        // `@` references resolve exactly like terminal input: text files are inlined and
+        // images attached, then the composer's own attachments are added on top. A `Prompt`
+        // override (an expanded skill) is already final — it is never re-expanded, and only
+        // `Message` stays visible in the transcript, matching the terminal's skill branch.
+        // A token the browser could not complete (a typo, or prose like `@someone`) stays as
+        // plain text instead of failing the whole message.
+        var expanded = string.IsNullOrEmpty(p.Prompt)
+            ? await PromptReferences.ExpandWithImagesAsync(p.Message, _agentService.WorkspaceRoot, ct,
+                allowExplicitExternalImages: true, unresolved: PromptReferences.UnresolvedReference.KeepAsText)
+            : new PromptReferences.ExpandedPrompt(p.Prompt!, Array.Empty<ImageAttachment>());
+        var images = new List<ImageAttachment>(expanded.Images);
+        if (p.Images is { Count: > 0 }) images.AddRange(p.Images);
+        ImageAttachment.Validate(images);
 
         // Apply chat-level overrides to the config copy
         config = new ApiConfig
@@ -234,7 +287,7 @@ public class BridgeHandlerRegistrar
         {
             if (_agentService.IsRunning(p.ConversationId)) throw new InvalidOperationException("This conversation already has an active run.");
             var journal = new BridgeStreamJournal(_store.GetVisibleMessages(p.ConversationId).Where(message => !message.IsInternal).Select(ToDto).ToList(), p.Message);
-            var streamId = _agentService.StartStream(p.ConversationId, p.Message, config,
+            var streamId = _agentService.StartStream(p.ConversationId, expanded.Text, config,
                 async (sid, evt) =>
                 {
                     var timestamp = DateTime.UtcNow;
@@ -254,11 +307,11 @@ public class BridgeHandlerRegistrar
                             if (_webStreams.TryGetValue(p.ConversationId, out var current) && ReferenceEquals(current, journal))
                                 _webStreams.Remove(p.ConversationId);
                     await Task.CompletedTask;
-                });
+                }, images: images, inputText: p.Message);
 
             journal.StreamId = streamId;
             _webStreams[p.ConversationId] = journal;
-            return Task.FromResult(streamId);
+            return streamId;
         }
     }
 
@@ -583,7 +636,8 @@ private Task<SettingsDto> GetSettingsAsync(CancellationToken ct)
         new(c.Id, c.Title, c.ModelId, c.ProviderId, c.CreatedAt, c.UpdatedAt);
 
     private static MessageDto ToDto(Message m) =>
-        new(m.Id, m.Role, m.Role == "user" ? m.InputText ?? m.Content : m.Content, m.ToolCallsJson, m.ToolCallId, m.ToolName, m.ReasoningContent, m.CreatedAt, m.HostToolTraceJson, m.IsHostActivity, m.IsInterrupted);
+        new(m.Id, m.Role, m.Role == "user" ? m.InputText ?? m.Content : m.Content, m.ToolCallsJson, m.ToolCallId, m.ToolName, m.ReasoningContent, m.CreatedAt, m.HostToolTraceJson, m.IsHostActivity, m.IsInterrupted,
+            m.Images.Count > 0 ? m.Images : null);
 
     private static SkillDto ToDto(Skill s) =>
         new(s.Id, s.Name, s.Description, s.ParametersJson, s.CommandTemplate, s.Type.ToString(), s.IsEnabled);

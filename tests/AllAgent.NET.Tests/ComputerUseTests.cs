@@ -91,7 +91,7 @@ public sealed class ComputerUseTests
             Assert.DoesNotContain("imageBase64", screenshot.ToJson()); Assert.DoesNotContain(screenshot.Images[0].Base64, screenshot.ToJson());
             var nodes = JsonSerializer.SerializeToElement(tree.Data, ToolResult.JsonOptions).GetProperty("elements");
             var edit = Assert.Single(nodes.EnumerateArray(), e => e.GetProperty("role").GetString() == "Edit" && e.GetProperty("name").GetString() == "Fixture input");
-            var button = Assert.Single(nodes.EnumerateArray(), e => e.GetProperty("name").GetString() == "Apply");
+            var button = Assert.Single(nodes.EnumerateArray(), e => e.GetProperty("role").GetString() == "Button" && e.GetProperty("name").GetString() == "Apply");
             var text = await tools.ActionAsync(id, edit.GetProperty("elementId").GetString()!, "type_text", "后台 UIA 测试"); Assert.True(text.Ok, text.Error);
             Assert.Equal("set_value", JsonSerializer.SerializeToElement(text.Data).GetProperty("executed").GetString());
             var invoke = await tools.ActionAsync(id, button.GetProperty("elementId").GetString()!, "click"); Assert.True(invoke.Ok, invoke.Error);
@@ -104,10 +104,10 @@ public sealed class ComputerUseTests
             var page2 = await tools.TreeAsync(id, maxElements: 2, offset: next); Assert.True(page2.Ok, page2.Error);
             Assert.NotEqual(JsonSerializer.SerializeToElement(page.Data).GetProperty("elements")[0].GetProperty("elementId").GetString(), JsonSerializer.SerializeToElement(page2.Data).GetProperty("elements")[0].GetProperty("elementId").GetString());
             var missing = await tools.WaitAsync(id, name: "does-not-exist", timeoutMs: 150); Assert.False(missing.Ok);
-            var checkbox = await tools.FindAsync(id, name: "Enable option"); Assert.True(checkbox.Ok, checkbox.Error);
+            var checkbox = await tools.FindAsync(id, name: "Enable option", role: "CheckBox"); Assert.True(checkbox.Ok, checkbox.Error);
             var checkboxId = Assert.Single(JsonSerializer.SerializeToElement(checkbox.Data).GetProperty("elements").EnumerateArray()).GetProperty("elementId").GetString()!;
             Assert.True((await tools.ActionAsync(id, checkboxId, "toggle")).Ok);
-            Assert.True((await tools.WaitAsync(id, name: "Enable option", condition: "on")).Ok);
+            Assert.True((await tools.WaitAsync(id, name: "Enable option", role: "CheckBox", condition: "on")).Ok);
             var readonlyControl = await tools.FindAsync(id, name: "Readonly input", role: "Edit"); Assert.True(readonlyControl.Ok, readonlyControl.Error);
             var readonlyId = Assert.Single(JsonSerializer.SerializeToElement(readonlyControl.Data).GetProperty("elements").EnumerateArray()).GetProperty("elementId").GetString()!;
             var refused = await tools.ActionAsync(id, readonlyId, "type_text", "must not write"); Assert.False(refused.Ok); Assert.Contains("read-only", refused.Error);
@@ -115,10 +115,10 @@ public sealed class ComputerUseTests
             var after = await tools.TreeAsync(id); Assert.True(after.Ok, after.Error);
             Assert.Contains("Applied: 后台 UIA 测试", JsonSerializer.Serialize(after.Data, new JsonSerializerOptions(ToolResult.JsonOptions) { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }));
             var stale = await tools.ActionAsync(id, "invalid-stale-id", "invoke"); Assert.False(stale.Ok); Assert.Contains("stale", stale.Error);
-            var rename = await tools.FindAsync(id, name: "Rename target"); Assert.True(rename.Ok, rename.Error);
+            var rename = await tools.FindAsync(id, name: "Rename target", role: "Button"); Assert.True(rename.Ok, rename.Error);
             var renameId = Assert.Single(JsonSerializer.SerializeToElement(rename.Data).GetProperty("elements").EnumerateArray()).GetProperty("elementId").GetString()!;
             Assert.True((await tools.ActionAsync(id, renameId, "click")).Ok);
-            Assert.True((await tools.WaitAsync(id, name: "Apply changed")).Ok);
+            Assert.True((await tools.WaitAsync(id, name: "Apply changed", role: "Button")).Ok);
             stale = await tools.ActionAsync(id, button.GetProperty("elementId").GetString()!, "click"); Assert.False(stale.Ok); Assert.Contains("stale", stale.Error);
         }
         finally { BoundedProcess.Kill(fixture); }

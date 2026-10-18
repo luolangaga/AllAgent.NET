@@ -11,7 +11,7 @@
     <Project Path="src/AllAgent.NET.Browser/AllAgent.NET.Browser.csproj" />
     <Project Path="src/AllAgent.NET.Core/AllAgent.NET.Core.csproj" />
     <Project Path="src/AllAgent.NET.ComputerUse/AllAgent.NET.ComputerUse.csproj" />
-    <Project Path="src/AllAgent.NET.Desktop/AllAgent.NET.Desktop.csproj" />
+    <Project Path="src/AllAgent.NET.Gui/AllAgent.NET.Gui.csproj" />
     <Project Path="src/AllAgent.NET.Terminal/AllAgent.NET.Terminal.csproj" />
     <Project Path="src/AllAgent.NET.Sandbox/AllAgent.NET.Sandbox.csproj" />
     <Project Path="src/AllAgent.NET.ToolGenerator/AllAgent.NET.ToolGenerator.csproj" />
