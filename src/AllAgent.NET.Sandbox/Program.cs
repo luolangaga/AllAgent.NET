@@ -45,7 +45,8 @@ try
         if (!warm.GetProperty("success").GetBoolean() || warm.GetProperty("stdout").GetString()?.Trim() != "allagent-sandbox-ready")
             throw new InvalidOperationException("Hyperlight guest initialization failed: " + ToolResult.Clip(warm.GetProperty("stderr").GetString() ?? "No ready marker."));
     }
-    Send(new { kind = "ready", instructions = guidance.BuildInstructions(toolsVisibleToModel: false), description = guidance.Description });
+    const string AutoImportGuidance = " Standard-library modules the guest provides (json, base64, struct, math, re, random, collections, itertools, functools, typing, dataclasses, enum, copy, operator, array, bisect, zlib, io, os, sys, encodings and similar) are imported on first use and need no import statement; explicit imports remain valid. A module outside that set raises NameError. Host filesystem, network and process access still requires call_tool.";
+    Send(new { kind = "ready", instructions = guidance.BuildInstructions(toolsVisibleToModel: false) + AutoImportGuidance, description = guidance.Description });
     string? line;
     while ((line = Console.In.ReadLine()) != null)
     {
@@ -53,7 +54,9 @@ try
         if (request.RootElement.GetProperty("kind").GetString() != "execute") throw new InvalidOperationException("Invalid execute request.");
         var code = request.RootElement.GetProperty("code").GetString()!;
         transport.Reset();
-        // A trusted prelude bounds native guest stdout before it crosses IPC.
+        // A trusted prelude bounds native guest stdout before it crosses IPC. Model code
+        // runs in a namespace that imports supported standard-library modules on first
+        // use, so a missing import cannot fail an otherwise correct program.
         var guarded = GuestPythonLibraries.Prelude + """
             import json as _lan_json
             _lan_host_call_tool = call_tool
@@ -107,9 +110,17 @@ try
                 for _lan_index in range(0, len(_lan_text), 1024):
                     _lan_host_call_tool('_lan_stdout', text=_lan_text[_lan_index:_lan_index + 1024])
                 _lan_remaining -= len(_lan_text)
+            _lan_builtins = __builtins__ if isinstance(__builtins__, dict) else vars(__builtins__)
+            class _lan_namespace(dict):
+                def __missing__(self, key):
+                    if key.startswith('_') or key in _lan_builtins:
+                        raise KeyError(key)
+                    _lan_imported = __import__(key)
+                    self[key] = _lan_imported
+                    return _lan_imported
             """ + "\n_lan_source = _lan_json.loads(" + JsonSerializer.Serialize(JsonSerializer.Serialize(code, ToolResult.JsonOptions), ToolResult.JsonOptions) + ")\n" + """
             try:
-                exec(compile(_lan_source, 'allagent-code.py', 'exec'))
+                exec(compile(_lan_source, 'allagent-code.py', 'exec'), _lan_namespace(dict(globals())))
             except Exception as _lan_error:
                 _lan_line = None
                 _lan_column = None

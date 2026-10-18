@@ -114,6 +114,7 @@ const reply = '收到。我先把任务拆成三步执行：\n\n1. 读取当前�
 export function createMockTransport(deliver: Deliver) {
   let streamTimer: number | undefined
   let cancelled = false
+  let taskTick = 0
 
   function emit(eventName: string, data: unknown, streamId: string) {
     deliver(JSON.stringify({ type: 'event', eventName, data, streamId }))
@@ -197,7 +198,34 @@ export function createMockTransport(deliver: Deliver) {
         return streamId
       }
       case 'chat.cancelStream': { cancelled = true; window.clearTimeout(streamTimer); return true }
-      case 'tasks.list': return structuredClone(tasks)
+      // Demo transport: advance the running child on every poll so live step refresh is visible,
+      // and let it finish after a few ticks to show the running → completed transition.
+      case 'tasks.list': {
+        const job = tasks.find(item => item.id === 'job-3')
+        if (job?.state === 'running' && job.steps?.length) {
+          taskTick += 1
+          if (taskTick >= 12) {
+            job.state = 'completed'
+            job.currentStep = null
+            job.finalOutput = '商业级改版交互审阅完成：未发现阻断问题，2 条建议已汇总。'
+          } else {
+            job.currentStep = job.steps[taskTick % job.steps.length]
+          }
+          job.updatedAt = now()
+          const notes = messages['demo-review'] ?? []
+          if (taskTick % 2 === 0 && notes.length < 2) {
+            notes.push({
+              id: `dr-live-${notes.length + 1}`,
+              role: 'assistant',
+              content: notes.length === 0 ? '已定位命令弹窗的键盘处理分支。' : '确认 Esc/Tab 的焦点迁移路径，无回归风险。',
+              createdAt: now(),
+              status: 'done',
+            })
+            messages['demo-review'] = notes
+          }
+        }
+        return structuredClone(tasks)
+      }
       case 'tasks.get': return structuredClone(tasks.find(item => item.id === p.id) ?? null)
       case 'tasks.cancel': return true
       case 'skills.list': return structuredClone(skills)

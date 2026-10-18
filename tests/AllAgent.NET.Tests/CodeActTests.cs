@@ -217,6 +217,22 @@ public sealed class CodeActTests
     }
 
     [Fact]
+    public async Task ActualGuestImportsSupportedModulesOnFirstUseWithoutImportStatements()
+    {
+        using var workspace = new TestWorkspace();
+        await using var runtime = await AgentRuntime.CreateAsync(workspace.Options);
+        var result = await Execute(runtime, "values = sorted([3, 1, 2])\ndef encode():\n    return base64.b64encode(bytes(str(math.floor(2.7)), 'ascii')).decode('ascii')\nprint(json.dumps({'values': values, 'encoded': encode(), 'scrubbed': re.sub('[0-9]+', '#', 'a12b')}))");
+        Assert.True(result.Ok, result.ToJson());
+        Assert.Equal("{\"values\": [1, 2, 3], \"encoded\": \"Mg==\", \"scrubbed\": \"a#b\"}\n", Stdout(result));
+        var explicitImport = await Execute(runtime, "import json\nfrom math import floor\nprint(json.dumps(floor(1.9)))");
+        Assert.True(explicitImport.Ok, explicitImport.ToJson());
+        Assert.Equal("1\n", Stdout(explicitImport));
+        var unavailable = await Execute(runtime, "print(hashlib.md5(b'x').hexdigest())");
+        Assert.False(unavailable.Ok);
+        Assert.Contains("hashlib", unavailable.ToJson());
+    }
+
+    [Fact]
     public async Task ValidatorAcceptsPureLogicAndCallTool()
     {
         using var workspace = new TestWorkspace();

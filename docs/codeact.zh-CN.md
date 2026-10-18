@@ -37,9 +37,9 @@ SDK 的 C# 描述主要列出函数名与说明；AllAgent.NET 在系统消息�
 
 这里 `.` 表示 C# 主机批准的 Windows 工作区。`src` 表示其子目录。空路径、`/`、`/input` 或猜测的磁盘根目录不能用来替代工作区根目录。本实现没有配置 guest 文件挂载或网络白名单。
 
-调用参数遵循实际工具目录，例如 `call_tool('read', path='README.md', offset=1, limit=40)`；允许动态工具名、关键字解包、列表推导、lambda 和普通 Python 语法。模块和函数是否可用由隔离 guest 决定，不再被宿主 AST 提前拒绝。宿主文件、网络及进程操作通过 `call_tool` 完成；guest 未配置文件挂载或网络域名。必须 `print(...)`，单独写最后一个表达式不会自动返回值。
+调用参数遵循实际工具目录，例如 `call_tool('read', path='README.md', offset=1, limit=40)`；允许动态工具名、关键字解包、列表推导、lambda 和普通 Python 语法。模块和函数是否可用由隔离 guest 决定，不再被宿主 AST 提前拒绝。guest 提供的标准库模块（json、math、re、base64、struct、collections、itertools、functools、typing、io、os、sys 等）在首次使用时自动导入，模型代码可以不写 `import`，显式 `import` 同样有效；该集合写入 Sandbox runtime 指令，不在集合内的模块仍按运行时报错处理。宿主文件、网络及进程操作通过 `call_tool` 完成；guest 未配置文件挂载或网络域名。必须 `print(...)`，单独写最后一个表达式不会自动返回值。
 
-源码在 guest 中以 `allagent-code.py` 编译执行。运行时错误返回 `data.diagnostic`，包含异常类型、真实用户源码行、语法错误列号（可用时）和函数调用帧；主机不解析 Python AST，也不猜测行号。宿主工具失败仍是 `ok=false` 的返回值，程序可检查后继续。未知模块在运行时报告错误。
+源码在 guest 中以 `allagent-code.py` 编译执行。运行时错误返回 `data.diagnostic`，包含异常类型、真实用户源码行、语法错误列号（可用时）和函数调用帧；主机不解析 Python AST，也不猜测行号。宿主工具失败仍是 `ok=false` 的返回值，程序可检查后继续。guest 无法提供的模块（如 `hashlib`）在运行时报告 `NameError`，不会被静默替换。
 
 ## 错误、历史与界面
 

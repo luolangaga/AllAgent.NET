@@ -45,14 +45,21 @@ function summary(rows: BackgroundTask[]): string {
  */
 export function SubagentCard({ call }: { call: ToolCall }) {
   const tasks = useStore(useTasksStore)
-  // A chat page can render cards before the task list has ever loaded.
+  const running = call.status === 'running'
+  // A chat page can render cards before the task list has ever loaded, and the child task may
+  // not exist yet when the card mounts — poll for as long as the call itself is running.
   useEffect(() => { if (!tasks.loaded && !tasks.loading) void tasks.loadAll().catch(() => {}) }, [])
+  useEffect(() => {
+    if (!running) return
+    void tasks.refresh().catch(() => {})
+    const timer = window.setInterval(() => { void tasks.refresh().catch(() => {}) }, 1500)
+    return () => window.clearInterval(timer)
+  }, [running])
 
   const related = useMemo(() => tasks.tasks
     .filter(task => task.parentToolCallId === call.id)
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt)), [tasks.tasks, call.id])
   const expected = useMemo(() => expectedRows(call), [call.args])
-  const running = call.status === 'running'
 
   return <div className="subagent-card">
     <div className="subagent-card-head">

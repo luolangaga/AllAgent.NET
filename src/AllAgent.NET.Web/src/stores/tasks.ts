@@ -23,6 +23,25 @@ export const useTasksStore = defineStore('tasks', () => {
     }
   }
 
+  // Silent refresh for polling: keeps the busy spinner out of the way and coalesces bursts
+  // (every live sub-agent card and this store can ask for the same refresh).
+  let refreshing = false
+  async function refresh() {
+    if (refreshing) return
+    refreshing = true
+    try {
+      tasks.value = await invoke<BackgroundTask[]>('tasks.list')
+      loaded.value = true
+    } finally {
+      refreshing = false
+    }
+  }
+
+  // The bridge only pushes `tasks.updated` for finished background children, so live progress
+  // (steps, state, output) needs polling while anything is running — the TUI polls its own
+  // revision counter the same way.
+  window.setInterval(() => { if (activeTasks.value.length) void refresh().catch(() => {}) }, 1500)
+
   async function cancel(id: string) {
     await invoke('tasks.cancel', { id })
     await loadAll()
@@ -39,5 +58,5 @@ export const useTasksStore = defineStore('tasks', () => {
   // list and the sidebar badge in sync.
   bridgeEvents.on('tasks.updated', () => { void loadAll().catch(() => {}) })
 
-  return { tasks, loading, loaded, activeTasks, detailId, loadAll, cancel, detail, openDetail, closeDetail }
+  return { tasks, loading, loaded, activeTasks, detailId, loadAll, refresh, cancel, detail, openDetail, closeDetail }
 })
