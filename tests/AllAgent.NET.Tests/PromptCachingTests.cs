@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using AllAgent.NET.Core.CodeAct;
 using AllAgent.NET.Core.Models;
+using AllAgent.NET.Core.Runtime;
 using AllAgent.NET.Core.Services.AI;
 using AllAgent.NET.Core.Tools;
 using Xunit;
@@ -106,8 +107,8 @@ public sealed class PromptCachingTests
     public async Task CodeActKeepsReusableGuidanceBeforeRuntimeContextAndPermissionChanges(bool includeCapabilities)
     {
         var registry = new ToolRegistry(); registry.Register(new FixtureTools(includeCapabilities));
-        await using var ask = new CodeActProvider(registry, new PythonCodeValidator("unused"), new FixtureSandbox("runtime-A"));
-        await using var full = new CodeActProvider(registry, new PythonCodeValidator("unused"), new FixtureSandbox("runtime-B"), fullAccess: true);
+        await using var ask = new CodeActProvider(registry, new PythonCodeValidator("unused"), new FixtureSandbox("runtime-A"), permission: PermissionMode.Ask);
+        await using var full = new CodeActProvider(registry, new PythonCodeValidator("unused"), new FixtureSandbox("runtime-B"), permission: PermissionMode.Full);
         await ask.PrepareAsync(); await full.PrepareAsync();
         var marker = "\n\n## Sandbox runtime\n";
         var askPrefix = ask.Instructions[..ask.Instructions.IndexOf(marker, StringComparison.Ordinal)];

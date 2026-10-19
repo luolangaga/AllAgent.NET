@@ -230,27 +230,39 @@ public sealed class AgentEngineTests
     }
 
     [Fact]
-    public async Task VolatilePolicyChangesNeverRewriteTheStableSystemPrefix()
+    public async Task VolatilePolicyChangesAppendTailSnapshotsWithoutRewritingEarlierMessages()
     {
         using var workspace = new TestWorkspace(); using var store = new DataStore(Path.Combine(workspace.Root, "data"));
         var session = new Conversation(); store.AddConversation(session);
         var preference = "Question preference:\nMinimize clarification questions.";
-        var model = new ScriptedProvider(Answer("first"), Answer("second"));
+        var model = new ScriptedProvider(Answer("first"), Answer("second"), Answer("third"), Answer("fourth"));
         await using var codeAct = new CodeActProvider(new ToolRegistry(), new(workspace.Python), new FakeSandbox());
         var engine = new AgentEngine(store, model, codeAct, workspace.Options with { VolatileInstructionsProvider = () => preference });
         await Collect(engine.RunAsync(session.Id, "task", Config));
         preference = "Question preference:\nProactively ask the user.";
         await Collect(engine.RunAsync(session.Id, "continue", Config));
-        var first = model.Requests[0].Messages.Where(message => message.Role == "system").ToArray();
-        var second = model.Requests[1].Messages.Where(message => message.Role == "system").ToArray();
-        Assert.Equal(3, first.Length); Assert.Equal(3, second.Length);
-        Assert.Equal(first[0], second[0]); Assert.Equal(first[1], second[1]);
-        Assert.Equal(codeAct.Instructions, first[0].Content);
-        Assert.True(first[2].IsVolatileContext); Assert.True(second[2].IsVolatileContext);
-        Assert.Contains("Minimize", first[2].Content); Assert.Contains("Proactively", second[2].Content);
-        var body = AnthropicProvider.Body(model.Requests[0]);
-        Assert.Equal("ephemeral", body["system"]![1]!["cache_control"]!["type"]!.GetValue<string>());
-        Assert.Null(body["system"]![2]!["cache_control"]);
+        await Collect(engine.RunAsync(session.Id, "again", Config));
+        static string[] Bytes(IEnumerable<ChatMessage> messages) => messages.Select(message => JsonSerializer.Serialize(message)).ToArray();
+        var first = model.Requests[0].Messages; var second = model.Requests[1].Messages; var third = model.Requests[2].Messages;
+        // Volatile policy is a tail snapshot, not a system block: the stable prefix is the two instruction blocks.
+        Assert.Equal(new[] { "system", "system", "user", "user" }, first.Select(message => message.Role));
+        Assert.DoesNotContain(first, message => message.Role == "system" && message.Content.Contains("Question preference"));
+        // Every request keeps all earlier messages byte-identical, so prefix caches survive policy changes.
+        Assert.Equal(Bytes(first), Bytes(second).Take(first.Count));
+        Assert.Equal(Bytes(second), Bytes(third).Take(second.Count));
+        // A changed policy appends one durable snapshot at the tail; an unchanged policy never repeats it.
+        var snapshots = second.Where(message => message.ToolName == "policy_context").ToArray();
+        Assert.Equal(2, snapshots.Length);
+        Assert.Contains("Minimize", snapshots[0].Content);
+        Assert.EndsWith("Proactively ask the user.", snapshots[1].Content);
+        Assert.Equal(2, third.Count(message => message.ToolName == "policy_context"));
+        Assert.Contains(store.GetMessages(session.Id), message => message.IsInternal && message.ToolName == "policy_context" && message.Content.Contains("Proactively"));
+        // Clearing the policy supersedes the earlier snapshot instead of leaving it in force.
+        preference = "";
+        await Collect(engine.RunAsync(session.Id, "stop asking", Config));
+        var cleared = model.Requests[3].Messages.Last(message => message.ToolName == "policy_context");
+        Assert.Contains("host defaults apply", cleared.Content);
+        Assert.Equal(Bytes(third), Bytes(model.Requests[3].Messages).Take(third.Count));
     }
 
     [Theory]
@@ -497,6 +509,21 @@ public sealed class AgentEngineTests
         var events = await Collect(new AgentEngine(store, model, codeAct, workspace.Options with { ModelRetryDelay = TimeSpan.Zero }).RunAsync(session.Id, "task", Config));
         Assert.Equal(2, model.Requests.Count);
         Assert.Equal("stop", Assert.IsType<AgentDone>(events.Last()).FinishReason);
+    }
+
+    [Fact]
+    public async Task TruncatedResponsesWithoutVisibleOutputStopAfterOneContinuation()
+    {
+        using var workspace = new TestWorkspace(); using var store = new DataStore(Path.Combine(workspace.Root, "data"));
+        var session = new Conversation(); store.AddConversation(session);
+        StreamChunk[] ReasoningOnly() => [new(ChunkType.ThinkingDelta, TextDelta: "still reasoning"), new(ChunkType.Done, FinishReason: "length")];
+        var model = new ScriptedProvider(ReasoningOnly(), ReasoningOnly(), Answer("unreachable"));
+        await using var codeAct = new CodeActProvider(new ToolRegistry(), new(workspace.Python), new FakeSandbox());
+        var events = await Collect(new AgentEngine(store, model, codeAct, workspace.Options).RunAsync(session.Id, "task", Config));
+        Assert.Equal(2, model.Requests.Count);
+        Assert.Contains(events, e => e is AgentNotice notice && notice.Message.Contains("单次输出上限"));
+        Assert.Contains(events.OfType<AgentError>(), e => e.Message.Contains("输出预算"));
+        Assert.Equal("error", Assert.IsType<AgentDone>(events.Last()).FinishReason);
     }
 
     private static StreamChunk[] Call(string id) => [new(ChunkType.ToolCallDelta, ToolCall: new(id, "execute_code", "{\"code\":")), new(ChunkType.ToolCallDelta, ToolCall: new(id, "", "\"print(1)\"}")), new(ChunkType.ToolCallComplete, ToolCall: new(id, "execute_code", "{\"code\":\"print(1)\"}"))];

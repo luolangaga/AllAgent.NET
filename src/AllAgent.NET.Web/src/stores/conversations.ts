@@ -1,5 +1,5 @@
 import { defineStore, ref, computed } from '@/lib/store'
-import type { ContextUsage, Conversation, ImageAttachment, Message, TodoItem, ToolCall } from '@/types'
+import type { ContextUsage, Conversation, ConversationUsage, ImageAttachment, Message, NoticePart, RunningConversation, TodoItem, ToolCall } from '@/types'
 import { bridgeEvents, invoke, type BridgeEvents } from '@/bridge'
 import { parseObject, restoreMessages, toolFailed } from '@/utils/execution'
 
@@ -12,7 +12,13 @@ export const useConversationsStore = defineStore('conversations', () => {
   const streamingMessageId = ref<string | null>(null)
   const activeStreamId = ref<string | null>(null)
   const contextUsage = ref<ContextUsage | null>(null)
+  // Cache hit rate and the persisted context count. The live stream only reports context
+  // usage, so this is what keeps the numbers visible after a reload or a conversation switch.
+  const conversationUsage = ref<ConversationUsage | null>(null)
   const isLoading = ref(false)
+  // Sessions running in the background, in this workspace or any other one the host has
+  // open. Switching away never stops a run, so this is what the list and dock mark.
+  const running = ref<RunningConversation[]>([])
 
   // Every mutation that replaces the message list bumps this counter; late
   // history loads may only apply when their version is still current.
@@ -20,6 +26,15 @@ export const useConversationsStore = defineStore('conversations', () => {
   let detachStream: (() => void) | null = null
 
   const active = computed(() => conversations.value.find(item => item.id === activeId.value) ?? null)
+  const runningIds = computed(() => new Set(running.value.map(run => run.conversationId)))
+
+  function isRunning(id?: string | null) { return !!id && runningIds.value.has(id) }
+  function runState(id: string) { return running.value.find(run => run.conversationId === id)?.state ?? null }
+  function runsIn(dataDirectory: string) { return running.value.filter(run => run.dataDirectory === dataDirectory) }
+  /** True while this conversation has a run in flight — whether this page is watching it or the host reports it. */
+  function isBusy(id: string) { return isRunning(id) || (activeId.value === id && (streamingMessageId.value !== null || activeStreamId.value !== null)) }
+
+  async function loadRunning() { running.value = await invoke<RunningConversation[]>('conversations.running') }
 
   function findMessage(id: string): Message | undefined {
     return messages.value.find(message => message.id === id)
@@ -31,6 +46,23 @@ export const useConversationsStore = defineStore('conversations', () => {
       call.status = reason === 'cancelled' ? 'cancelled' : 'error'
       call.note = reason === 'cancelled' ? '执行已停止，请检查操作是否已经生效。' : '运行已结束，未收到此工具的完成结果。'
     }
+  }
+
+  // Retry notices describe a live connection problem; they settle the moment the
+  // stream moves again, so the transcript never keeps claiming a failure.
+  function settleNotices(message: Message | undefined, status: 'settled' | 'failed' = 'settled') {
+    for (const part of message?.parts ?? []) {
+      if (part.type !== 'notice' || part.kind !== 'retry' || part.status !== 'pending') continue
+      part.status = status
+    }
+  }
+
+  function lastPendingNotice(parts: Message['parts']): NoticePart | undefined {
+    for (let index = (parts?.length ?? 0) - 1; index >= 0; index -= 1) {
+      const part = parts![index]
+      if (part.type === 'notice' && part.kind === 'retry' && part.status === 'pending') return part
+    }
+    return undefined
   }
 
   function settleReasoning(message: Message | undefined, completedAt = Date.now(), interrupted = false) {
@@ -45,13 +77,29 @@ export const useConversationsStore = defineStore('conversations', () => {
     conversations.value = await invoke<Conversation[]>('conversations.list')
   }
 
+  /** Cache hit rate and stored context count; optional chrome, so a failure stays silent. */
+  async function loadUsage(id: string) {
+    try {
+      const usage = await invoke<ConversationUsage>('conversations.usage', { conversationId: id })
+      if (activeId.value === id) conversationUsage.value = usage
+    } catch {
+      // A deleted or still-unwritten conversation simply has no counters yet.
+    }
+  }
+
   async function selectConversation(id: string) {
-    if (sending.value || streamingMessageId.value) throw new Error('请先停止当前生成')
+    // Starting a run owns the optimistic bubbles for a few milliseconds; leaving the
+    // stream behind (below) is what keeps the run itself alive.
+    if (sending.value) throw new Error('消息提交中，请稍后再切换会话')
     const version = ++selectionVersion
+    detachStream?.()
+    streamingMessageId.value = null
+    activeStreamId.value = null
     activeId.value = id
     messages.value = []
     todos.value = []
     contextUsage.value = null
+    conversationUsage.value = null
     isLoading.value = true
     await loadConversationView(id, version)
   }
@@ -65,6 +113,7 @@ export const useConversationsStore = defineStore('conversations', () => {
   }
 
   async function loadConversationView(id: string, version: number) {
+    void loadUsage(id)
     const early: StreamEvent[] = []
     const buffer = (type: keyof BridgeEvents, event: BridgeEvents[keyof BridgeEvents]) => { early.push([type, event]) }
     bridgeEvents.on('*', buffer)
@@ -103,16 +152,23 @@ export const useConversationsStore = defineStore('conversations', () => {
 
   function resetView(conversation: Conversation) {
     selectionVersion++
+    detachStream?.()
+    streamingMessageId.value = null
+    activeStreamId.value = null
     conversations.value = [conversation, ...conversations.value.filter(item => item.id !== conversation.id)]
     activeId.value = conversation.id
     messages.value = []
     todos.value = []
     contextUsage.value = null
+    conversationUsage.value = null
     isLoading.value = false
   }
 
+  // A new conversation never interrupts a run in progress: the previous session keeps
+  // working in the background and is listed as running. Only the submit window itself
+  // still owns the optimistic bubbles, so it has to settle first.
   async function createConversation() {
-    if (sending.value || streamingMessageId.value) throw new Error('请先停止当前生成，再新建会话')
+    if (sending.value) throw new Error('消息正在提交中，请稍候再新建会话。')
     const created = await invoke<Conversation>('conversations.create', { title: 'New Conversation' })
     resetView(created)
     return created
@@ -132,7 +188,7 @@ export const useConversationsStore = defineStore('conversations', () => {
   }
 
   async function deleteConversation(id: string) {
-    if (sending.value || streamingMessageId.value) throw new Error('请先停止当前生成')
+    if (isBusy(id)) throw new Error('该会话正在运行，请先停止再删除')
     await invoke('conversations.delete', { id })
     conversations.value = conversations.value.filter(item => item.id !== id)
     if (activeId.value !== id) return
@@ -141,14 +197,15 @@ export const useConversationsStore = defineStore('conversations', () => {
     messages.value = []
     todos.value = []
     contextUsage.value = null
+    conversationUsage.value = null
     isLoading.value = false
     const next = conversations.value[0]?.id
     if (next) await selectConversation(next)
   }
 
   async function setTodos(items: TodoItem[]) {
-    if (sending.value || streamingMessageId.value) throw new Error('请先停止当前生成再编辑 TODO')
     if (!activeId.value) throw new Error('请先选择会话')
+    if (isBusy(activeId.value)) throw new Error('该会话正在运行，请先停止再编辑 TODO')
     const id = activeId.value
     const saved = await invoke<TodoItem[]>('todos.set', { conversationId: id, todos: items })
     if (activeId.value === id) todos.value = saved
@@ -190,7 +247,7 @@ export const useConversationsStore = defineStore('conversations', () => {
       if (message) {
         settleReasoning(message, eventTime(data))
         message.content += data.text
-        message.notice = undefined
+        settleNotices(message)
         const parts = message.parts ?? (message.parts = [])
         const last = parts.at(-1)
         if (last?.type === 'text') last.text += data.text
@@ -203,6 +260,7 @@ export const useConversationsStore = defineStore('conversations', () => {
       const message = findMessage(assistantId)
       if (message) {
         message.reasoningContent = (message.reasoningContent ?? '') + data.text
+        settleNotices(message)
         const parts = message.parts ?? (message.parts = [])
         const previous = parts.at(-1)
         if (previous?.type === 'reasoning' && previous.status === 'streaming') previous.text += data.text
@@ -214,22 +272,41 @@ export const useConversationsStore = defineStore('conversations', () => {
       const message = findMessage(assistantId)
       if (message) {
         settleReasoning(message, eventTime(data))
+        settleNotices(message)
         message.iteration = { current: data.current, maximum: data.maximum, toolCalls: data.toolCalls }
         completedText = message.content
         completedThinking = message.reasoningContent ?? ''
         completedParts = message.parts?.map(part => ({ ...part })) ?? []
       }
     }
+    // A notice is a timeline entry, not model output: retries roll the partial
+    // answer back but keep their notice, and one line covers consecutive attempts.
     const onNotice = (data: BridgeEvents['agent.notice']) => {
       if (!current(data.streamId, data.sequence)) return
       const message = findMessage(assistantId)
-      if (message) {
-        message.notice = data.message
-        if (data.resetResponse) {
-          message.content = completedText
-          message.reasoningContent = completedThinking
-          message.parts = completedParts.map(part => ({ ...part }))
-        }
+      if (!message) return
+      const text = data.message ?? ''
+      if (data.resetResponse) {
+        const notices = (message.parts ?? []).filter(part => part.type === 'notice')
+        message.content = completedText
+        message.reasoningContent = completedThinking
+        message.parts = [...completedParts.map(part => ({ ...part })), ...notices]
+      }
+      const parts = message.parts ?? (message.parts = [])
+      if (!data.resetResponse) {
+        // Bookkeeping notices (compaction, stripped images) update in place so a
+        // pair like「正在整理上下文」/「上下文已整理」stays a single line.
+        const last = parts.at(-1)
+        if (last?.type === 'notice' && last.kind === 'info') last.text = text
+        else parts.push({ type: 'notice', id: crypto.randomUUID(), text, kind: 'info', status: 'settled', attempts: 1 })
+        return
+      }
+      const pending = lastPendingNotice(parts)
+      if (pending) {
+        pending.text = text
+        pending.attempts += 1
+      } else {
+        parts.push({ type: 'notice', id: crypto.randomUUID(), text, kind: 'retry', status: 'pending', attempts: 1 })
       }
     }
     function ensureTool(id: string, name = 'tool'): ToolCall | undefined {
@@ -248,6 +325,7 @@ export const useConversationsStore = defineStore('conversations', () => {
     const onToolCallStarted = (data: BridgeEvents['agent.toolCallStarted']) => {
       if (!current(data.streamId, data.sequence)) return
       settleReasoning(findMessage(assistantId), eventTime(data))
+      settleNotices(findMessage(assistantId))
       const call = ensureTool(data.id, data.name)
       if (call) { call.name = data.name; call.args = data.args; call.parentId = data.parentId }
     }
@@ -300,6 +378,7 @@ export const useConversationsStore = defineStore('conversations', () => {
         if (data.reason === 'timeout') message.error = '执行已超时，已完成的结果保留，可输入“继续”。'
       }
       settleTools(message, data.reason)
+      settleNotices(message, ['error', 'timeout', 'protocol_error'].includes(data.reason) ? 'failed' : 'settled')
       settleReasoning(message, eventTime(data), ['cancelled', 'error', 'timeout', 'protocol_error'].includes(data.reason))
       finish('done')
     }
@@ -311,6 +390,7 @@ export const useConversationsStore = defineStore('conversations', () => {
         message.error = data.message
       }
       settleTools(message, 'error')
+      settleNotices(message, 'failed')
       settleReasoning(message, eventTime(data), true)
       finish(null)
     }
@@ -346,6 +426,8 @@ export const useConversationsStore = defineStore('conversations', () => {
         conversation.title = title.length > 40 ? `${title.slice(0, 40)}…` : title
         void invoke('conversations.rename', { id: conversation.id, title: conversation.title }).catch(() => {})
       }
+      // Usage is persisted as the run reports it: refetch so the cache line lands with the answer.
+      void loadUsage(conversationId)
     }
 
     bridgeEvents.on('agent.token', onToken)
@@ -424,6 +506,50 @@ export const useConversationsStore = defineStore('conversations', () => {
     }
   }
 
+  /**
+   * Summarise older context into a continuation summary — the browser's /compact.
+   * Unlike a normal turn nothing is appended to the visible transcript: the run
+   * streams an AgentNotice and the summary replaces the model-side history.
+   */
+  async function compact(apiConfigId: string, focus = '') {
+    if (sending.value || streamingMessageId.value) throw new Error('已有对话正在生成，请先等待或停止')
+    const conversationId = activeId.value
+    if (!conversationId) throw new Error('当前没有对话，无法整理上下文')
+    if (isRunning(conversationId)) throw new Error('该会话正在运行，请先停止再整理上下文')
+    if (!apiConfigId) throw new Error('先连接一个可用的模型配置，再整理上下文')
+    sending.value = true
+    const assistantId = crypto.randomUUID()
+    try {
+      selectionVersion++
+      isLoading.value = false
+      messages.value = [...messages.value, {
+        id: assistantId, role: 'assistant', content: '', createdAt: new Date().toISOString(),
+        status: 'streaming', toolCalls: [],
+      }]
+      streamingMessageId.value = assistantId
+      const early: StreamEvent[] = []
+      const buffer = (type: keyof BridgeEvents, event: BridgeEvents[keyof BridgeEvents]) => { early.push([type, event]) }
+      bridgeEvents.on('*', buffer)
+      let streamId: string
+      try {
+        streamId = await invoke<string>('chat.compact', { conversationId, apiConfigId, focus: focus || null })
+      } catch (error) {
+        bridgeEvents.off('*', buffer)
+        messages.value = messages.value.filter(message => message.id !== assistantId)
+        streamingMessageId.value = null
+        throw error
+      }
+      bridgeEvents.off('*', buffer)
+      activeStreamId.value = streamId
+      attachStream(streamId, conversationId, assistantId, '', early)
+      // Compaction moves the summary boundary, so the old meter is stale until the next turn.
+      contextUsage.value = null
+      conversationUsage.value = null
+    } finally {
+      sending.value = false
+    }
+  }
+
   async function cancelStream() {
     const streamId = activeStreamId.value
     const messageId = streamingMessageId.value
@@ -459,11 +585,18 @@ export const useConversationsStore = defineStore('conversations', () => {
     }
   })
 
+  /** Stops a run by conversation id — the dock uses this for sessions in other workspaces. */
+  async function cancelRun(conversationId: string) {
+    await invoke('conversations.cancelRun', { conversationId })
+    await loadRunning()
+  }
+
   /** The backend restarted or switched workspace: reload the list and keep the open view consistent. */
   async function refreshAfterBackendChange() {
     if (sending.value) return
     const version = ++selectionVersion
     const list = await invoke<Conversation[]>('conversations.list')
+    void loadRunning().catch(() => {})
     if (version !== selectionVersion || sending.value) return
     conversations.value = list
     const id = activeId.value
@@ -475,16 +608,22 @@ export const useConversationsStore = defineStore('conversations', () => {
       messages.value = []
       todos.value = []
       contextUsage.value = null
+      conversationUsage.value = null
       isLoading.value = false
       return
     }
     await loadConversationView(id, version)
   }
 
+  // Live run state for every workspace: start, finish and "waiting for you" are pushed
+  // as they happen, so the sidebar and the dock never need to poll.
+  bridgeEvents.on('runs.changed', data => { running.value = data.conversations ?? [] })
+
   return {
-    conversations, activeId, active, messages, todos, contextUsage,
-    sending, streamingMessageId, activeStreamId, isLoading,
+    conversations, activeId, active, messages, todos, contextUsage, conversationUsage,
+    sending, streamingMessageId, activeStreamId, isLoading, running,
+    isRunning, runState, runsIn, loadRunning, cancelRun,
     loadAll, selectConversation, createConversation, renameConversation,
-    deleteConversation, setTodos, sendMessage, cancelStream, refreshAfterBackendChange,
+    deleteConversation, setTodos, sendMessage, compact, cancelStream, refreshAfterBackendChange,
   }
 })

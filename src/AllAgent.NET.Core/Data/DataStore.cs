@@ -658,6 +658,7 @@ public partial class DataStore : IDisposable
             loaded.AppSettings ??= new Dictionary<string, string>();
             loaded.McpServerConfigs ??= new List<McpServerConfig>();
             loaded.TokenUsageStats ??= new List<ModelUsageStats>();
+            MigrateLegacyOutputLimits(loaded);
 
             Log($"[DataStore] Deserialization OK: {path}. ApiConfigs={loaded.ApiConfigs.Count}, Skills={loaded.Skills.Count}, Conversations={loaded.Conversations.Count}");
             data = loaded;
@@ -682,6 +683,24 @@ public partial class DataStore : IDisposable
             data.McpServerConfigs ??= new List<McpServerConfig>();
         }
         data.Version = StoreData.CurrentVersion;
+    }
+
+    // The original web form and provider preset wrote small limits (4096/8192/16384) before response
+    // sizing followed the model catalog, and none of them can serve a modern agent request. Every
+    // manifest load applies one pass that turns any explicit limit below the floor back into automatic
+    // sizing; a value at or above it is a deliberate cap and stays. The marker stores the floor that
+    // was applied, so changing the rule runs the pass once more instead of rewriting on every start.
+    private const int LegacyOutputLimitFloor = 32768;
+    private const string LegacyOutputLimitMarker = "migration:output-limit";
+
+    private void MigrateLegacyOutputLimits(StoreData data)
+    {
+        var rule = LegacyOutputLimitFloor.ToString();
+        if (data.AppSettings.TryGetValue(LegacyOutputLimitMarker, out var applied) && applied == rule) return;
+        var migrated = data.ApiConfigs.Where(config => config.MaxTokens > 0 && config.MaxTokens < LegacyOutputLimitFloor).ToArray();
+        foreach (var config in migrated) config.MaxTokens = 0;
+        data.AppSettings[LegacyOutputLimitMarker] = rule;
+        if (migrated.Length > 0) Log($"[DataStore] Output limit migration: {migrated.Length} config(s) below {rule} follow the model catalog again.");
     }
 
     public void Dispose()

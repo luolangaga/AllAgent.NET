@@ -45,7 +45,7 @@ public sealed class EnvironmentDoctor
             catch (Exception ex) when (ex is not OperationCanceledException) { }
         }
         if (pythonPath == null) problems.Add("共享 pip 库需要可执行的 Python 3.10–3.14；缺少或版本不符时将通过 winget 安装 Python 3.13。");
-        var powershell = pwsh ?? Path.Combine(AppContext.BaseDirectory, "powershell", "AllAgent.NET.PowerShell.exe");
+        var powershell = pwsh ?? Path.Combine(AppContext.BaseDirectory, "AllAgent.NET.PowerShell.exe");
         string? powershellPath = null;
         try
         {

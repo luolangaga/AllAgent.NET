@@ -36,6 +36,17 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     }
   }
 
+  /** Refresh the live control state. `running` flips with every task start and finish, so anything
+   * locked while a task runs must ask again when the run list changes instead of trusting a stale value. */
+  async function loadControls() {
+    if (!available.value) return
+    try {
+      controls.value = await invoke<SessionControlState>('session.controls')
+    } catch {
+      // The host went away; the next reconnect reloads everything.
+    }
+  }
+
   async function switchTo(path: string, create = false) {
     switching.value = true
     try {
@@ -74,6 +85,11 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     workspace.value = data.workspace
     void load()
   })
+
+  // Run and job changes are the only things that move `running`: refresh the control state with them
+  // so a finished task unlocks the sandbox switch immediately instead of at the next reload.
+  bridgeEvents.on('runs.changed', () => { void loadControls() })
+  bridgeEvents.on('tasks.updated', () => { void loadControls() })
 
   return { workspace, dataDirectory, sharedDirectory, workspacesRoot, list, switching, controls, available, switcherOpen, openSwitcher, closeSwitcher, load, switchTo, openFolderDialog, create, setPermission, setSandbox }
 })

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { AtSign, FileText, Folder, ImagePlus, Settings2, SlidersHorizontal, Square, X } from 'lucide-react'
 import { AIInput, type PromptSettingGroup } from './ui/ai-input'
 import { Button } from './ui/b-button'
+import { PermissionPicker } from './PermissionPicker'
 import { StatusDot } from './ui/status-dot'
 import { invoke } from '@/bridge'
 import { groupCommands, matchCommands } from '@/lib/commandRouter'
@@ -299,7 +300,10 @@ export function PromptComposer({ draft, onDraftChange, attachments, onAttachment
         <StatusDot animate={busy} size="sm" tone={config ? (busy ? 'active' : 'success') : 'neutral'} />
         {config ? `${config.displayName} · ${config.defaultModel}` : '先连接一个模型，开启对话'}
       </span>
-      {busy ? <Button icon={<Square size={12} />} onClick={onStop} size="sm" variant="outline">停止生成</Button> : null}
+      <span className="composer-meta-actions">
+        <PermissionPicker />
+        {busy ? <Button icon={<Square size={12} />} onClick={onStop} size="sm" variant="outline">停止生成</Button> : null}
+      </span>
     </div>
     {attached || preparing ? <div className="composer-attachments">
       {attachments.map((image, index) => <div className="attachment-chip" key={`${image.name}-${index}`}>

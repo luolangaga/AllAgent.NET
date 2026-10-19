@@ -27,7 +27,7 @@ public sealed class MessageRevertEngineTests
         Assert.NotNull(session.Revert); Assert.Empty(provider.Requests); Assert.Equal(7, store.GetMessages(session.Id).Count);
         var next = checkpoints.Begin(session.Id, "new goal", store.GetVisibleMessages(session.Id));
         await foreach (var evt in engine.RunAsync(session.Id, "NEW-GOAL-PROOF", new ApiConfig { DefaultModel = "fixture" })) Assert.IsNotType<AgentError>(evt);
-        checkpoints.End(store.GetVisibleMessages(session.Id));
+        checkpoints.End(session.Id, store.GetVisibleMessages(session.Id));
         Assert.Null(session.Revert); Assert.Equal(2, session.InvalidatedCheckpoints.Count);
         var request = Assert.Single(provider.Requests);
         Assert.Contains(request.Messages, m => m.Content == "task 1"); Assert.Contains(request.Messages, m => m.Content == "NEW-GOAL-PROOF");

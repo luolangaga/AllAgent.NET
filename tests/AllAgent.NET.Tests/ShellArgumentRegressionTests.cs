@@ -50,7 +50,7 @@ public sealed class ShellArgumentRegressionTests
     [Fact]
     public async Task SdkProbeDoesNotNeedSystemPowerShellOnPath()
     {
-        var info = BoundedProcess.StartInfo(Path.Combine(AppContext.BaseDirectory, "powershell", "AllAgent.NET.PowerShell.exe"), ["--probe"]);
+        var info = BoundedProcess.StartInfo(Path.Combine(AppContext.BaseDirectory, "AllAgent.NET.PowerShell.exe"), ["--probe"]);
         info.Environment["PATH"] = "";
         var result = await BoundedProcess.RunAsync(info, TimeSpan.FromSeconds(30), default);
         Assert.Equal(0, result.ExitCode);

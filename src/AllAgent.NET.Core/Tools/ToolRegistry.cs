@@ -82,7 +82,8 @@ public sealed class ToolRegistry
                 {
                     ExternalPathApproved = grant != null,
                     Preapproved = !approvalPolicy.RequiresApproval,
-                    ResolvedTarget = approvalPolicy.ResolvedTarget
+                    ResolvedTarget = approvalPolicy.ResolvedTarget,
+                    WorkspaceScoped = approvalPolicy.WorkspaceScoped
                 };
                 approved = _approver != null
                     ? await _approver(approvalRequest, ct)

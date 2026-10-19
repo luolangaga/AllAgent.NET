@@ -20,7 +20,7 @@ public sealed class SubAgentRoleSwitchTests
         var child = new Conversation { ParentConversationId = Guid.NewGuid(), AgentRole = "general" }; store.AddConversation(child);
         File.WriteAllText(Path.Combine(w.Root, "safe.txt"), "READ-PROOF");
         var policy = new SubAgentRolePolicy(() => child.AgentRole == "explore", w.Root);
-        var options = w.Options with { IsSubAgent = true, FullAccess = true, InvocationPolicy = policy.Validate, InstructionsProvider = () => "CURRENT ROLE: " + child.AgentRole };
+        var options = w.Options with { IsSubAgent = true, Permission = PermissionMode.Full, InvocationPolicy = policy.Validate, InstructionsProvider = () => "CURRENT ROLE: " + child.AgentRole };
         await using var runtime = await AgentRuntime.CreateAsync(options); var provider = new Provider(store, child.Id);
         var engine = new AgentEngine(store, provider, runtime.CodeAct, options); var config = new ApiConfig { DefaultModel = "fixture" };
         await foreach (var evt in engine.RunAsync(child.Id, "INITIAL", config)) Assert.IsNotType<AgentError>(evt);
@@ -56,7 +56,7 @@ public sealed class SubAgentRoleSwitchTests
         File.WriteAllText(Path.Combine(outside.Root, "outside.txt"), "outside");
         var permissions = new ExternalDirectoryPermissions();
         var policy = new SubAgentRolePolicy(() => true, w.Root, permissions);
-        await using var runtime = await AgentRuntime.CreateAsync(w.Options with { FullAccess = true, InvocationPolicy = policy.Validate, ExternalDirectoryPermissions = permissions });
+        await using var runtime = await AgentRuntime.CreateAsync(w.Options with { Permission = PermissionMode.Full, InvocationPolicy = policy.Validate, ExternalDirectoryPermissions = permissions });
         var write = await runtime.Tools.CallAsync("file_write", JsonSerializer.SerializeToElement(new { path = "forbidden.txt", content = "forbidden" }), CancellationToken.None);
         var read = await runtime.Tools.CallAsync("file_read", JsonSerializer.SerializeToElement(new { path = Path.Combine(outside.Root, "outside.txt") }), CancellationToken.None);
         Assert.False(write.Ok); Assert.False(read.Ok); Assert.False(File.Exists(Path.Combine(w.Root, "forbidden.txt")));

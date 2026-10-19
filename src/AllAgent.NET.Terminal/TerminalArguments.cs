@@ -11,6 +11,7 @@ internal sealed class TerminalArguments
     public Dictionary<string, string> Shell { get; } = new(StringComparer.OrdinalIgnoreCase);
     private string? _dataDirectory;
     private string? _sharedDirectory;
+    private string? _workspace;
 
     public static TerminalArguments Parse(string[] args)
     {
@@ -22,7 +23,7 @@ internal sealed class TerminalArguments
         valued.Add("subagent-provider");
         valued.Add("background-concurrency");
         valued.Add("gui-url");
-        var flagged = new HashSet<string> { "help", "json", "verbose", "install", "inline", "trust-plugin", "full-access", "ask", "no-initialize", "guimode", "gui", "gui-devtools" };
+        var flagged = new HashSet<string> { "help", "json", "verbose", "install", "inline", "trust-plugin", "full-access", "restricted", "ask", "no-initialize", "guimode", "gui", "gui-devtools" };
         var index = 0;
         // Options may be spelled with a single dash when the name is registered (-guimode);
         // every other bare token stays the command word or a positional.
@@ -69,27 +70,46 @@ internal sealed class TerminalArguments
     public string? Get(string name) => Values.GetValueOrDefault(name);
     /// <summary>Requested through -guimode / --guimode / --gui.</summary>
     public bool GuiMode => Flags.Contains("guimode") || Flags.Contains("gui");
-    public string Workspace => Path.GetFullPath(Get("workspace") ?? Environment.CurrentDirectory);
+    public string Workspace => _workspace ??= ResolveWorkspace();
+    /// <summary>True when the current directory is read-only and the user profile stands in for it.</summary>
+    public bool WorkspaceFallback { get; private set; }
     public string DataDirectory => _dataDirectory ??= Path.GetFullPath(Get("data-dir") ?? AllAgent.NET.Core.Data.LegacyDataPaths.ProjectDirectory(Workspace));
     public string SharedDirectory => _sharedDirectory ??= Path.GetFullPath(Get("data-dir") ?? AllAgent.NET.Core.Data.LegacyDataPaths.SharedDirectory(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)));
     public int BackgroundConcurrency => Get("background-concurrency") is { } value
         ? int.TryParse(value, out var parsed) && parsed >= 0 ? parsed : throw new ArgumentException("--background-concurrency requires a nonnegative integer; 0 means unlimited.")
         : 0;
     public int Number(string name, int fallback) => Get(name) is { } value ? int.TryParse(value, out var parsed) && parsed > 0 ? parsed : throw new ArgumentException("Invalid positive integer: " + name) : fallback;
+    /// <summary>Host permission mode: restricted by default; --ask or --full-access override it (--ask wins).</summary>
+    public PermissionMode Permission => Flags.Contains("ask") ? PermissionMode.Ask
+        : Flags.Contains("full-access") ? PermissionMode.Full
+        : PermissionMode.Restricted;
     public AgentOptions Options(ToolsApproval approval)
     {
         DiscoverShellExecutables(Shell);
-        var workspace = Path.GetFullPath(Get("workspace") ?? Environment.CurrentDirectory);
+        var workspace = Workspace;
         return new AgentOptions
         {
             WorkspaceRoot = workspace, SharedDirectory = SharedDirectory, PythonPath = Get("python"), PowerShellPath = Get("pwsh"),
-            SandboxWorkerPath = Get("worker") ?? Path.Combine(AppContext.BaseDirectory, "sandbox", "AllAgent.NET.Sandbox.exe"),
+            SandboxWorkerPath = Get("worker") ?? Path.Combine(AppContext.BaseDirectory, "AllAgent.NET.Sandbox.exe"),
             PythonGuestPath = Get("guest") ?? Environment.GetEnvironmentVariable("HYPERLIGHT_PYTHON_GUEST_PATH"),
-            FullAccess = !Flags.Contains("ask"), MaxToolCalls = Number("max-tools", int.MaxValue),
-            RunTimeout = Get("timeout") == null ? Timeout.InfiniteTimeSpan : TimeSpan.FromSeconds(Number("timeout", 600)), CodeTimeout = TimeSpan.FromSeconds(Number("code-timeout", !Flags.Contains("ask") ? 600 : 60)),
+            Permission = Permission, MaxToolCalls = Number("max-tools", int.MaxValue),
+            RunTimeout = Get("timeout") == null ? Timeout.InfiniteTimeSpan : TimeSpan.FromSeconds(Number("timeout", 600)), CodeTimeout = TimeSpan.FromSeconds(Number("code-timeout", Permission == PermissionMode.Ask ? 60 : 600)),
             ShellAllowlist = Shell, Approver = approval.ApproveAsync,
             AuditPath = Path.Combine(DataDirectory, "audit.jsonl")
         };
+    }
+
+    /// <summary>
+    /// The workspace defaults to the current directory, but an all-users install lives in Program
+    /// Files: running the executable from its own directory would otherwise make a read-only
+    /// folder the workspace. The user profile stands in, and the caller reports the substitution.
+    /// </summary>
+    private string ResolveWorkspace()
+    {
+        if (Get("workspace") is { } requested) return Path.GetFullPath(requested);
+        if (WritableDirectory.CanWrite(Environment.CurrentDirectory)) return Path.GetFullPath(Environment.CurrentDirectory);
+        WorkspaceFallback = true;
+        return Path.GetFullPath(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
     }
 
     internal static void DiscoverShellExecutables(IDictionary<string, string> shell)

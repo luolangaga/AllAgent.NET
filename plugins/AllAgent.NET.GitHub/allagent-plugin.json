@@ -1,0 +1,14 @@
+{
+  "sdkVersion": 1,
+  "assembly": "AllAgent.NET.GitHub.dll",
+  "entryType": "AllAgent.NET.GitHub.GitHubPlugin",
+  "web": {
+    "sdkVersion": 1,
+    "entry": "web/index.html",
+    "capabilities": ["navigation", "workspace.switch"],
+    "contributes": {
+      "pages": [{ "id": "github", "title": "GitHub", "icon": "github", "entry": "web/index.html", "order": 25 }],
+      "commands": [{ "id": "open", "title": "GitHub · Issue、PR 与消息", "page": "github" }]
+    }
+  }
+}

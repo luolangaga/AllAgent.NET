@@ -1,6 +1,6 @@
 # AllAgent.NET .NET Tool
 
-Computer Use：`allagent computer on|off|status`，聊天内 `/computer on|off|status` 控制总开关。AI 使用 `computer_mode` 自动选择三种模式，内置 `/computer-use` 技能指导操作；默认关闭，软件测试优先后台控件点击与文本输入。Worker 随工具包分发，需要 Windows .NET 10 Desktop Runtime。完整后台键鼠需独立 Windows 会话/虚拟机中的 Worker 和安全隧道，未配置时会明确报错。
+Computer Use：`allagent computer status` 查看状态与独立环境配置（始终可用，无总开关）。AI 使用 `computer_mode` 自动选择三种模式，内置 `/computer-use` 技能指导操作；软件测试优先后台控件点击与文本输入。Worker 随工具包分发，需要 Windows .NET 10 Desktop Runtime。完整后台键鼠需独立 Windows 会话/虚拟机中的 Worker 和安全隧道，未配置时会明确报错。
 
 AllAgent.NET 的终端 AI Agent，安装后的命令为 `allagent`。
 
@@ -22,7 +22,7 @@ allagent doctor --install
 allagent chat --workspace C:\Projects\MyProject
 ```
 
-原生窗口工作台（WPF + WebView2 外壳随包分发在 `gui/`，需要已安装 Microsoft Edge WebView2 Runtime）：
+原生窗口工作台（WPF + WebView2 外壳随包分发在宿主同目录，需要已安装 Microsoft Edge WebView2 Runtime）：
 
 ```powershell
 allagent -guimode                  # 静默启动：命令行立即返回，关闭窗口即结束会话
@@ -63,7 +63,7 @@ dotnet tool install --global AllAgent.NET.Terminal --add-source ./artifacts/pack
 dotnet tool update --global AllAgent.NET.Terminal --add-source ./artifacts/packages --version 1.0.1
 ```
 
-版本默认在 `src/AllAgent.NET.Terminal/AllAgent.NET.Terminal.csproj` 中维护，也可以通过 `-p:Version=1.0.2` 覆盖。sandbox 的文件作为工具运行文件放入包内的 `sandbox/` 子目录，不依赖另外发布 AllAgent.NET.Core 或 AllAgent.NET.Sandbox 包。
+版本默认在 `src/AllAgent.NET.Terminal/AllAgent.NET.Terminal.csproj` 中维护，也可以通过 `-p:Version=1.0.2` 覆盖。各 worker 的文件作为工具运行文件与宿主同目录，不依赖另外发布 AllAgent.NET.Core 或 AllAgent.NET.Sandbox 包。
 
 ## 发布
 

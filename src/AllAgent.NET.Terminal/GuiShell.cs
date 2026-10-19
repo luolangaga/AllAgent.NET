@@ -7,7 +7,7 @@ using System.Text;
 namespace AllAgent.NET.Terminal;
 
 /// <summary>
-/// Launches and supervises the WPF GUI shell (gui/AllAgent.NET.Gui.exe) that shows the Web UI
+/// Launches and supervises the WPF GUI shell (AllAgent.NET.Gui.exe) that shows the Web UI
 /// in a native window. The terminal keeps ownership of the backend and the window session:
 /// closing the window ends the host, and ending the host takes the window down with it.
 /// </summary>
@@ -15,7 +15,7 @@ internal static class GuiShell
 {
     private static readonly List<Mutex> _instances = [];
 
-    public static string Path => System.IO.Path.Combine(AppContext.BaseDirectory, "gui", "AllAgent.NET.Gui.exe");
+    public static string Path => System.IO.Path.Combine(AppContext.BaseDirectory, "AllAgent.NET.Gui.exe");
     public static bool Available => File.Exists(Path);
 
     /// <summary>WebView2 profile shared by every GUI window.</summary>

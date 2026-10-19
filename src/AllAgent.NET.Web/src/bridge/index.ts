@@ -1,5 +1,5 @@
 import mitt from 'mitt'
-import type { ContextUsage } from '@/types'
+import type { ContextUsage, RunningConversation } from '@/types'
 import { createMockTransport } from './mock'
 
 // Events pushed from the C# backend. Every agent event carries the streamId of
@@ -16,13 +16,25 @@ type BridgePayloads = {
   'agent.error': { message: string; streamId: string }
   'agent.notice': { message: string; resetResponse: boolean; streamId: string }
   'agent.contextUsage': ContextUsage & { streamId: string }
-  'agent.approvalRequest': { requestId: string; name: string; risk: string; args: string; source?: string | null; requiresExplicitApproval?: boolean; streamId?: string }
-  'agent.question': { id: string; question: string; choices: string[]; multiple: boolean; streamId?: string }
+  'agent.approvalRequest': { requestId: string; conversationId?: string; name: string; risk: string; args: string; source?: string | null; requiresExplicitApproval?: boolean; streamId?: string }
+  'agent.question': { id: string; conversationId?: string; question: string; choices: string[]; multiple: boolean; streamId?: string }
   'interactions.resolved': { id: string }
   'workspace.changed': { workspace: string; dataDirectory: string }
   'workspace.folderPicked': { path: string | null; error?: string | null }
   'tasks.updated': { conversationId: string }
+  // Sessions with a run in flight, across every workspace the host has open.
+  'runs.changed': { conversations: RunningConversation[] }
   'auth.changed': { id: string; error?: string | null }
+  // Plugin web extensions changed (install / enable / web toggle): reload the contribution snapshot.
+  'web.contributions.changed': Record<string, never>
+  // Integrated terminal: base64 output frames with a per-session sequence, exit notices and
+  // a tab-list change push (create/close/exit). streamId carries the terminal session id.
+  'terminal.output': { base64: string; streamId: string }
+  'terminal.exit': { exitCode: number | null; streamId: string }
+  'terminal.changed': Record<string, never>
+  // Git panel: line-streamed network operations (fetch/pull/push) and their completion.
+  'git.output': { jobId: string; text: string; error: boolean }
+  'git.done': { jobId: string; label: string; ok: boolean; message: string }
 }
 export type BridgeEvents = { [K in keyof BridgePayloads]: BridgePayloads[K] & { sequence?: number; timestamp?: string } }
 
@@ -38,12 +50,13 @@ interface BridgeRequest {
 
 interface BridgeResponse {
   id?: string
-  type?: 'response' | 'event' | 'tasks.updated' | 'workspace.changed' | 'workspace.folderPicked' | 'auth.changed'
+  type?: 'response' | 'event' | 'tasks.updated' | 'workspace.changed' | 'workspace.folderPicked' | 'runs.changed' | 'auth.changed' | 'web.contributions.changed'
   eventName?: string
   streamId?: string
   sequence?: number
   timestamp?: string
   conversationId?: string
+  conversations?: RunningConversation[]
   workspace?: string
   dataDirectory?: string
   path?: string | null
@@ -112,6 +125,10 @@ function dispatch(json: string) {
     bridgeEvents.emit('tasks.updated', { conversationId: String(msg.conversationId ?? '') })
     return
   }
+  if (msg.type === 'runs.changed') {
+    bridgeEvents.emit('runs.changed', { conversations: Array.isArray(msg.conversations) ? msg.conversations : [] })
+    return
+  }
   if (msg.type === 'workspace.changed') {
     bridgeEvents.emit('workspace.changed', { workspace: String(msg.workspace ?? ''), dataDirectory: String(msg.dataDirectory ?? '') })
     return
@@ -126,6 +143,10 @@ function dispatch(json: string) {
   if (msg.type === 'auth.changed') {
     // Login flows settle outside the RPC that started them; the result arrives as this notification.
     bridgeEvents.emit('auth.changed', { id: String(msg.id ?? ''), error: msg.error ? String(msg.error) : null })
+    return
+  }
+  if (msg.type === 'web.contributions.changed') {
+    bridgeEvents.emit('web.contributions.changed', {})
     return
   }
   if (msg.type === 'event' && msg.eventName) {

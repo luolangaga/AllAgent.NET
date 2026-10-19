@@ -11,7 +11,7 @@ public sealed class ParallelToolCallTests
     { calls = Enumerable.Range(0, count).Select(i => new { name = "probe", arguments = new { index = i } }) });
 
     [Fact]
-    public async Task RunsEightConcurrentlyAndPreservesInputOrder()
+    public async Task RunsSixteenConcurrentlyAndPreservesInputOrder()
     {
         var active = 0;
         var started = 0;
@@ -20,12 +20,12 @@ public sealed class ParallelToolCallTests
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var execution = ParallelToolCalls.ExecuteAsync(Batch(16), async (_, args, ct) =>
         {
-            Assert.InRange(Interlocked.Increment(ref active), 1, 8);
-            if (Interlocked.Increment(ref started) == 8) ready.TrySetResult();
+            Assert.InRange(Interlocked.Increment(ref active), 1, 16);
+            if (Interlocked.Increment(ref started) == 16) ready.TrySetResult();
             try { await release.Task.WaitAsync(ct); return ToolResult.Success(args.GetProperty("index").GetInt32()); }
             finally { Interlocked.Decrement(ref active); }
         }, timeout.Token).AsTask();
-        try { await ready.Task.WaitAsync(timeout.Token); Assert.Equal(8, Volatile.Read(ref started)); }
+        try { await ready.Task.WaitAsync(timeout.Token); Assert.Equal(16, Volatile.Read(ref started)); }
         finally { release.TrySetResult(); }
         var result = await execution;
         Assert.True(result.Ok);

@@ -8,16 +8,20 @@ export const useSettingsStore = defineStore('settings', () => {
   const defaultModel = ref('')
   const streamingEnabled = ref(true)
   const defaultProviderId = ref('')
+  // AI commit-message drafting target; empty follows the composer's currently selected model.
+  const gitCommitConfigId = ref('')
   const browserUseEnabled = ref(true)
   const browserUseMode = ref<AppSettings['browserUseMode']>('builtin')
   const browserExecutablePath = ref('')
   const browserCdpUrl = ref('')
   const loaded = ref(false)
 
+  function prefersDark(): boolean {
+    return typeof window.matchMedia === 'function' && window.matchMedia('(prefers-color-scheme: dark)').matches
+  }
+
   function applyTheme(next: AppSettings['theme']) {
-    const resolved = next === 'system'
-      ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
-      : next
+    const resolved = next === 'system' ? (prefersDark() ? 'dark' : 'light') : next
     document.documentElement.classList.toggle('dark', resolved === 'dark')
     document.documentElement.dataset.theme = resolved
   }
@@ -33,6 +37,7 @@ export const useSettingsStore = defineStore('settings', () => {
     defaultModel.value = settings.defaultModel ?? ''
     streamingEnabled.value = settings.streamingEnabled ?? true
     defaultProviderId.value = settings.defaultProviderId ?? ''
+    gitCommitConfigId.value = settings.gitCommitConfigId ?? ''
     loaded.value = true
     applyTheme(theme.value)
   }
@@ -48,17 +53,20 @@ export const useSettingsStore = defineStore('settings', () => {
       defaultModel: defaultModel.value,
       streamingEnabled: streamingEnabled.value,
       defaultProviderId: defaultProviderId.value,
+      gitCommitConfigId: gitCommitConfigId.value,
     })
   }
 
   applyTheme(theme.value)
 
-  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
-    if (theme.value === 'system') applyTheme('system')
-  })
+  if (typeof window.matchMedia === 'function') {
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+      if (theme.value === 'system') applyTheme('system')
+    })
+  }
 
   return {
-    theme, language, defaultModel, streamingEnabled, defaultProviderId,
+    theme, language, defaultModel, streamingEnabled, defaultProviderId, gitCommitConfigId,
     browserUseEnabled, browserUseMode, browserExecutablePath, browserCdpUrl,
     loaded, load, save, applyTheme,
   }

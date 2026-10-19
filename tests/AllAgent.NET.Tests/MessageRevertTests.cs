@@ -36,7 +36,7 @@ public sealed class MessageRevertTests
             checkpoints.BeforeWrite("shared.txt"); File.WriteAllText(Path.Combine(root, "shared.txt"), "version " + index); checkpoints.AfterWrite("shared.txt");
             if (index == 1) { checkpoints.BeforeWrite("created.txt"); File.WriteAllText(Path.Combine(root, "created.txt"), "created"); checkpoints.AfterWrite("created.txt"); }
             store.AddMessage(session.Id, new Message { ConversationId = session.Id, Role = "assistant", Content = "reply " + index });
-            checkpoints.End(session.Messages);
+            checkpoints.End(session.Id, session.Messages);
         }
         return (session, users);
     }
@@ -123,7 +123,7 @@ public sealed class MessageRevertTests
         var session = new Conversation(); store.AddConversation(session); checkpoints.Begin(session.Id, "one turn", []);
         store.AddMessage(session.Id, new Message { ConversationId = session.Id, Role = "user", Content = "start" });
         var steer = new Message { ConversationId = session.Id, Role = "user", Content = "mid-turn steer" }; store.AddMessage(session.Id, steer);
-        checkpoints.End(session.Messages);
+        checkpoints.End(session.Id, session.Messages);
         Assert.Throws<InvalidOperationException>(() => checkpoints.RevertRange(store, session.Id, steer.Id)); Assert.Null(session.Revert);
     }
     [Fact]

@@ -4,14 +4,17 @@ import { Input } from '@/components/ui/input'
 import { Modal } from '@/components/shared'
 import { useStore } from '@/lib/store'
 import { useCommandsStore } from '@/stores/commands'
+import { useContributionsStore } from '@/stores/contributions'
 import { useNoticesStore } from '@/stores/ui'
-import { isTerminalOnly, matchCommands, runCommand, type CommandHost } from '@/lib/commandRouter'
+import { isTerminalOnly, matchCommands, runCommand, WEB_COMMANDS, type CommandHost } from '@/lib/commandRouter'
 import type { CommandInfo } from '@/types'
 
 // Global command palette (Ctrl+Shift+P). Every terminal slash command is listed; the ones
-// with browser equivalents execute, the rest are marked 终端专属.
+// with browser equivalents execute, the rest are marked 终端专属. Plugin-contributed pages
+// surface as their own group.
 export function CommandPalette({ open, host, onClose }: { open: boolean; host: CommandHost; onClose: () => void }) {
   const store = useStore(useCommandsStore)
+  const contributions = useStore(useContributionsStore)
   const notices = useStore(useNoticesStore)
   const [query, setQuery] = useState('')
 
@@ -19,17 +22,29 @@ export function CommandPalette({ open, host, onClose }: { open: boolean; host: C
     if (open) {
       setQuery('')
       void store.loadAll()
+      void contributions.loadAll()
     }
   }, [open])
 
   const matches = useMemo(() => {
+    // Browser-only bubbles (文件 / Git / 终端) sit next to the host's slash catalog.
+    const catalog = [...WEB_COMMANDS, ...store.commands]
     const trimmed = query.trim()
-    if (!trimmed) return store.commands
+    if (!trimmed) return catalog
     const slash = trimmed.startsWith('/') ? trimmed : `/${trimmed}`
-    const byName = matchCommands(store.commands, slash)
+    const byName = matchCommands(catalog, slash)
     if (byName.length) return byName
-    return store.commands.filter(item => item.description.includes(trimmed))
+    return catalog.filter(item => item.description.includes(trimmed))
   }, [query, store.commands])
+
+  const webCommands = useMemo(() => {
+    const needle = query.trim().toLowerCase()
+    if (!needle) return contributions.commands
+    return contributions.commands.filter(command =>
+      command.title.toLowerCase().includes(needle)
+      || command.pluginName.toLowerCase().includes(needle)
+      || command.key.toLowerCase().includes(needle))
+  }, [query, contributions.commands])
 
   async function execute(item: CommandInfo) {
     // Skills run from the composer: fill the draft so the user can add task arguments first.
@@ -94,8 +109,21 @@ export function CommandPalette({ open, host, onClose }: { open: boolean; host: C
       <div className="palette-list">
         {common.length ? <div className="palette-group"><span className="palette-group-title">常用</span>{common.map(row)}</div> : null}
         {skills.length ? <div className="palette-group"><span className="palette-group-title">技能 · {skills.length}</span>{skills.map(row)}</div> : null}
+        {webCommands.length ? <div className="palette-group">
+          <span className="palette-group-title">插件界面 · {webCommands.length}</span>
+          {webCommands.map(command => <button
+            className="palette-row"
+            key={command.key}
+            onClick={() => { host.go(command.route); onClose() }}
+            type="button"
+          >
+            <span className="palette-command mono">{command.title}</span>
+            <Badge color="gray" size="sm" variant="dot">插件</Badge>
+            <span className="palette-desc">{command.pluginName} 提供的 Web 界面</span>
+          </button>)}
+        </div> : null}
         {advanced.length ? <div className="palette-group"><span className="palette-group-title">全部命令</span>{advanced.map(row)}</div> : null}
-        {!matches.length ? <p className="list-description">没有匹配“{query}”的命令。</p> : null}
+        {!matches.length && !webCommands.length ? <p className="list-description">没有匹配“{query}”的命令。</p> : null}
       </div>
     </>}
   </Modal>

@@ -14,11 +14,30 @@ public class ModelCatalogTests
         Assert.Equal(2048, ModelCatalog.OutputLimit(c));
         c.DefaultModel = "large";
         Assert.Equal(131072, ModelContext.Capacity(c));
-        Assert.Equal(32000, ModelCatalog.OutputLimit(c));
+        Assert.Equal(65536, ModelCatalog.OutputLimit(c));
         c.MaxTokens = 100000;
         Assert.Equal(65536, ModelCatalog.OutputLimit(c));
         c.ModelContextWindows["large"] = 200000;
         Assert.Equal(200000, ModelContext.Capacity(c));
+    }
+    [Fact]
+    public void OutputLimitFollowsTheCatalogValueAndKeepsPromptRoom()
+    {
+        var c = new ApiConfig { ProviderId = "custom", DefaultModel = "mystery", BaseUrl = "http://127.0.0.1:1234/v1" };
+        ModelCatalog.Remember(c, [new("mystery", "Mystery", 200000, 65536)]);
+        // The advertised output limit drives the automatic value; 32k is not a ceiling.
+        Assert.Equal(65536, ModelCatalog.OutputLimit(c));
+        c.MaxTokens = 12000;
+        Assert.Equal(12000, ModelCatalog.OutputLimit(c));
+        c.MaxTokens = 200000;
+        Assert.Equal(65536, ModelCatalog.OutputLimit(c));
+        c.MaxTokens = 0;
+        c.ModelContextWindows["mystery"] = 80000;
+        Assert.Equal(40000, ModelCatalog.OutputLimit(c));
+        var unknown = new ApiConfig { ProviderId = "custom", DefaultModel = "unknown-id", BaseUrl = "http://127.0.0.1:1234/v1" };
+        Assert.Equal(32000, ModelCatalog.OutputLimit(unknown));
+        unknown.MaxTokens = 40000;
+        Assert.Equal(40000, ModelCatalog.OutputLimit(unknown));
     }
     [Fact]
     public void CatalogSupportsOnlyImplementedProtocolsAndExactIds()

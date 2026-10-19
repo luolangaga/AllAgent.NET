@@ -1,3 +1,4 @@
+using System.Text.Json;
 using AllAgent.NET.Core.Data;
 using AllAgent.NET.Core.Models;
 using Xunit;
@@ -99,5 +100,37 @@ public sealed class ConfigStorageSplitTests
         using var other = new DataStore(Path.Combine(second.Root, "data"), false, shared);
         Assert.Equal("shared-provider", Assert.Single(other.ApiConfigs).DisplayName);
         Assert.Empty(other.Conversations);
+    }
+
+    [Fact]
+    public void legacy_small_output_limits_follow_the_model_catalog_once()
+    {
+        using var workspace = new TestWorkspace();
+        var data = Path.Combine(workspace.Root, "data");
+        Directory.CreateDirectory(data);
+        var legacy = new[]
+        {
+            new ApiConfig { ProviderId = "custom", DisplayName = "web-default", BaseUrl = "https://example.test/v1", DefaultModel = "test-model", MaxTokens = 4096 },
+            new ApiConfig { ProviderId = "custom", DisplayName = "preset-default", BaseUrl = "https://example.test/v1", DefaultModel = "test-model", MaxTokens = 16384 },
+            new ApiConfig { ProviderId = "custom", DisplayName = "small", BaseUrl = "https://example.test/v1", DefaultModel = "test-model", MaxTokens = 8192 },
+            new ApiConfig { ProviderId = "custom", DisplayName = "chosen", BaseUrl = "https://example.test/v1", DefaultModel = "test-model", MaxTokens = 32768 },
+        };
+        File.WriteAllText(Path.Combine(data, "allagent.json"), JsonSerializer.Serialize(new { version = 3, apiConfigs = legacy }));
+
+        using (var store = new DataStore(data))
+        {
+            Assert.Equal(0, store.ApiConfigs.Single(item => item.DisplayName == "web-default").MaxTokens);
+            Assert.Equal(0, store.ApiConfigs.Single(item => item.DisplayName == "preset-default").MaxTokens);
+            Assert.Equal(0, store.ApiConfigs.Single(item => item.DisplayName == "small").MaxTokens);
+            Assert.Equal(32768, store.ApiConfigs.Single(item => item.DisplayName == "chosen").MaxTokens);
+            // The applied floor is persisted with the next save, so a deliberate cap set afterwards stays.
+            var chosen = store.ApiConfigs.Single(item => item.DisplayName == "chosen");
+            chosen.MaxTokens = 16384;
+            store.UpdateApiConfig(chosen);
+        }
+
+        using var reopened = new DataStore(data);
+        Assert.Equal(16384, reopened.ApiConfigs.Single(item => item.DisplayName == "chosen").MaxTokens);
+        Assert.Equal(0, reopened.ApiConfigs.Single(item => item.DisplayName == "web-default").MaxTokens);
     }
 }

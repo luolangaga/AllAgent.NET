@@ -12,7 +12,7 @@ public sealed class PowerShellSessionCodeActTests
     public async Task SessionPersistsAcrossExecuteCodeCalls()
     {
         using var workspace = new TestWorkspace();
-        await using var runtime = await AgentRuntime.CreateAsync(workspace.Options with { FullAccess = true });
+        await using var runtime = await AgentRuntime.CreateAsync(workspace.Options with { Permission = PermissionMode.Full });
         var first = await Execute(runtime, "r = call_tool('powershell_script', script='$shared = 7')\nprint(r['ok'], r['data']['session'])");
         Assert.True(first.Ok, first.ToJson());
         Assert.Contains("True main", Stdout(first));

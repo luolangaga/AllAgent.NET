@@ -71,7 +71,7 @@ public sealed class HyperlightRecoveryTests
         await using var jobs = new AllAgent.NET.Core.Services.BackgroundTasks();
         await using var runtime = await AgentRuntime.CreateAsync(w.Options with
         {
-            FullAccess = true, BackgroundTasks = jobs,
+            Permission = PermissionMode.Full, BackgroundTasks = jobs,
             ShellAllowlist = new Dictionary<string, string>
             {
                 ["curl"] = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "curl.exe")
@@ -101,7 +101,7 @@ public sealed class HyperlightRecoveryTests
     {
         using var w = new TestWorkspace();
         await using var jobs = new AllAgent.NET.Core.Services.BackgroundTasks();
-        await using var runtime = await AgentRuntime.CreateAsync(w.Options with { FullAccess = true, BackgroundTasks = jobs,
+        await using var runtime = await AgentRuntime.CreateAsync(w.Options with { Permission = PermissionMode.Full, BackgroundTasks = jobs,
             ShellAllowlist = new Dictionary<string, string> { ["probe"] = Path.Combine(AppContext.BaseDirectory, "probe", "AllAgent.NET.ProcessProbe.exe") } });
         for (var i = 0; i < 8; i++)
         {
@@ -134,7 +134,7 @@ public sealed class HyperlightRecoveryTests
     [Fact]
     public async Task PowerShellEncodingRunsThroughGuestWithoutMissingModules()
     {
-        using var w = new TestWorkspace(); await using var runtime = await AgentRuntime.CreateAsync(w.Options with { FullAccess = true });
+        using var w = new TestWorkspace(); await using var runtime = await AgentRuntime.CreateAsync(w.Options with { Permission = PermissionMode.Full });
         var result = await Execute(runtime, "import base64\nscript = \"Write-Output '中文 😀 quoted \\\"value\\\"'\"\nencoded = base64.b64encode(script.encode('utf-16-le')).decode('ascii')\nr = call_tool('run_shell', exe='pwsh', args=['-NoProfile', '-EncodedCommand', encoded])\nprint(r['ok'])\nprint(r['data']['stdout'])");
         Assert.True(result.Ok, result.ToJson()); var stdout = JsonSerializer.SerializeToElement(result.Data).GetProperty("stdout").GetString()!;
         Assert.Contains("True", stdout); Assert.Contains("中文 😀 quoted \"value\"", stdout);

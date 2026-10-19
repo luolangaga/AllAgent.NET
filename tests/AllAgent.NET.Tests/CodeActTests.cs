@@ -32,7 +32,7 @@ public sealed class CodeActTests
     public async Task LargeToolArgumentsCrossGuestBufferWithoutSplittingFiles()
     {
         using var workspace = new TestWorkspace();
-        await using var runtime = await AgentRuntime.CreateAsync(workspace.Options with { FullAccess = true });
+        await using var runtime = await AgentRuntime.CreateAsync(workspace.Options with { Permission = PermissionMode.Full });
         var content = new string('中', 9000) + new string('x', 18000);
         var code = "r = call_tool('file_write', path='large.cs', content=" + JsonSerializer.Serialize(content, new JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }) + ")\nprint(r['ok'])";
         var result = await Execute(runtime, code);

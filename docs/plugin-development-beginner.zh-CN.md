@@ -381,3 +381,61 @@ await foreach (var evt in engine.RunAsync(conversationId, "用户任务", config
 SDK 的包 ID 为 `AllAgent.NET.Core`，本文示例固定使用 `1.1.0`。更新 SDK 时，在项目文件中修改版本，并使用支持相同接口的宿主。插件自己的版本单独递增。
 
 NuGet 包包含 Core DLL、工具生成器、本文 README、参考文档、GPLv3 许可证正文和第三方声明。项目源码与包信息可在 [AllAgent.NET 仓库](https://github.com/luolangaga/AllAgent.NET) 查看，许可证标识为 `GPL-3.0-only`。第三方组件保留各自的许可证和声明，详见仓库的 `THIRD-PARTY-NOTICES.md`。
+
+## 15. 让插件拥有自己的 Web 界面
+
+到这里插件已经会干活了，但它还只活在终端和对话里。`web` 块可以给插件一张「门面」：在 Web 工作台（`/web-ui`、`gui` 窗口）的侧边栏加一个页面、给工具换上自绘的工具卡、往命令面板塞一个入口。界面运行在宿主提供的沙箱 iframe 里，任何 HTML/CSS/JS（乃至 React、Vue、Canvas）都能直接用。
+
+三步走完一个最小闭环：
+
+**第一步：加清单块。** 在 `allagent-plugin.json` 里补上 `web`：
+
+```json
+"web": {
+  "sdkVersion": 1,
+  "capabilities": ["notifications"],
+  "contributes": {
+    "pages": [{ "id": "hello", "title": "你好插件", "icon": "sparkles", "entry": "web/hello.html" }]
+  }
+}
+```
+
+**第二步：写页面。** 新建 `web/hello.html`，引入宿主自带的 SDK：
+
+```html
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8" /><script src="/__sdk/allagent-plugin-sdk.js"></script></head>
+<body style="font-family: system-ui; padding: 20px; background: var(--ag-background); color: var(--ag-foreground)">
+  <h1 id="title">你好，插件界面！</h1>
+  <button id="ask">问问后端现在几点</button>
+  <p id="answer"></p>
+  <script>
+    const sdk = AllAgentPlugin.connect()
+    sdk.ready.then(() => sdk.autoResize())
+    document.getElementById('ask').addEventListener('click', async () => {
+      const result = await sdk.invoke('now')   // plugin.<你的包名>.now
+      document.getElementById('answer').textContent = result.utc
+    })
+  </script>
+</body>
+</html>
+```
+
+**第三步：后端提供数据。** 在 `Register` 里注册桥方法，顺手推一条事件：
+
+```csharp
+context.AddWebBridge("now", (_, ct) => Task.FromResult<JsonElement?>(
+    JsonSerializer.SerializeToElement(new { utc = DateTimeOffset.UtcNow })));
+context.Web.Push("ready", new { hello = true });   // 界面里 sdk.on('ready', …) 可收到
+```
+
+打包时别忘了把网页装进包里（csproj）：
+
+```xml
+<None Include="web\**\*" Pack="true" PackagePath="allagent/web/" />
+```
+
+`dotnet pack` → `/plugins import` 安装并启用 → Web 工作台侧边栏出现「你好插件」，打开页面，点按钮即可看到后端返回的时间。页面里的文字颜色跟着宿主明暗主题走，因为 SDK 会把宿主的 `--ag-*` 变量同步进 iframe。
+
+想更进一步（自定义工具卡、宿主能力如通知/存储/读取当前会话、开发服务器热更新、安全边界细节），看完整手册：[插件 Web 前端扩展指南](plugin-web-ui.zh-CN.md)。

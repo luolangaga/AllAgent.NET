@@ -23,9 +23,9 @@ for item in r["data"]["results"]:
     print(item)
 ```
 
-每批 1–16 项，最多同时运行 8 项，结果按输入顺序返回。每项继续执行原有权限检查并计入工具预算，独立记录实际执行事件和错误。单项失败不会撤销其他项；取消会等待已启动操作退出。批量入口在 Hyperlight 和 Monty 中使用相同协议。
+每批 1–16 项，最多同时运行 16 项，结果按输入顺序返回。每项继续执行原有权限检查并计入工具预算，独立记录实际执行事件和错误。单项失败不会撤销其他项；取消会等待已启动操作退出。批量入口在 Hyperlight 和 Monty 中使用相同协议。
 
-模型指令要求在任务开始和每轮结果返回后主动寻找并行机会：两个及以上已就绪、互不依赖的普通操作默认批量执行，无需用户再次要求；独立文件读取、搜索和网络请求应合并提交。较大的独立模块调查、分文件实现或研究任务应主动使用子代理并行，最多同时运行 6 个，结果返回后由主 Agent 整合。不要为了占满并发数制造重复任务。存在依赖的读写、操作同一界面的步骤和交互提问应串行执行；禁止嵌套批量、批量执行 `execute_code` 或 `ask_user`。同轮多个 `execute_code` 仍依次执行，程序内部由此入口明确指定并行范围。
+模型指令要求一段程序完成一个完整的机械阶段（定位、读取、判断、修改、验证）：程序自己能判断的下一步必须写进同一段程序，而不是看一眼结果就结束回合；只有需要新的判断（方案取舍、解读歧义证据、询问用户）时才结束回合。在任务开始和每轮结果返回后主动寻找并行机会：两个及以上已就绪、互不依赖的普通操作默认批量执行，无需用户再次要求；独立文件读取、搜索和网络请求应合并提交。较大的独立模块调查、分文件实现或研究任务应主动使用子代理并行，最多同时运行 6 个，结果返回后由主 Agent 整合。不要为了占满并发数制造重复任务。存在依赖的读写、操作同一界面的步骤和交互提问应串行执行（串行调用仍可写在同一段程序里）；禁止嵌套批量、批量执行 `execute_code` 或 `ask_user`。同轮多个 `execute_code` 仍依次执行，程序内部由此入口明确指定并行范围。
 
 ## 选择权限模式
 
@@ -33,17 +33,19 @@ for item in r["data"]["results"]:
 
 | 命令 | 行为 |
 |---|---|
-| `/permissions ask` | 逐次授权（`--ask` 启动）；有效的外部路径先询问目录访问，文件写入、未信任的 Shell 程序、MCP 和插件执行操作仍单独审核 |
+| `/permissions restricted` | 限制模式（默认）；工作区内的文件读写和可信 Shell 别名直接执行，工作区外的路径、未信任的程序与 MCP / 桌面 / 插件工具逐次授权 |
+| `/permissions ask` | 逐次授权（`--ask` 启动）；工作区内的写入也要逐次审核，未信任的 Shell 程序、MCP 和插件执行操作同样单独审核 |
 | `/permissions full` | 完全访问；C# 工具不再逐次审核，可访问工作区外的普通文件并执行已安装程序或指定绝对路径的程序 |
 | `/permissions plan` | 只读规划；拒绝写入、Shell 和外部执行操作 |
+| `/permissions simple` | 简单模式；只保留 `powershell_script`、`file_read`、`file_edit` 三个宿主工具，技能、MCP、子代理、插件、浏览器与桌面工具停用 |
 
-底栏和 `/status` 显示当前模式。模式作用于当前终端进程，新终端默认完全访问，`--ask` 启用逐次授权；切换前需结束或取消后台任务。完全访问也应用于此后创建的后台任务和子 Agent。
+底栏和 `/status` 显示当前模式。模式作用于当前终端进程，新终端默认限制模式，`--full-access` 启用完全访问，`--ask` 启用逐次授权。权限模式是进程级的活状态：任务运行中也可以切换，正在运行的任务从下一次工具调用起采用新模式（审批立场与工作区边界立即变化），`plan` / `simple` 的工具面收窄从下一轮生效；沙箱模式仍需任务结束后切换。权限模式也应用于此后创建的后台任务和子 Agent，已派发的子 Agent 保持派发时的快照。plan 与 simple 是叠加模式：进入后底层的限制 / 逐次授权 / 完全访问仍然生效，退出时恢复。
 
 ## 外部目录与聊天内授权
 
-内置文件工具和 `run_shell` 的工作目录可以使用绝对路径或 `..`。普通模式先解析实际路径，遇到工作区外目录时，在聊天区插入授权气泡，提供“允许这一次 / 拒绝 / 此会话记住目录”。默认选中“允许这一次”，Enter 确认；Y 允许一次，A 记住目录，N/Esc 拒绝。一次授权只覆盖当前工具操作，记住目录覆盖该目录及其子路径，并只对当前会话、当前进程生效。不同会话和子 Agent 不继承目录授权。
+内置文件工具和 `run_shell` 的工作目录可以使用绝对路径或 `..`。限制模式和逐次授权模式先解析实际路径，遇到工作区外目录时，在聊天区插入授权气泡，提供“允许这一次 / 拒绝 / 此会话记住目录”。默认选中“允许这一次”，Enter 确认；Y 允许一次，A 记住目录，N/Esc 拒绝。一次授权只覆盖当前工具操作（限制模式下即该路径上的这次文件操作），记住目录覆盖该目录及其子路径，并只对当前会话、当前进程生效。不同会话和子 Agent 不继承目录授权。
 
-`/permissions directories` 查看本会话记住的目录，`/permissions directories clear` 撤销。目录访问授权不会代替写文件或执行程序的授权；完全访问模式免审核，规划模式仍只允许读取。非法设备路径、数据流、歧义路径和普通模式下的链接仍在授权前拒绝。外部文件修改不会纳入工作区文件快照，不能通过 `/undo` 自动恢复。
+`/permissions directories` 查看本会话记住的目录，`/permissions directories clear` 撤销。目录授权仅覆盖所列路径：限制模式下该路径上的文件操作随后直接执行，逐次授权模式仍会对写入单独审核，执行未信任程序始终需要单独授权；完全访问模式免审核，规划模式仍只允许读取。非法设备路径、数据流、歧义路径和限制模式下的链接仍在授权前拒绝。外部文件修改不会纳入工作区文件快照，不能通过 `/undo` 自动恢复。
 
 流程参考 [OpenCode permissions](https://opencode.ai/docs/permissions/) 的 external_directory 与 once/always/reject；目前实现会话目录授权，不包含完整的通配符 allow/ask/deny 规则配置。
 
@@ -90,9 +92,11 @@ Agent 指令以 Microsoft CodeAct 的单一 `execute_code` / 沙箱内 `call_too
 
 **Esc / Ctrl+C** 停止任务。需要主动限制时，显式设置 `--timeout 秒` 或 `--max-tools 次数`。`--code-timeout 秒` 仍控制单次 Python 的预算，Shell 默认不设单次超时；timeout_seconds=0 表示不限，任意正数表示调用方主动设置的超时，没有人为最大值。`powershell_script` 默认 120 秒，超时或取消会终止该会话的进程树并在下次调用重建（会话状态丢失）。
 
-- 模型返回 `length`、`max_tokens`、`MAX_TOKENS` 或 `max_output_tokens` 时，显示“自动继续”并续接任务；截断响应中的所有代码调用均不执行，让模型重新生成较小的完整程序。
+**单次请求的输出上限**默认跟随模型目录（models.dev 快照或接口返回）声明的模型输出上限，查不到时用 32000 兜底；任何一次回复都不超过上下文窗口的一半，保证提示词仍有空间。**「最大输出 Tokens」填 0 表示自动**，填正数则在该模型自身上限以下按配置值发送，不会被默认值覆盖。旧版界面和预设写入的小额度（低于 32768）在加载配置时一次性改为自动，达到或超过该值的配置视为用户自己的上限，保持原样。
+
+- 模型返回 `length`、`max_tokens`、`MAX_TOKENS` 或 `max_output_tokens` 时，显示“自动继续”并续接任务；截断响应中的所有代码调用均不执行，让模型重新生成较小的完整程序。若连续两轮没有可见正文（推理占满输出预算），立即停下并提示提高“最大输出 Tokens”或降低推理强度，不再无产出地重复计费。
 - 限流、服务暂不可用、连接提前结束和请求超时自动重试，最多 5 次，等待 2、4、8、16、30 秒；可随时取消。重试仅作用于尚未执行工具的模型请求，不重放已完成的 C# 操作。认证失败等永久错误直接说明原因。
 - 历史达到字符预算的 85% 时，自动总结较早内容，保留任务目标、约束、已完成操作、待办和最近完整的调用/结果对。总结请求不提供工具。原始会话和工具详情不删除；摘要及边界持久化，恢复会话后可继续使用。
 - 整理后立即再次耗尽、总结被截断、模型空回答或异常结束会明确报错并保留历史，避免无进展地循环。超大单条消息、服务端模型上下文限制仍可能要求缩小输入。字符预算是估算，并非各厂商精确 Token 容量。
 
-处理方式参考 [OpenCode 请求重试](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/session/retry.ts)、[OpenCode 会话处理](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/session/processor.ts) 与 [Claude Code 上下文管理](https://code.claude.com/docs/en/how-claude-code-works)。AllAgent.NET 使用 C# 实现，并保留 CodeAct/Hyperlight 的执行边界。用量读取遵循 [OpenAI SSE usage](https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events)、[Anthropic 缓存输入计数](https://platform.claude.com/docs/en/build-with-claude/prompt-caching) 和 [Gemini usageMetadata](https://ai.google.dev/gemini-api/docs/tokens)。
+处理方式参考 [OpenCode 请求重试](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/session/retry.ts)、[OpenCode 会话处理](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/session/processor.ts)、[OpenCode 输出预算](https://github.com/anomalyco/opencode/blob/v2/packages/core/src/session/model-request.ts) 与 [Claude Code 上下文管理](https://code.claude.com/docs/en/how-claude-code-works)。AllAgent.NET 使用 C# 实现，并保留 CodeAct/Hyperlight 的执行边界。用量读取遵循 [OpenAI SSE usage](https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events)、[Anthropic 缓存输入计数](https://platform.claude.com/docs/en/build-with-claude/prompt-caching) 和 [Gemini usageMetadata](https://ai.google.dev/gemini-api/docs/tokens)。

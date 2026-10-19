@@ -2,6 +2,8 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Channels;
+using AllAgent.NET.Core.Runtime;
 using AllAgent.NET.Core.Services;
 using AllAgent.NET.Core.Tools;
 using Spectre.Console;
@@ -12,8 +14,15 @@ namespace AllAgent.NET.Terminal;
 internal sealed class ToolsApproval(TerminalUi ui)
 {
     public bool PlanMode { get; set; }
-    public bool FullAccess { get; set; }
-    public string ModeLabel => PlanMode ? "只读规划" : FullAccess ? "完全访问" : "逐次授权";
+    /// <summary>Simple mode narrows the model-facing tool surface to PowerShell, file_read and
+    /// file_edit. The approval stance below keeps applying unchanged.</summary>
+    public bool SimpleMode { get; set; }
+    /// <summary>Host permission mode. Restricted auto-answers workspace-contained operations in the
+    /// runtime, so only boundary crossings, untrusted programs and external services reach this prompt.</summary>
+    public PermissionMode Permission { get; set; } = PermissionMode.Restricted;
+    public bool FullAccess => Permission == PermissionMode.Full;
+    public string ModeKey => Permission switch { PermissionMode.Full => "full", PermissionMode.Restricted => "restricted", _ => "ask" };
+    public string ModeLabel => PlanMode ? "只读规划" : SimpleMode ? "简单模式" : Permission switch { PermissionMode.Full => "完全访问", PermissionMode.Restricted => "限制模式", _ => "逐次授权" };
     public WorkspaceCheckpoints? Checkpoints { get; set; }
     public async ValueTask<bool> ApproveAsync(ToolApprovalRequest request, CancellationToken ct)
     {
@@ -79,8 +88,15 @@ internal sealed class TerminalUi(bool json, bool verbose)
     private volatile bool _live;
     public bool AgentIsLive => _live;
     public Func<string, CancellationToken, Task>? RunningCommand { get; set; }
+    /// <summary>Main-session runs of this workspace. Approvals, questions and stop requests of a
+    /// background run belong to that run, so leaving the view never answers for the person.</summary>
+    public SessionRuns? Runs { get; set; }
+    /// <summary>Set by a running command that moves the view elsewhere (/new, /session, /workspace):
+    /// the view detaches while the run keeps working.</summary>
+    public bool DetachRequested { get; set; }
+    private SessionRun? _attachedRun;
     internal static IReadOnlyList<CommandHint> RunningHints { get; } = CommandCatalog.Builtins.Where(hint =>
-        new[] { "/tasks", "/queue", "/steer", "/help", "/status", "/thinking", "/details" }.Contains(hint.Text.Split(' ')[0])).ToArray();
+        new[] { "/new", "/session", "/tasks", "/queue", "/steer", "/todo", "/help", "/status", "/thinking", "/details" }.Contains(hint.Text.Split(' ')[0])).ToArray();
     private PendingApproval? _pending;
     private PendingQuestion? _question;
     private int _questionChoice;
@@ -92,12 +108,20 @@ internal sealed class TerminalUi(bool json, bool verbose)
     private bool _plainStreaming;
     private readonly Dictionary<string, CodeExecutionBlock> _codeBlocks = [];
     private readonly Dictionary<string, CodeExecutionBlock> _hostBlocks = [];
-    private sealed record PendingApproval(ApprovalPreview Preview, TaskCompletionSource<bool> Completion, CancellationToken Token);
-    private sealed record PendingQuestion(AgentQuestion Question, TaskCompletionSource<string?> Completion, CancellationToken Token);
 
     public async Task<string?> RequestQuestionAsync(AgentQuestion question, CancellationToken ct)
     {
         if (!Interactive || Json) return null;
+        // A question from a background run waits on that run; it is shown when the session comes back.
+        if (Runs?.Find(AgentExecutionScope.ConversationId) is { } run)
+        {
+            var waiting = new PendingQuestion(question, new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously), ct);
+            run.EnqueueQuestion(waiting);
+            if (!run.Attached) run.State = SessionRunState.AwaitingAnswer;
+            Runs.Bump();
+            try { return await waiting.Completion.Task.WaitAsync(ct); }
+            finally { if (!waiting.Completion.Task.IsCompleted) waiting.Completion.TrySetResult(null); }
+        }
         if (!_live)
         {
             if (FullScreenTerminal.Current is { } screen) return await screen.QuestionAsync(question, ct);
@@ -124,6 +148,17 @@ internal sealed class TerminalUi(bool json, bool verbose)
     public async ValueTask<bool> RequestApprovalAsync(ToolApprovalRequest request, CancellationToken ct)
     {
         var preview = ApprovalPreview.Create(request, Workspace);
+        // An approval raised by a background run waits on that run and is asked when its session is
+        // back on screen — it is never answered (or silently denied) on the person's behalf.
+        if (Runs?.Find(AgentExecutionScope.ConversationId) is { } run)
+        {
+            var waiting = new PendingApproval(preview, new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously), ct);
+            run.EnqueueApproval(waiting);
+            if (!run.Attached) run.State = SessionRunState.AwaitingApproval;
+            Runs.Bump();
+            try { return await waiting.Completion.Task.WaitAsync(ct); }
+            finally { if (!waiting.Completion.Task.IsCompleted) waiting.Completion.TrySetResult(false); }
+        }
         if (_live)
         {
             var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -140,30 +175,83 @@ internal sealed class TerminalUi(bool json, bool verbose)
         }
         finally { Gate.Release(); }
     }
-    public async Task RunAgentAsync(IAsyncEnumerable<AgentEvent> events, CancellationToken ct)
+    /// <summary>Runs an event sequence with a live view but without a session run (/compact and friends).</summary>
+    public Task RunAgentAsync(IAsyncEnumerable<AgentEvent> events, CancellationToken ct) => ViewAsync(events, null, null, 0, null, ct);
+
+    /// <summary>Attaches the view to a session run. Leaving the view — a session switch, `/new`, a
+    /// workspace change — never stops the run; its events stay journaled, so switching back rebuilds
+    /// the live tail exactly where it was.</summary>
+    public async Task AttachRunAsync(SessionRun run, CancellationToken ct)
+    {
+        var feed = run.Attach();
+        var replay = run.Journal.Events().ToArray();
+        var through = replay.Length == 0 ? 0 : replay[^1].Sequence;
+        await ViewAsync(null, run, feed, through, replay, ct);
+    }
+
+    private async Task ViewAsync(IAsyncEnumerable<AgentEvent>? events, SessionRun? run,
+        ChannelReader<(long Sequence, AgentEvent Event)>? feed, long replayedThrough,
+        IReadOnlyList<(long Sequence, AgentEvent Event, DateTime Timestamp)>? replay, CancellationToken ct)
     {
         TurnInputTokens = TurnOutputTokens = 0; _hasTurnUsage = false;
         if (Json || !Interactive || !AnsiConsole.Profile.Capabilities.Ansi)
         {
-            await foreach (var evt in events) await RenderAsync(evt, CancellationToken.None); return;
+            if (replay != null) foreach (var (_, replayed, _) in replay) await RenderAsync(replayed, CancellationToken.None);
+            if (events != null) { await foreach (var evt in events) await RenderAsync(evt, CancellationToken.None); return; }
+            if (feed == null) return;
+            // No full-screen key hook here: Ctrl+C stops the run through the console event instead.
+            ConsoleCancelEventHandler handler = (_, e) => { e.Cancel = true; if (run != null) Runs?.RequestStop(run); };
+            Console.CancelKeyPress += handler;
+            try
+            {
+                while (await feed.WaitToReadAsync(ct))
+                    if (feed.TryRead(out var item) && item.Sequence > replayedThrough) await RenderAsync(item.Event, CancellationToken.None);
+            }
+            catch (OperationCanceledException) { if (run != null) Runs?.RequestStop(run); throw; }
+            finally { Console.CancelKeyPress -= handler; }
+            return;
         }
         using var inputMode = new TextInputMode();
         _answer.Clear(); _thought.Clear(); _taskThought.Clear(); _thinkingAttemptStart = 0; _stage = "思考中"; _toolCalls = 0; _elapsed.Restart(); _live = true;
         _processingChildResults = false;
+        _attachedRun = run;
         _queued = new InputState(); _queued.Set(Draft); Draft = "";
         using var cancelled = CancellationTokenSource.CreateLinkedTokenSource(ct);
         Task? runningCommand = null;
         try
         {
+            // A session that is already working rebuilds from the run's own history: the persisted
+            // conversation may already contain iterations that this journal still replays.
+            if (run != null && FullScreenTerminal.Current is { } target && target.SessionId == run.ConversationId)
+                target.Session(run.ConversationId, target.Model, run.Journal.History, reload: true);
+            if (replay != null) foreach (var (_, replayed, _) in replay) await RenderAsync(replayed, CancellationToken.None);
             SpectreScreenDisplay? inlineDisplay = null;
             async Task PumpAsync(Action<IRenderable> refresh)
             {
                 var reader = FullScreenTerminal.Current?.Keys ?? new TerminalKeyReader();
-                await using var enumerator = events.GetAsyncEnumerator(cancelled.Token);
-                var next = enumerator.MoveNextAsync().AsTask();
+                var enumerator = events?.GetAsyncEnumerator(cancelled.Token);
+                var next = NextAsync();
                 long lastRefresh = 0;
+                void Stop()
+                {
+                    // Stopping a session run is a decision about that run, not about this view.
+                    if (run != null) Runs?.RequestStop(run);
+                    else cancelled.Cancel();
+                }
+                async Task<(bool Has, AgentEvent? Event)> NextAsync()
+                {
+                    if (feed != null)
+                    {
+                        while (await feed.WaitToReadAsync(cancelled.Token))
+                            if (feed.TryRead(out var item) && item.Sequence > replayedThrough) return (true, item.Event);
+                        return (false, null);
+                    }
+                    if (enumerator != null) return await enumerator.MoveNextAsync() ? (true, enumerator.Current) : (false, null);
+                    return (false, null);
+                }
                 while (true)
                 {
+                    if (DetachRequested) { DetachRequested = false; FlushAnswer(); return; }
                     if (runningCommand?.IsCompleted == true)
                     {
                         try { await runningCommand; }
@@ -171,9 +259,9 @@ internal sealed class TerminalUi(bool json, bool verbose)
                         catch (Exception ex) { Error(ex.Message); }
                         runningCommand = null;
                     }
-                    if (_pending == null && _approvals.TryDequeue(out var approval)) { _pending = approval; _approvalChoice = 0; _approvalScroll = 0; _expanded = false; FlushAnswer(); }
+                    if (_pending == null && TryDequeueApproval(run, out var approval)) { _pending = approval; _approvalChoice = 0; _approvalScroll = 0; _expanded = false; FlushAnswer(); }
                     if (_pending?.Token.IsCancellationRequested == true) Decide(false);
-                    if (_question == null && _questions.TryDequeue(out var question)) { _question = question; _questionChoice = _questionScroll = 0; _questionText = new(); FlushAnswer(); }
+                    if (_question == null && TryDequeueQuestion(run, out var question)) { _question = question; _questionChoice = _questionScroll = 0; _questionText = new(); FlushAnswer(); }
                     if (_question?.Token.IsCancellationRequested == true) AnswerQuestion(null);
                     if (_pending == null && _question is { Question.Choices.Count: > 0 } choiceQuestion)
                     {
@@ -198,7 +286,7 @@ internal sealed class TerminalUi(bool json, bool verbose)
                         else if (key.Modifiers.HasFlag(ConsoleModifiers.Control) && key.Key == ConsoleKey.C && _pending == null && _questionText.Text.Length > 0 && _question != null) _questionText.Key(key, [], []);
                         else if (key.Modifiers.HasFlag(ConsoleModifiers.Control) && key.Key == ConsoleKey.C && _pending == null && _question == null && _queued.HasSelection) _queued.Key(key, [], []);
                         else if (key.Modifiers.HasFlag(ConsoleModifiers.Control) && key.Key == ConsoleKey.C && FullScreenTerminal.Current?.CopyTranscriptSelection(key) == true) { }
-                        else if (key.Modifiers.HasFlag(ConsoleModifiers.Control) && key.Key == ConsoleKey.C) cancelled.Cancel();
+                        else if (key.Modifiers.HasFlag(ConsoleModifiers.Control) && key.Key == ConsoleKey.C) Stop();
                         else if (_question != null) { if (input.Wheel != 0) _questionScroll = Math.Max(0, _questionScroll - input.Wheel); else if (input.Paste != null) _questionText.Insert(input.Paste); else QuestionKey(key); }
                         else if (input.Paste != null && _pending == null)
                         {
@@ -210,7 +298,7 @@ internal sealed class TerminalUi(bool json, bool verbose)
                         { var prepared = await PastedImages.PrepareAsync(text, Workspace, cancelled.Token); _queued.InsertPaste(prepared.Text, prepared.Notice); })) { }
                         else if (FullScreenTerminal.Current?.SelectInput(input, _queued) == true) { }
                         else if (FullScreenTerminal.Current?.Navigation(input) == true) { }
-                        else if (key.Key == ConsoleKey.Escape) cancelled.Cancel();
+                        else if (key.Key == ConsoleKey.Escape) Stop();
                         else if (key.Modifiers.HasFlag(ConsoleModifiers.Control) && key.Key == ConsoleKey.O)
                         {
                             // Ctrl+O expands the newest step detail: execution first, then thinking.
@@ -257,9 +345,10 @@ internal sealed class TerminalUi(bool json, bool verbose)
                     var processed = 0;
                     while (next.IsCompleted && processed++ < 64)
                     {
-                        if (!await next) { FlushAnswer(); return; }
-                        await RenderAsync(enumerator.Current, CancellationToken.None);
-                        next = enumerator.MoveNextAsync().AsTask();
+                        var (has, evt) = await next;
+                        if (!has || evt == null) { FlushAnswer(); return; }
+                        await RenderAsync(evt, CancellationToken.None);
+                        next = NextAsync();
                     }
                     // Constructing activity also formats reasoning, suggestions and pending input.
                     // Keep that work at display cadence; input still gets an immediate frame.
@@ -281,8 +370,15 @@ internal sealed class TerminalUi(bool json, bool verbose)
         }
         finally
         {
+            // Leaving the view only releases the channel; the run keeps its own cancellation.
+            run?.Detach();
+            _attachedRun = null;
             cancelled.Cancel();
             _live = false; _elapsed.Stop(); FlushAnswer(); Draft = _queued.Text;
+            // Detaching with a dialog open leaves the request with the run: it is asked again when the
+            // session comes back instead of being denied by accident.
+            if (run is { IsFinished: false } && _pending is { } openApproval) { run.EnqueueApproval(openApproval); _pending = null; }
+            if (run is { IsFinished: false } && _question is { } openQuestion) { run.EnqueueQuestion(openQuestion); _question = null; }
             Decide(false); while (_approvals.TryDequeue(out var pending)) pending.Completion.TrySetResult(false);
             AnswerQuestion(null); while (_questions.TryDequeue(out var question)) question.Completion.TrySetResult(null);
             if (runningCommand != null)
@@ -296,7 +392,18 @@ internal sealed class TerminalUi(bool json, bool verbose)
             FullScreenTerminal.Current?.SetConversationPrompt(null);
         }
     }
-    private void AnswerQuestion(string? answer) { var question = _question; _question = null; question?.Completion.TrySetResult(answer); }
+
+    private bool TryDequeueApproval(SessionRun? run, out PendingApproval? approval)
+        => run != null ? run.TryDequeueApproval(out approval) : _approvals.TryDequeue(out approval);
+    private bool TryDequeueQuestion(SessionRun? run, out PendingQuestion? question)
+        => run != null ? run.TryDequeueQuestion(out question) : _questions.TryDequeue(out question);
+
+    private void AnswerQuestion(string? answer)
+    {
+        var question = _question; _question = null;
+        question?.Completion.TrySetResult(answer);
+        if (question != null && _attachedRun is { } run && run.Waiting) { run.State = SessionRunState.Running; Runs?.Bump(); }
+    }
     private void QuestionKey(ConsoleKeyInfo key)
     {
         if (key.Key == ConsoleKey.Escape) { AnswerQuestion(null); return; }
@@ -326,6 +433,7 @@ internal sealed class TerminalUi(bool json, bool verbose)
     {
         var pending = _pending; _pending = null;
         pending?.Completion.TrySetResult(allow);
+        if (pending != null && _attachedRun is { } run && run.Waiting) { run.State = SessionRunState.Running; Runs?.Bump(); }
         if (pending != null) { TerminalOutput.MarkupLine(allow ? "[dim]  ⎿ 本次操作已授权[/]" : "[yellow]  ⎿ 本次操作已拒绝[/]"); _stage = allow ? "执行中" : "等待模型继续"; }
     }
     internal IRenderable RenderActivity()

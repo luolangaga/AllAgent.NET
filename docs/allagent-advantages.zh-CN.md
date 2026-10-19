@@ -50,8 +50,8 @@ AllAgent.NET 是**面向 Windows 本机工作流**的终端 AI Agent：模型侧
 - 【实测】`file_read docs/screenshots/iconiq-chat.jpg` → `note: Image attached to the next model request`，模型侧真的收到了图像。
 - 【实测】`computer_screenshot` 返回 `imageAttached: true`，模型侧看到了实时窗口画面。
 
-### 4. Computer Use：非侵入式默认、三种模式、只由用户开关
-- 开关属于用户：`/computer on|off`；AI 只能通过 `computer_mode` 选 `background|foreground|isolated`（`ComputerUseTools.cs`）。工具描述写明 "This cannot enable a disabled Computer Use switch"。
+### 4. Computer Use：非侵入式默认、三种模式、按需加载
+- 始终可用、无总开关：入口是内置 `computer-use` 技能，动作仍走宿主审批与只读角色限制；AI 只能通过 `computer_mode` 选 `background|foreground|isolated`（`ComputerUseTools.cs`）。12 个 `computer_*` 工具不进系统提示词目录，`CodeActProvider.VisibleTools` 只保留一段指引。
 - 默认后台模式走 UIA 语义操作（Invoke/SelectionItem/Toggle/ExpandCollapse/LegacyIAccessible 默认动作、`Value.SetValue`），**不需要焦点、不发物理按键**；物理点击/快捷键/聚焦只在 foreground 或 isolated 可用，且预检直接拒绝（`ComputerUseTools.cs:18-29`）。
 - 隔离模式要求独立 Windows 会话 Worker：loopback HTTP + Bearer token，且拒绝在调用者同一台机器同一会话中运行（`ComputerUse/Program.cs`）；未配置时明确失败、**不静默回退前台**。
 - 托盘支持覆盖 Explorer 图标、隐藏图标溢出、Windows 11 XAML 溢出面板与经典 `NotifyIconOverflowWindow`（`ComputerUse/SystemTray.cs`、`docs/computer-use.zh-CN.md`）。
@@ -63,7 +63,7 @@ AllAgent.NET 是**面向 Windows 本机工作流**的终端 AI Agent：模型侧
 - worker 启动白名单只保留 Windows 系统环境变量（`SystemRoot/WINDIR/TEMP/TMP/PATH/DOTNET_ROOT(_X64)/USERPROFILE/LOCALAPPDATA/ProgramFiles/ProgramFiles(x86)/ProgramData`），其余全部剔除 → **模型服务凭据不进 worker**（`HyperlightProcessSandbox.cs:46-49`）。
 - 原生运行时错误会丢弃 worker 并在下次重建；**不自动重放**已发生宿主副作用的代码。
 - 显式指定 Hyperlight 时启动失败会报错而非降级；auto 模式才回退 Monty（`FallbackCodeSandbox.cs:24-51`）。
-- 发布产物带 `sandbox/`（含 `HyperlightSandbox.PInvoke.dll`），桌面/终端构建把 `computer/` worker 一起打包（`Directory.Build.targets`）。
+- 发布产物把 Hyperlight worker（含 `HyperlightSandbox.PInvoke.dll`）与 `computer/` worker 一起放到宿主同目录，共享一份自包含运行时（`Directory.Build.targets`）。
 
 ### 6. 权限与审计：分档、可记住目录、可撤销
 - 三档模式 `ask/full/plan`，完全访问只取消宿主工具逐次审批、不授予管理员权限（README:42、`docs/execution.zh-CN.md:19-23`）。
@@ -84,7 +84,7 @@ AllAgent.NET 是**面向 Windows 本机工作流**的终端 AI Agent：模型侧
 - `EnvironmentDoctor` 实测校验：宿主 Python 3.10–3.14（`-I -S -c` JSON 探针，禁用 Store 别名自动安装）、PowerShell **7.6.x**（先 PATH，再 `%ProgramFiles%\PowerShell\7\pwsh.exe`）、`ripgrep`（`winget install --id BurntSushi.ripgrep.MSVC`）。
 - 缺依赖时经用户确认后用 winget 安装；安装完成提示重启再继续（`EnvironmentDoctor.cs:58-113`）。PATH 刷新会合并 Machine/User 两级。
 - 【实测】本机：`pwsh 7.6.6`、`rg 15.1.0(PCRE2+JIT)`、`winget v1.29.380`、`dotnet 11.0.100-rc.1`；`dotnet test --filter FullyQualifiedName~EnvironmentDoctorTests` **10/10 通过（170 ms）**。
-- 共享 pip 环境在 `%APPDATA%\AllAgent.NET\python\venv`，`pip.md` 由实际安装元数据生成并自动注入模型上下文；后装库的 wheel README 存到 `python/docs/<包>/`，可 `python_library_docs` 分页阅读。【实测】venv = Python 3.14.4 + numpy 2.5.4 / pandas 3.0.6 / lxml 6.1.3 / pillow 12.3.0 / requests 2.34.2，与 `pip.md` 表完全一致；`python_library_docs("pandas")` 返回了 wheel 自带 README。
+- 共享 pip 环境在 `%APPDATA%\AllAgent.NET\python\venv`，`pip.md` 由实际安装元数据生成并自动注入模型上下文；后装库的 wheel README 存到 `python/docs/<包>/`，用 `file_read` 分页阅读（原 `python_library_docs` 工具已删除）。【实测】venv = Python 3.14.4 + numpy 2.5.4 / pandas 3.0.6 / lxml 6.1.3 / pillow 12.3.0 / requests 2.34.2，与 `pip.md` 表完全一致；`python_library_docs("pandas")` 返回了 wheel 自带 README。
 
 ### 9. 数据持久化与多终端
 - 原子写 + fsync + 校验和读回；`allagent.json` 是 v3 清单，会话按修订存 `conversations/`，旧版 v2 迁移保留备份（`Data/DataStore.cs`、`Data/StorageTransaction.cs`、README 权限与数据段）。
@@ -95,7 +95,7 @@ AllAgent.NET 是**面向 Windows 本机工作流**的终端 AI Agent：模型侧
 ### 10. 界面与分发型态明确
 - 终端：Spectre.Console 全屏 TUI + 鼠标事件（`ConsoleModes.cs:15-34`）、F1/F2/F3 菜单、Ctrl+E 执行详情、`F2` 切模型（README 日常使用表）。
 - 桌面：`allagent -guimode` 打开 WPF + WebView2 原生窗口（圆角、Mica、自绘导航栏），窗口内运行同一套 Web 工作台；后端仍在终端宿主进程，页面经 loopback WebSocket 通信，`allagent gui --gui-url` 可指向 Vite 开发服务器。
-- 分发：`dotnet tool install --global AllAgent.NET.Terminal`（`ToolCommandName=allagent`，`RollForward=Major`），发布 `-r win-x64 --self-contained`；`sandbox/`、`computer/`、`browser/`、`gui/` 随包分发（`.csproj`、`Directory.Build.targets`）。
+- 分发：`dotnet tool install --global AllAgent.NET.Terminal`（`ToolCommandName=allagent`，`RollForward=Major`），发布 `-r win-x64 --self-contained`；宿主与各 worker 同目录随包分发（`.csproj`、`Directory.Build.targets`）。
 - 【实测】Debug 产物含 `computer\AllAgent.NET.ComputerUse.exe`；release 产物含 `sandbox\`。
 
 ---

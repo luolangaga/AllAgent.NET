@@ -14,9 +14,11 @@ public sealed class ExamplePlugin : IAllAgentPlugin
     public string Id => "allagent.example";
     public string Name => "AllAgent 示例插件";
     private readonly SemaphoreSlim _audit = new(1, 1);
+    private Timer? _ticker;
     public void Register(PluginContext context)
     {
-        context.AddTools(new ExampleTools(context.DataDirectory));
+        var tools = new ExampleTools(context.DataDirectory);
+        context.AddTools(tools);
         context.AddTurnExtension(new("example.turn", (turn, ct) =>
         {
             ct.ThrowIfCancellationRequested();
@@ -41,21 +43,63 @@ public sealed class ExamplePlugin : IAllAgentPlugin
             finally { _audit.Release(); }
             return new HookDecision();
         }));
+        // Web extensions: the dashboard page calls this backend method for the clock history, and
+        // frames subscribed to "tick" receive a push event every five seconds.
+        context.AddWebBridge<ClockHistoryQuery?, ClockHistoryResult>("history", (query, ct) =>
+            tools.ReadHistoryAsync(Math.Clamp(query?.Limit ?? 20, 1, 100), ct));
+        _ticker = new Timer(_ => { try { context.Web.Push("tick", new { utc = DateTimeOffset.UtcNow }); } catch { /* no web UI connected */ } }, null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
     }
-    public ValueTask DisposeAsync() { _audit.Dispose(); return ValueTask.CompletedTask; }
+    public ValueTask DisposeAsync() { _ticker?.Dispose(); _audit.Dispose(); return ValueTask.CompletedTask; }
 }
 
 public partial class ExampleTools(string directory)
 {
+    private readonly SemaphoreSlim _history = new(1, 1);
+    private static readonly JsonSerializerOptions HistoryOptions = new(JsonSerializerDefaults.Web);
+
     [AgentTool("example_clock"), Description("Read the current UTC clock from the example host plugin.")]
-    public Task<ToolResult> ClockAsync(CancellationToken ct = default) { ct.ThrowIfCancellationRequested(); return Task.FromResult(ToolResult.Success(new { utc = DateTimeOffset.UtcNow })); }
+    public async Task<ToolResult> ClockAsync(CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        var utc = DateTimeOffset.UtcNow;
+        try { await RecordAsync(utc, ct); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* history is best effort */ }
+        return ToolResult.Success(new { utc, source = "example_clock" });
+    }
+
     [AgentTool("example_note", Risk = ToolRisk.Write), Description("Store a bounded note in the example plugin data directory. Requires human approval.")]
     public async Task<ToolResult> NoteAsync([Description("Note text, maximum 4000 characters")] string text, CancellationToken ct = default)
     {
         if (text.Length > 4000) return ToolResult.Failure("Note exceeds 4000 characters.");
         await File.WriteAllTextAsync(Path.Combine(directory, "note.txt"), text, ct); return ToolResult.Success(new { saved = true, characters = text.Length });
     }
+
+    private async Task RecordAsync(DateTimeOffset utc, CancellationToken ct)
+    {
+        var entry = JsonSerializer.Serialize(new ClockHistoryEntry(utc.ToString("o"), DateTimeOffset.UtcNow.ToString("o")), HistoryOptions);
+        await _history.WaitAsync(ct);
+        try { await File.AppendAllTextAsync(Path.Combine(directory, "clock-history.jsonl"), entry + "\n", ct); }
+        finally { _history.Release(); }
+    }
+
+    /// <summary>Latest clock calls, newest first; served to the plugin's own web frames.</summary>
+    public async Task<ClockHistoryResult> ReadHistoryAsync(int limit, CancellationToken ct)
+    {
+        var path = Path.Combine(directory, "clock-history.jsonl");
+        if (!File.Exists(path)) return new([], 0);
+        var lines = await File.ReadAllLinesAsync(path, ct);
+        var all = lines.Where(line => line.Length > 0)
+            .Select(line => { try { return JsonSerializer.Deserialize<ClockHistoryEntry>(line, HistoryOptions); } catch (JsonException) { return null; } })
+            .Where(entry => entry != null)
+            .Cast<ClockHistoryEntry>()
+            .ToArray();
+        return new(all.Reverse().Take(limit).ToArray(), all.Length);
+    }
 }
+
+public sealed record ClockHistoryQuery(int Limit = 20);
+public sealed record ClockHistoryEntry(string Utc, string RecordedAt);
+public sealed record ClockHistoryResult(IReadOnlyList<ClockHistoryEntry> Items, int Total);
 
 /// <summary>Offline example provider for exercising plugin integration; it does not impersonate a remote model.</summary>
 public sealed class ExampleProvider : IAiProvider

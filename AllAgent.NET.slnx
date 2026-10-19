@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/plugins/">
+    <Project Path="plugins/AllAgent.NET.GitHub/AllAgent.NET.GitHub.csproj" />
     <Project Path="plugins/AllAgent.NET.Diligence/AllAgent.NET.Diligence.csproj" />
     <Project Path="plugins/AllAgent.NET.CommandCode/AllAgent.NET.CommandCode.csproj" />
     <Project Path="plugins/AllAgent.NET.WorkBuddy/AllAgent.NET.WorkBuddy.csproj" />

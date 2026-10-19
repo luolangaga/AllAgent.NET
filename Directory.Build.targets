@@ -1,113 +1,246 @@
 <Project>
-  <Target Name="CollectEmbeddedPowerShell" BeforeTargets="GetCopyToOutputDirectoryItems;ComputeFilesToPublish;_GetPackageFiles" Condition="'$(CopyEmbeddedPowerShell)' == 'true'">
-    <MSBuild Projects="$(MSBuildThisFileDirectory)src/AllAgent.NET.PowerShell/AllAgent.NET.PowerShell.csproj" Targets="GetTargetPath" Properties="Configuration=$(Configuration);RuntimeIdentifier=$(RuntimeIdentifier)" RemoveProperties="TargetFramework">
+  <!--
+    The terminal host and every worker process (gui, browser, computer, sandbox, powershell)
+    ship in ONE application directory. Each worker is its own self-contained publish, so the
+    framework files they all need collapse onto the same relative paths instead of being
+    copied five times, and no worker needs a machine-wide .NET runtime.
+  -->
+  <PropertyGroup>
+    <WorkerStagingRoot>$(MSBuildProjectDirectory)/obj/$(Configuration)/$(TargetFramework)/worker-staging/</WorkerStagingRoot>
+    <WorkerCopySwitches>CopyEmbeddedPowerShell=false;CopyBrowserWorker=false;CopyGuiShell=false;CopyComputerWorker=false;CopyAgentSandbox=false</WorkerCopySwitches>
+  </PropertyGroup>
+
+  <!-- The application directory carries a single runtime: the desktop flavour published by the
+       WPF workers. Framework files from the host's own net10.0 publish would win these paths
+       first and leave those workers with the plain facade assemblies instead. -->
+  <Target Name="DropHostFrameworkFiles" AfterTargets="ComputeFilesToPublish" Condition="'$(CopyGuiShell)' == 'true'">
+    <ItemGroup>
+      <_HostFrameworkFile Include="@(ResolvedFileToPublish)" Condition="$([System.String]::Copy('%(FullPath)').Contains('\microsoft.netcore.app.runtime.')) Or $([System.String]::Copy('%(FullPath)').Contains('\microsoft.windowsdesktop.app.runtime.'))" />
+      <ResolvedFileToPublish Remove="@(_HostFrameworkFile)" />
+    </ItemGroup>
+  </Target>
+  <!-- ============================== WebView2 browser worker ============================== -->
+  <Target Name="IncludeBrowserWorkerPublishFiles" AfterTargets="ComputeFilesToPublish" Condition="'$(CopyBrowserWorker)' == 'true'">
+    <PropertyGroup><BrowserWorkerPublishDirectory>$(WorkerStagingRoot)browser/</BrowserWorkerPublishDirectory></PropertyGroup>
+    <MSBuild Projects="$(MSBuildThisFileDirectory)src/AllAgent.NET.Browser/AllAgent.NET.Browser.csproj" Targets="Publish" RemoveProperties="TargetFramework"
+             Properties="TargetFramework=net10.0-windows;Configuration=$(Configuration);PublishDir=$(BrowserWorkerPublishDirectory);CopyBrowserWorker=false;PublishSingleFile=false;SelfContained=$(SelfContained);RuntimeIdentifier=$(RuntimeIdentifier);$(WorkerCopySwitches)" />
+    <ItemGroup>
+      <!-- The worker's own build output reaches this list through the project reference graph.
+           It is framework-dependent, so it must not win over the self-contained publish below. -->
+      <_InheritedBrowserFile Include="@(ResolvedFileToPublish)" Condition="$([System.String]::Copy('%(FullPath)').Contains('\src\AllAgent.NET.Browser\'))" />
+      <ResolvedFileToPublish Remove="@(_InheritedBrowserFile)" />
+    </ItemGroup>
+    <ItemGroup>
+      <_TakenBeforeBrowserWorker Include="@(ResolvedFileToPublish->'$(BrowserWorkerPublishDirectory)%(RelativePath)')" />
+    </ItemGroup>
+    <ItemGroup>
+      <BrowserWorkerPublishFiles Include="$(BrowserWorkerPublishDirectory)**/*" Exclude="@(_TakenBeforeBrowserWorker);$(BrowserWorkerPublishDirectory)**/everything/**;$(BrowserWorkerPublishDirectory)**/ref/**;$(BrowserWorkerPublishDirectory)**/runtimes/linux*/**;$(BrowserWorkerPublishDirectory)**/runtimes/osx*/**;$(BrowserWorkerPublishDirectory)**/*.pdb;$(BrowserWorkerPublishDirectory)**/*.so;$(BrowserWorkerPublishDirectory)**/*.dylib" />
+      <ResolvedFileToPublish Include="@(BrowserWorkerPublishFiles)">
+        <RelativePath>%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+
+  <Target Name="CopyBrowserWorkerFiles" AfterTargets="Build" Condition="'$(CopyBrowserWorker)' == 'true'">
+    <MSBuild Projects="$(MSBuildThisFileDirectory)src/AllAgent.NET.Browser/AllAgent.NET.Browser.csproj" Targets="GetTargetPath" RemoveProperties="TargetFramework" Properties="Configuration=$(Configuration);RuntimeIdentifier=$(RuntimeIdentifier);$(WorkerCopySwitches)">
+      <Output TaskParameter="TargetOutputs" ItemName="BrowserWorkerTarget" />
+    </MSBuild>
+    <PropertyGroup><BrowserWorkerBuildDirectory>@(BrowserWorkerTarget->'%(RootDir)%(Directory)')</BrowserWorkerBuildDirectory></PropertyGroup>
+    <Error Condition="'$(BrowserWorkerBuildDirectory)' == '' or !Exists('$(BrowserWorkerBuildDirectory)AllAgent.NET.Browser.dll')" Text="WebView2 browser worker is missing; build its project before copying." />
+    <ItemGroup><BrowserWorkerBuildFiles Include="$(BrowserWorkerBuildDirectory)**/*" /></ItemGroup>
+    <Copy SourceFiles="@(BrowserWorkerBuildFiles)" DestinationFiles="@(BrowserWorkerBuildFiles->'$(OutDir)%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
+
+  <!-- ============================== WPF window shell ============================== -->
+  <Target Name="IncludeGuiShellPublishFiles" AfterTargets="ComputeFilesToPublish" Condition="'$(CopyGuiShell)' == 'true'">
+    <PropertyGroup><GuiShellPublishDirectory>$(WorkerStagingRoot)gui/</GuiShellPublishDirectory></PropertyGroup>
+    <MSBuild Projects="$(MSBuildThisFileDirectory)src/AllAgent.NET.Gui/AllAgent.NET.Gui.csproj" Targets="Publish" RemoveProperties="TargetFramework"
+             Properties="TargetFramework=net10.0-windows;Configuration=$(Configuration);PublishDir=$(GuiShellPublishDirectory);CopyGuiShell=false;PublishSingleFile=false;SelfContained=$(SelfContained);RuntimeIdentifier=$(RuntimeIdentifier);$(WorkerCopySwitches)" />
+    <ItemGroup>
+      <!-- The worker's own build output reaches this list through the project reference graph.
+           It is framework-dependent, so it must not win over the self-contained publish below. -->
+      <_InheritedGuiFile Include="@(ResolvedFileToPublish)" Condition="$([System.String]::Copy('%(FullPath)').Contains('\src\AllAgent.NET.Gui\'))" />
+      <ResolvedFileToPublish Remove="@(_InheritedGuiFile)" />
+    </ItemGroup>
+    <ItemGroup>
+      <_TakenBeforeGuiShell Include="@(ResolvedFileToPublish->'$(GuiShellPublishDirectory)%(RelativePath)')" />
+    </ItemGroup>
+    <ItemGroup>
+      <GuiShellPublishFiles Include="$(GuiShellPublishDirectory)**/*" Exclude="@(_TakenBeforeGuiShell);$(GuiShellPublishDirectory)**/everything/**;$(GuiShellPublishDirectory)**/ref/**;$(GuiShellPublishDirectory)**/runtimes/linux*/**;$(GuiShellPublishDirectory)**/runtimes/osx*/**;$(GuiShellPublishDirectory)**/*.pdb;$(GuiShellPublishDirectory)**/*.so;$(GuiShellPublishDirectory)**/*.dylib" />
+      <ResolvedFileToPublish Include="@(GuiShellPublishFiles)">
+        <RelativePath>%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+
+  <Target Name="CopyGuiShellFiles" AfterTargets="Build" Condition="'$(CopyGuiShell)' == 'true'">
+    <MSBuild Projects="$(MSBuildThisFileDirectory)src/AllAgent.NET.Gui/AllAgent.NET.Gui.csproj" Targets="GetTargetPath" RemoveProperties="TargetFramework" Properties="Configuration=$(Configuration);RuntimeIdentifier=$(RuntimeIdentifier);$(WorkerCopySwitches)">
+      <Output TaskParameter="TargetOutputs" ItemName="GuiShellTarget" />
+    </MSBuild>
+    <PropertyGroup><GuiShellBuildDirectory>@(GuiShellTarget->'%(RootDir)%(Directory)')</GuiShellBuildDirectory></PropertyGroup>
+    <Error Condition="'$(GuiShellBuildDirectory)' == '' or !Exists('$(GuiShellBuildDirectory)AllAgent.NET.Gui.dll')" Text="WPF GUI shell is missing; build its project before copying." />
+    <ItemGroup><GuiShellBuildFiles Include="$(GuiShellBuildDirectory)**/*" /></ItemGroup>
+    <Copy SourceFiles="@(GuiShellBuildFiles)" DestinationFiles="@(GuiShellBuildFiles->'$(OutDir)%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
+
+  <!-- ============================== desktop automation worker ============================== -->
+  <Target Name="IncludeComputerWorkerPublishFiles" AfterTargets="ComputeFilesToPublish" Condition="'$(CopyComputerWorker)' == 'true'">
+    <PropertyGroup><ComputerWorkerPublishDirectory>$(WorkerStagingRoot)computer/</ComputerWorkerPublishDirectory></PropertyGroup>
+    <MSBuild Projects="$(MSBuildThisFileDirectory)src/AllAgent.NET.ComputerUse/AllAgent.NET.ComputerUse.csproj" Targets="Publish" RemoveProperties="TargetFramework"
+             Properties="TargetFramework=net10.0-windows;Configuration=$(Configuration);PublishDir=$(ComputerWorkerPublishDirectory);CopyComputerWorker=false;PublishSingleFile=false;SelfContained=$(SelfContained);RuntimeIdentifier=$(RuntimeIdentifier);$(WorkerCopySwitches)" />
+    <ItemGroup>
+      <!-- Old build directories may still contain the withdrawn sidecar. Never propagate it. -->
+      <!-- The worker's own build output reaches this list through the project reference graph.
+           It is framework-dependent, so it must not win over the self-contained publish below. -->
+      <_InheritedComputerFile Include="@(ResolvedFileToPublish)" Condition="$([System.String]::Copy('%(FullPath)').Contains('\src\AllAgent.NET.ComputerUse\'))" />
+      <ResolvedFileToPublish Remove="@(_InheritedComputerFile)" />
+    </ItemGroup>
+    <ItemGroup>
+      <_TakenBeforeComputerWorker Include="@(ResolvedFileToPublish->'$(ComputerWorkerPublishDirectory)%(RelativePath)')" />
+    </ItemGroup>
+    <ItemGroup>
+      <ComputerWorkerPublishFiles Include="$(ComputerWorkerPublishDirectory)**/*" Exclude="@(_TakenBeforeComputerWorker);$(ComputerWorkerPublishDirectory)pi/**/*;$(ComputerWorkerPublishDirectory)**/everything/**;$(ComputerWorkerPublishDirectory)**/ref/**;$(ComputerWorkerPublishDirectory)**/runtimes/linux*/**;$(ComputerWorkerPublishDirectory)**/runtimes/osx*/**;$(ComputerWorkerPublishDirectory)**/*.pdb;$(ComputerWorkerPublishDirectory)**/*.so;$(ComputerWorkerPublishDirectory)**/*.dylib" />
+      <ResolvedFileToPublish Include="@(ComputerWorkerPublishFiles)">
+        <RelativePath>%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+
+  <Target Name="CopyComputerWorkerFiles" AfterTargets="Build" Condition="'$(CopyComputerWorker)' == 'true'">
+    <MSBuild Projects="$(MSBuildThisFileDirectory)src/AllAgent.NET.ComputerUse/AllAgent.NET.ComputerUse.csproj" Targets="GetTargetPath" RemoveProperties="TargetFramework" Properties="Configuration=$(Configuration);RuntimeIdentifier=$(RuntimeIdentifier);$(WorkerCopySwitches)">
+      <Output TaskParameter="TargetOutputs" ItemName="ComputerWorkerTarget" />
+    </MSBuild>
+    <PropertyGroup><ComputerWorkerBuildDirectory>@(ComputerWorkerTarget->'%(RootDir)%(Directory)')</ComputerWorkerBuildDirectory></PropertyGroup>
+    <Error Condition="'$(ComputerWorkerBuildDirectory)' == '' or !Exists('$(ComputerWorkerBuildDirectory)AllAgent.NET.ComputerUse.dll')" Text="Computer worker build output is missing; build its project before copying." />
+    <ItemGroup><ComputerWorkerBuildFiles Include="$(ComputerWorkerBuildDirectory)**/*" /></ItemGroup>
+    <Copy SourceFiles="@(ComputerWorkerBuildFiles)" DestinationFiles="@(ComputerWorkerBuildFiles->'$(OutDir)%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
+
+  <!-- ============================== Hyperlight microVM worker ============================== -->
+  <Target Name="IncludeAgentSandboxPublishFiles" AfterTargets="ComputeFilesToPublish" Condition="'$(CopyAgentSandbox)' == 'true'">
+    <PropertyGroup><AgentSandboxPublishDirectory>$(WorkerStagingRoot)sandbox/</AgentSandboxPublishDirectory></PropertyGroup>
+    <MSBuild Projects="$(MSBuildThisFileDirectory)src/AllAgent.NET.Sandbox/AllAgent.NET.Sandbox.csproj" Targets="Publish"
+             Properties="Configuration=$(Configuration);PublishDir=$(AgentSandboxPublishDirectory);PublishSingleFile=false;SelfContained=$(SelfContained);RuntimeIdentifier=$(RuntimeIdentifier);$(WorkerCopySwitches)" />
+    <Error Condition="!Exists('$(AgentSandboxPublishDirectory)AllAgent.NET.Sandbox.exe')" Text="Hyperlight worker publish output is missing." />
+    <ItemGroup>
+      <!-- The worker's own build output reaches this list through the project reference graph.
+           It is framework-dependent, so it must not win over the self-contained publish below. -->
+      <_InheritedSandboxFile Include="@(ResolvedFileToPublish)" Condition="$([System.String]::Copy('%(FullPath)').Contains('\src\AllAgent.NET.Sandbox\'))" />
+      <ResolvedFileToPublish Remove="@(_InheritedSandboxFile)" />
+    </ItemGroup>
+    <ItemGroup>
+      <_TakenBeforeAgentSandbox Include="@(ResolvedFileToPublish->'$(AgentSandboxPublishDirectory)%(RelativePath)')" />
+    </ItemGroup>
+    <ItemGroup>
+      <AgentSandboxPublishFiles Include="$(AgentSandboxPublishDirectory)**/*" Exclude="@(_TakenBeforeAgentSandbox);$(AgentSandboxPublishDirectory)pi/**/*;$(AgentSandboxPublishDirectory)**/ref/**;$(AgentSandboxPublishDirectory)**/runtimes/linux*/**;$(AgentSandboxPublishDirectory)**/runtimes/osx*/**;$(AgentSandboxPublishDirectory)**/*.pdb;$(AgentSandboxPublishDirectory)**/*.so;$(AgentSandboxPublishDirectory)**/*.dylib" />
+      <ResolvedFileToPublish Include="@(AgentSandboxPublishFiles)">
+        <RelativePath>%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+
+  <Target Name="CopyAgentSandboxFiles" AfterTargets="Build" Condition="'$(CopyAgentSandbox)' == 'true'">
+    <MSBuild Projects="$(MSBuildThisFileDirectory)src/AllAgent.NET.Sandbox/AllAgent.NET.Sandbox.csproj" Targets="GetTargetPath" RemoveProperties="TargetFramework" Properties="Configuration=$(Configuration);RuntimeIdentifier=$(RuntimeIdentifier);$(WorkerCopySwitches)">
+      <Output TaskParameter="TargetOutputs" ItemName="AgentSandboxTarget" />
+    </MSBuild>
+    <PropertyGroup><AgentSandboxBuildDirectory>@(AgentSandboxTarget->'%(RootDir)%(Directory)')</AgentSandboxBuildDirectory></PropertyGroup>
+    <Error Condition="'$(AgentSandboxBuildDirectory)' == '' or !Exists('$(AgentSandboxBuildDirectory)AllAgent.NET.Sandbox.dll')" Text="Hyperlight worker build output is missing; build its project before copying." />
+    <ItemGroup>
+      <AgentSandboxBuildFiles Include="$(AgentSandboxBuildDirectory)**/*" Exclude="$(AgentSandboxBuildDirectory)pi/**/*;$(AgentSandboxBuildDirectory)win-x64/**/*;$(AgentSandboxBuildDirectory)linux-x64/**/*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(AgentSandboxBuildFiles)" DestinationFiles="@(AgentSandboxBuildFiles->'$(OutDir)%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
+
+  <!-- Built-in plugins ship next to the host and are installed on first start. -->
+  <!-- ============================== embedded PowerShell worker ============================== -->
+  <Target Name="DiagnosePublishPhase" AfterTargets="ComputeFilesToPublish">
+    <ItemGroup>
+      <_DiagnoseEntry Include="@(ResolvedFileToPublish->'%(RelativePath)|%(FullPath)')" />
+    </ItemGroup>
+    <WriteLinesToFile File="$(MSBuildThisFileDirectory)artifacts/publish-list-host.txt" Lines="@(_DiagnoseEntry)" Overwrite="true" />
+    <Message Importance="high" Text="DIAGNOSE IsPublishing=[$(_IsPublishing)] entries=@(_DiagnoseEntry->Count())" />
+  </Target>
+  <Target Name="CollectEmbeddedPowerShell" AfterTargets="ComputeFilesToPublish"
+          Condition="'$(CopyEmbeddedPowerShell)' == 'true'">
+    <PropertyGroup><PowerShellPublishDirectory>$(WorkerStagingRoot)powershell/</PowerShellPublishDirectory></PropertyGroup>
+    <MSBuild Projects="$(MSBuildThisFileDirectory)src/AllAgent.NET.PowerShell/AllAgent.NET.PowerShell.csproj" Targets="Publish"
+             Properties="Configuration=$(Configuration);PublishDir=$(PowerShellPublishDirectory);SelfContained=$(SelfContained);RuntimeIdentifier=$(RuntimeIdentifier);PublishSingleFile=false;UseAppHost=true;$(WorkerCopySwitches)" />
+    <Error Condition="!Exists('$(PowerShellPublishDirectory)AllAgent.NET.PowerShell.exe')" Text="Bundled PowerShell SDK worker is missing." />
+    <ItemGroup>
+      <!-- The worker's own build output reaches this list through the project reference graph.
+           It is framework-dependent, so it must not win over the self-contained publish below. -->
+      <_InheritedPowerShellFile Include="@(ResolvedFileToPublish)" Condition="$([System.String]::Copy('%(FullPath)').Contains('\src\AllAgent.NET.PowerShell\'))" />
+      <ResolvedFileToPublish Remove="@(_InheritedPowerShellFile)" />
+    </ItemGroup>
+    <ItemGroup>
+      <_TakenBeforeEmbeddedPowerShell Include="@(ResolvedFileToPublish->'$(PowerShellPublishDirectory)%(RelativePath)')" />
+    </ItemGroup>
+    <ItemGroup>
+      <EmbeddedPowerShellFiles Include="$(PowerShellPublishDirectory)**/*" Exclude="@(_TakenBeforeEmbeddedPowerShell);$(PowerShellPublishDirectory)**/ref/**;$(PowerShellPublishDirectory)**/runtimes/unix/**;$(PowerShellPublishDirectory)**/runtimes/linux*/**;$(PowerShellPublishDirectory)**/runtimes/osx*/**;$(PowerShellPublishDirectory)**/runtimes/android*/**;$(PowerShellPublishDirectory)**/runtimes/maccatalyst*/**;$(PowerShellPublishDirectory)**/*.pdb;$(PowerShellPublishDirectory)**/*.so;$(PowerShellPublishDirectory)**/*.dylib" />
+      <!-- The worker loads its built-in modules from <application directory>/Modules; the SDK
+           ships them under runtimes/win/lib/<tfm>/Modules, so they are re-rooted here. -->
+      <EmbeddedPowerShellModules Include="$(PowerShellPublishDirectory)runtimes/win/lib/$(TargetFramework)/Modules/**/*" Exclude="@(_TakenBeforeEmbeddedPowerShell->'$(PowerShellPublishDirectory)runtimes/win/lib/$(TargetFramework)/Modules/%(Filename)%(Extension)')" />
+      <ResolvedFileToPublish Include="@(EmbeddedPowerShellModules)">
+        <RelativePath>Modules/%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+      <ResolvedFileToPublish Include="@(EmbeddedPowerShellFiles)">
+        <RelativePath>%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+
+  <Target Name="CopyEmbeddedPowerShellFiles" AfterTargets="Build" Condition="'$(CopyEmbeddedPowerShell)' == 'true'">
+    <MSBuild Projects="$(MSBuildThisFileDirectory)src/AllAgent.NET.PowerShell/AllAgent.NET.PowerShell.csproj" Targets="GetTargetPath" RemoveProperties="TargetFramework" Properties="Configuration=$(Configuration);RuntimeIdentifier=$(RuntimeIdentifier);$(WorkerCopySwitches)">
       <Output TaskParameter="TargetOutputs" ItemName="EmbeddedPowerShellTarget" />
     </MSBuild>
     <PropertyGroup><EmbeddedPowerShellDirectory>@(EmbeddedPowerShellTarget->'%(RootDir)%(Directory)')</EmbeddedPowerShellDirectory></PropertyGroup>
     <Error Condition="!Exists('$(EmbeddedPowerShellDirectory)AllAgent.NET.PowerShell.dll')" Text="Bundled PowerShell SDK worker is missing." />
     <ItemGroup>
-      <EmbeddedPowerShellFiles Include="$(EmbeddedPowerShellDirectory)**/*" Exclude="$(EmbeddedPowerShellDirectory)**/ref/**;$(EmbeddedPowerShellDirectory)**/runtimes/linux*/**;$(EmbeddedPowerShellDirectory)**/runtimes/osx*/**;$(EmbeddedPowerShellDirectory)**/runtimes/android*/**;$(EmbeddedPowerShellDirectory)**/runtimes/maccatalyst*/**;$(EmbeddedPowerShellDirectory)**/*.pdb;$(EmbeddedPowerShellDirectory)**/*.so;$(EmbeddedPowerShellDirectory)**/*.dylib" />
-      <Content Include="@(EmbeddedPowerShellFiles)">
-        <Link>powershell/%(RecursiveDir)%(Filename)%(Extension)</Link>
-        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-        <Pack Condition="'$(MSBuildProjectName)' == 'AllAgent.NET.Core'">true</Pack>
-        <Pack Condition="'$(MSBuildProjectName)' != 'AllAgent.NET.Core'">false</Pack>
-        <BuildAction>None</BuildAction>
-        <PackagePath>contentFiles/any/$(TargetFramework)/powershell/%(RecursiveDir)%(Filename)%(Extension)</PackagePath>
-        <PackageCopyToOutput>true</PackageCopyToOutput>
-      </Content>
+      <EmbeddedPowerShellBuildFiles Include="$(EmbeddedPowerShellDirectory)**/*" Exclude="$(EmbeddedPowerShellDirectory)**/ref/**;$(EmbeddedPowerShellDirectory)**/runtimes/unix/**;$(EmbeddedPowerShellDirectory)**/runtimes/linux*/**;$(EmbeddedPowerShellDirectory)**/runtimes/osx*/**;$(EmbeddedPowerShellDirectory)**/runtimes/android*/**;$(EmbeddedPowerShellDirectory)**/runtimes/maccatalyst*/**;$(EmbeddedPowerShellDirectory)**/*.pdb;$(EmbeddedPowerShellDirectory)**/*.so;$(EmbeddedPowerShellDirectory)**/*.dylib" />
+      <EmbeddedPowerShellBuildModules Include="$(EmbeddedPowerShellDirectory)runtimes/win/lib/$(TargetFramework)/Modules/**/*" />
     </ItemGroup>
+    <Copy SourceFiles="@(EmbeddedPowerShellBuildFiles)" DestinationFiles="@(EmbeddedPowerShellBuildFiles->'$(OutDir)%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(EmbeddedPowerShellBuildModules)" DestinationFiles="@(EmbeddedPowerShellBuildModules->'$(OutDir)Modules/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
   </Target>
-  <Target Name="CopyEmbeddedPowerShellFiles" AfterTargets="Build" DependsOnTargets="CollectEmbeddedPowerShell" Condition="'$(CopyEmbeddedPowerShell)' == 'true'">
-    <Copy SourceFiles="@(EmbeddedPowerShellFiles)" DestinationFiles="@(EmbeddedPowerShellFiles->'$(OutDir)powershell/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
-  </Target>
-  <Target Name="PublishEmbeddedPowerShellFiles" AfterTargets="ComputeFilesToPublish" DependsOnTargets="CollectEmbeddedPowerShell" Condition="'$(CopyEmbeddedPowerShell)' == 'true'">
+
+  <Target Name="CopyBuiltinPlugins" AfterTargets="Build">
     <ItemGroup>
-      <ResolvedFileToPublish Include="@(EmbeddedPowerShellFiles)">
-        <RelativePath>powershell/%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
-        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-        <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
-      </ResolvedFileToPublish>
+      <!-- Copied wherever the plugin has already been built; only the host (the project that ships
+           the WPF shell) requires it, and its project references build it before this target runs. -->
+      <BuiltinPluginFiles Include="../../plugins/AllAgent.NET.CommandCode/bin/$(Configuration)/net10.0/AllAgent.NET.CommandCode.dll" Condition="Exists('../../plugins/AllAgent.NET.CommandCode/bin/$(Configuration)/net10.0/AllAgent.NET.CommandCode.dll')" />
+      <BuiltinPluginFiles Include="../../plugins/AllAgent.NET.CommandCode/allagent-plugin.json" />
     </ItemGroup>
-  </Target>
-  <Target Name="CopyBrowserWorkerFiles" AfterTargets="Build" Condition="'$(CopyBrowserWorker)' == 'true'">
-    <MSBuild Projects="$(MSBuildThisFileDirectory)src/AllAgent.NET.Browser/AllAgent.NET.Browser.csproj" Targets="GetTargetPath" Properties="Configuration=$(Configuration);RuntimeIdentifier=$(RuntimeIdentifier)" RemoveProperties="TargetFramework">
-      <Output TaskParameter="TargetOutputs" ItemName="BrowserWorkerTarget" />
-    </MSBuild>
-    <PropertyGroup><BrowserWorkerBuildDirectory>@(BrowserWorkerTarget->'%(RootDir)%(Directory)')</BrowserWorkerBuildDirectory></PropertyGroup>
-    <Error Condition="'$(BrowserWorkerBuildDirectory)' == '' or !Exists('$(BrowserWorkerBuildDirectory)AllAgent.NET.Browser.dll')" Text="WebView2 browser worker is missing; build its project before copying." />
-    <ItemGroup><BrowserWorkerFiles Include="$(BrowserWorkerBuildDirectory)**/*" /></ItemGroup>
-    <Copy SourceFiles="@(BrowserWorkerFiles)" DestinationFiles="@(BrowserWorkerFiles->'$(OutDir)browser/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
-  </Target>
-  <Target Name="IncludeBrowserWorkerPublishFiles" AfterTargets="ComputeFilesToPublish" Condition="'$(CopyBrowserWorker)' == 'true'">
-    <PropertyGroup><BrowserWorkerPublishDirectory>$(MSBuildProjectDirectory)/obj/$(Configuration)/$(TargetFramework)/browser-publish/</BrowserWorkerPublishDirectory></PropertyGroup>
-    <MSBuild Projects="$(MSBuildThisFileDirectory)src/AllAgent.NET.Browser/AllAgent.NET.Browser.csproj" Targets="Publish" RemoveProperties="TargetFramework" Properties="TargetFramework=net10.0-windows;Configuration=$(Configuration);PublishDir=$(BrowserWorkerPublishDirectory);CopyBrowserWorker=false;PublishSingleFile=false;SelfContained=$(SelfContained);RuntimeIdentifier=$(RuntimeIdentifier)" />
+    <Error Condition="'$(CopyGuiShell)' == 'true' and !Exists('../../plugins/AllAgent.NET.CommandCode/bin/$(Configuration)/net10.0/AllAgent.NET.CommandCode.dll')" Text="Built-in plugin output is missing; build plugins/AllAgent.NET.CommandCode before copying." />
+    <Copy SourceFiles="@(BuiltinPluginFiles)" DestinationFolder="$(OutDir)builtin-plugins/AllAgent.NET.CommandCode/" SkipUnchangedFiles="true" />
     <ItemGroup>
-      <BrowserWorkerPublishFiles Include="$(BrowserWorkerPublishDirectory)**/*" Exclude="$(BrowserWorkerPublishDirectory)**/everything/**;$(BrowserWorkerPublishDirectory)**/ref/**;$(BrowserWorkerPublishDirectory)**/runtimes/linux*/**;$(BrowserWorkerPublishDirectory)**/runtimes/osx*/**;$(BrowserWorkerPublishDirectory)**/*.pdb;$(BrowserWorkerPublishDirectory)**/*.so;$(BrowserWorkerPublishDirectory)**/*.dylib" />
-      <ResolvedFileToPublish Include="@(BrowserWorkerPublishFiles)">
-        <RelativePath>browser/%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
+      <GitHubPluginFiles Include="../../plugins/AllAgent.NET.GitHub/bin/$(Configuration)/net10.0/AllAgent.NET.GitHub.dll" Condition="Exists('../../plugins/AllAgent.NET.GitHub/bin/$(Configuration)/net10.0/AllAgent.NET.GitHub.dll')" />
+      <GitHubPluginFiles Include="../../plugins/AllAgent.NET.GitHub/allagent-plugin.json" />
+      <GitHubPluginWebFiles Include="../../plugins/AllAgent.NET.GitHub/web/**/*" />
+    </ItemGroup>
+    <Error Condition="'$(CopyGuiShell)' == 'true' and !Exists('../../plugins/AllAgent.NET.GitHub/bin/$(Configuration)/net10.0/AllAgent.NET.GitHub.dll')" Text="Built-in GitHub plugin output is missing." />
+    <Copy SourceFiles="@(GitHubPluginFiles)" DestinationFolder="$(OutDir)builtin-plugins/AllAgent.NET.GitHub/" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(GitHubPluginWebFiles)" DestinationFiles="@(GitHubPluginWebFiles->'$(OutDir)builtin-plugins/AllAgent.NET.GitHub/web/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="IncludeBuiltinPluginsInToolPackage" AfterTargets="ComputeFilesToPublish" Condition="'$(PackAsTool)' == 'true'">
+    <ItemGroup>
+      <BuiltinPluginPublishFiles Include="$(OutDir)builtin-plugins/**/*" />
+      <ResolvedFileToPublish Include="@(BuiltinPluginPublishFiles)">
+        <RelativePath>builtin-plugins/%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
         <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
       </ResolvedFileToPublish>
     </ItemGroup>
   </Target>
-  <Target Name="CopyGuiShellFiles" AfterTargets="Build" Condition="'$(CopyGuiShell)' == 'true'">
-    <MSBuild Projects="$(MSBuildThisFileDirectory)src/AllAgent.NET.Gui/AllAgent.NET.Gui.csproj" Targets="GetTargetPath" Properties="Configuration=$(Configuration);RuntimeIdentifier=$(RuntimeIdentifier)" RemoveProperties="TargetFramework">
-      <Output TaskParameter="TargetOutputs" ItemName="GuiShellTarget" />
-    </MSBuild>
-    <PropertyGroup><GuiShellBuildDirectory>@(GuiShellTarget->'%(RootDir)%(Directory)')</GuiShellBuildDirectory></PropertyGroup>
-    <Error Condition="'$(GuiShellBuildDirectory)' == '' or !Exists('$(GuiShellBuildDirectory)AllAgent.NET.Gui.dll')" Text="WPF GUI shell is missing; build its project before copying." />
-    <ItemGroup><GuiShellFiles Include="$(GuiShellBuildDirectory)**/*" /></ItemGroup>
-    <Copy SourceFiles="@(GuiShellFiles)" DestinationFiles="@(GuiShellFiles->'$(OutDir)gui/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
-  </Target>
-  <Target Name="IncludeGuiShellPublishFiles" AfterTargets="ComputeFilesToPublish" Condition="'$(CopyGuiShell)' == 'true'">
-    <PropertyGroup><GuiShellPublishDirectory>$(MSBuildProjectDirectory)/obj/$(Configuration)/$(TargetFramework)/gui-publish/</GuiShellPublishDirectory></PropertyGroup>
-    <MSBuild Projects="$(MSBuildThisFileDirectory)src/AllAgent.NET.Gui/AllAgent.NET.Gui.csproj" Targets="Publish" RemoveProperties="TargetFramework" Properties="TargetFramework=net10.0-windows;Configuration=$(Configuration);PublishDir=$(GuiShellPublishDirectory);CopyGuiShell=false;PublishSingleFile=false;SelfContained=$(SelfContained);RuntimeIdentifier=$(RuntimeIdentifier)" />
+  <!-- The tool runs on Windows only: publish/pack never carries debug symbols, other platforms' native assets or compile-time reference assemblies. -->
+  <Target Name="TrimPortableRuntimeAssets" AfterTargets="ComputeFilesToPublish">
     <ItemGroup>
-      <GuiShellPublishFiles Include="$(GuiShellPublishDirectory)**/*" Exclude="$(GuiShellPublishDirectory)**/everything/**;$(GuiShellPublishDirectory)**/ref/**;$(GuiShellPublishDirectory)**/runtimes/linux*/**;$(GuiShellPublishDirectory)**/runtimes/osx*/**;$(GuiShellPublishDirectory)**/*.pdb;$(GuiShellPublishDirectory)**/*.so;$(GuiShellPublishDirectory)**/*.dylib" />
-      <ResolvedFileToPublish Include="@(GuiShellPublishFiles)">
-        <RelativePath>gui/%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
-        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-      </ResolvedFileToPublish>
+      <_PortableRuntimeFile Include="@(ResolvedFileToPublish)" Condition="'%(Extension)' == '.pdb' Or '%(Extension)' == '.so' Or '%(Extension)' == '.dylib' Or $([System.String]::Copy('%(RelativePath)').Replace('\','/').StartsWith('ref/'))" />
+      <ResolvedFileToPublish Remove="@(_PortableRuntimeFile)" />
     </ItemGroup>
-  </Target>
-  <Target Name="CopyComputerWorkerFiles" AfterTargets="Build" Condition="'$(CopyComputerWorker)' == 'true'">
-    <MSBuild Projects="$(MSBuildThisFileDirectory)src/AllAgent.NET.ComputerUse/AllAgent.NET.ComputerUse.csproj" Targets="GetTargetPath" Properties="Configuration=$(Configuration);RuntimeIdentifier=$(RuntimeIdentifier)" RemoveProperties="TargetFramework">
-      <Output TaskParameter="TargetOutputs" ItemName="ComputerWorkerTarget" />
-    </MSBuild>
-    <PropertyGroup><ComputerWorkerBuildDirectory>@(ComputerWorkerTarget->'%(RootDir)%(Directory)')</ComputerWorkerBuildDirectory></PropertyGroup>
-    <Error Condition="'$(ComputerWorkerBuildDirectory)' == '' or !Exists('$(ComputerWorkerBuildDirectory)AllAgent.NET.ComputerUse.dll')" Text="Computer worker build output is missing; build its project before copying." />
-    <ItemGroup>
-      <!-- Old build directories may still contain the withdrawn sidecar. Never propagate it. -->
-      <ComputerWorkerFiles Include="$(ComputerWorkerBuildDirectory)**/*" Exclude="$(ComputerWorkerBuildDirectory)pi/**/*" />
-    </ItemGroup>
-    <Copy SourceFiles="@(ComputerWorkerFiles)" DestinationFiles="@(ComputerWorkerFiles->'$(OutDir)computer/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
-  </Target>
-  <Target Name="IncludeComputerWorkerPublishFiles" AfterTargets="ComputeFilesToPublish" Condition="'$(CopyComputerWorker)' == 'true'">
-    <PropertyGroup><ComputerWorkerPublishDirectory>$(MSBuildProjectDirectory)/obj/$(Configuration)/$(TargetFramework)/computer-publish/</ComputerWorkerPublishDirectory></PropertyGroup>
-    <MSBuild Projects="$(MSBuildThisFileDirectory)src/AllAgent.NET.ComputerUse/AllAgent.NET.ComputerUse.csproj" Targets="Publish" RemoveProperties="TargetFramework" Properties="TargetFramework=net10.0-windows;Configuration=$(Configuration);PublishDir=$(ComputerWorkerPublishDirectory);CopyComputerWorker=false;PublishSingleFile=false;SelfContained=$(SelfContained);RuntimeIdentifier=$(RuntimeIdentifier)" />
-    <ItemGroup>
-      <ComputerWorkerPublishFiles Include="$(ComputerWorkerPublishDirectory)**/*" Exclude="$(ComputerWorkerPublishDirectory)pi/**/*;$(ComputerWorkerPublishDirectory)**/everything/**;$(ComputerWorkerPublishDirectory)**/ref/**;$(ComputerWorkerPublishDirectory)**/runtimes/linux*/**;$(ComputerWorkerPublishDirectory)**/runtimes/osx*/**;$(ComputerWorkerPublishDirectory)**/*.pdb;$(ComputerWorkerPublishDirectory)**/*.so;$(ComputerWorkerPublishDirectory)**/*.dylib" />
-      <ResolvedFileToPublish Include="@(ComputerWorkerPublishFiles)">
-        <RelativePath>computer/%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
-        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-      </ResolvedFileToPublish>
-    </ItemGroup>
-  </Target>
-  <Target Name="CopyAgentSandboxFiles" AfterTargets="Build" Condition="'$(CopyAgentSandbox)' == 'true'">
-    <MSBuild Projects="$(MSBuildThisFileDirectory)src/AllAgent.NET.Sandbox/AllAgent.NET.Sandbox.csproj" Targets="GetTargetPath" Properties="Configuration=$(Configuration);RuntimeIdentifier=$(RuntimeIdentifier)" RemoveProperties="TargetFramework">
-      <Output TaskParameter="TargetOutputs" ItemName="AgentSandboxTarget" />
-    </MSBuild>
-    <PropertyGroup>
-      <AgentSandboxBuildDirectory>@(AgentSandboxTarget->'%(RootDir)%(Directory)')</AgentSandboxBuildDirectory>
-    </PropertyGroup>
-    <Error Condition="'$(AgentSandboxBuildDirectory)' == '' or !Exists('$(AgentSandboxBuildDirectory)AllAgent.NET.Sandbox.dll')" Text="Hyperlight worker build output is missing; build its project before copying." />
-    <ItemGroup>
-      <AgentSandboxFiles Include="$(AgentSandboxBuildDirectory)**/*" Exclude="$(AgentSandboxBuildDirectory)pi/**/*;$(AgentSandboxBuildDirectory)win-x64/**/*;$(AgentSandboxBuildDirectory)linux-x64/**/*" />
-    </ItemGroup>
-    <Copy SourceFiles="@(AgentSandboxFiles)" DestinationFiles="@(AgentSandboxFiles->'$(OutDir)sandbox/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
-  </Target>
-  <Target Name="PublishAgentSandboxFiles" AfterTargets="Publish" Condition="'$(CopyAgentSandbox)' == 'true'">
-    <MSBuild Projects="$(MSBuildThisFileDirectory)src/AllAgent.NET.Sandbox/AllAgent.NET.Sandbox.csproj" Targets="Publish" Properties="Configuration=$(Configuration);PublishDir=$(PublishDir)sandbox/;CopyAgentSandbox=false;PublishSingleFile=false;RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=$(SelfContained)" />
   </Target>
 </Project>

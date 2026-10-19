@@ -21,8 +21,8 @@ export const useApiConfigsStore = defineStore('apiConfigs', () => {
     if (!['http:', 'https:'].includes(url.protocol)) throw new Error('API 地址必须使用 HTTP 或 HTTPS')
     const temperature = config.temperature ?? 0.7
     if (!Number.isFinite(temperature) || temperature < 0 || temperature > 2) throw new Error('Temperature 必须在 0–2 之间')
-    const maxTokens = config.maxTokens ?? 4096
-    if (!Number.isInteger(maxTokens) || maxTokens <= 0) throw new Error('最大输出 Tokens 必须是正整数')
+    const maxTokens = config.maxTokens ?? 0
+    if (!Number.isInteger(maxTokens) || maxTokens < 0) throw new Error('最大输出 Tokens 需要是 0（自动）或正整数')
     if (config.extraHeadersJson?.trim()) {
       const headers: unknown = JSON.parse(config.extraHeadersJson)
       if (!headers || Array.isArray(headers) || typeof headers !== 'object') throw new Error('额外请求头必须是 JSON 对象')

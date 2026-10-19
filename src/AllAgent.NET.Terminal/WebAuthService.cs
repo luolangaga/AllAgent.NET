@@ -26,6 +26,11 @@ internal sealed class WebAuthService(DataStore store, string dataDirectory, Plug
         .Concat(plugins.Authentication.Where(a => !_builtins.Any(b => b.Id.Equals(a.Id, StringComparison.OrdinalIgnoreCase))))
         .ToArray();
 
+    /// <summary>Footer contributions the browser may show under the composer: the built-in account
+    /// quota plus every plugin-registered provider — the same set the terminal keeps in its footer.</summary>
+    public IReadOnlyList<ModelFooterProvider> FooterProviders =>
+        _builtins.OfType<ChatGptAuthentication>().Select(auth => auth.FooterProvider).Concat(plugins.FooterProviders).ToArray();
+
     public IAuthenticationProvider Find(string id) => Authentication.FirstOrDefault(a => a.Id.Equals(id, StringComparison.OrdinalIgnoreCase))
         ?? throw new ArgumentException("登录提供商不存在；请刷新列表后重试。");
 

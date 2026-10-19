@@ -1,6 +1,6 @@
 # CodeAct 与 Hyperlight 接入说明
 
-终端默认展示实际 Python 代码，工具调用标绿，点击或 Ctrl+E 查看运行入参和结果。权限模式和持续执行的中文用户说明见 [执行过程与权限模式](execution.zh-CN.md)。最大轮次已删除；普通模式逐次授权，显式完全访问模式不逐次审核。
+终端默认展示实际 Python 代码，工具调用标绿，点击或 Ctrl+E 查看运行入参和结果。权限模式和持续执行的中文用户说明见 [执行过程与权限模式](execution.zh-CN.md)。最大轮次已删除；默认限制模式（工作区内免审、工作区外授权），显式完全访问模式不逐次审核，`--ask` 逐次授权。
 
 本实现采用微软支持的手动接法：在独立工作进程中构造 `HyperlightExecuteCodeFunction`，AllAgent.NET 的 C# AgentEngine 驱动代理循环，直接连接现有模型协议与宿主工具。它不是 `HyperlightCodeActProvider` 的子类，模型只看到 `execute_code`。
 
@@ -67,4 +67,4 @@ Worker 通过仅可信前置代码可调用的私有分块接口传输工具结�
 dotnet test tests/AllAgent.NET.Tests -c CodeActValidation
 ```
 
-`CodeActValidation` 是本次验证使用的独立构建目录，避免正在运行的旧 Release 终端锁住 DLL。实际交付应保留整个发布目录及其 `sandbox/`，关闭旧版后启动新 exe。
+`CodeActValidation` 是本次验证使用的独立构建目录，避免正在运行的旧 Release 终端锁住 DLL。实际交付应保留整个发布目录（宿主与各 worker 同目录共享运行时），关闭旧版后启动新 exe。

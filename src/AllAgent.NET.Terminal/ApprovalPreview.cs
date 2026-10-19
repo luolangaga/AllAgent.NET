@@ -26,7 +26,7 @@ internal sealed record ApprovalPreview(string Title, string Target, IReadOnlyLis
             case "external_directory":
                 title = "访问外部目录"; target = String("directory");
                 rows.Add(("实际路径：" + path, Color.White)); rows.Add(("操作：" + String("operation"), Color.White));
-                summary = "目录授权不代表文件写入或未信任的 Shell 执行已获授权；可信 Shell 别名仍按主机规则运行。记住仅限当前会话。"; break;
+                summary = "授权仅覆盖所列路径；文件写入与未信任的程序执行按当前权限模式继续校验，可信 Shell 别名仍按主机规则运行。记住仅限当前会话。"; break;
             case "cancel_agent": title = "取消子 Agent"; target = String("id"); summary = "停止任务和沙箱执行；已有外部效果不会自动回滚，取消后只保留部分输出。"; break;
             case "file_write":
                 title = "写入文件"; var content = String("content"); string? original = null;

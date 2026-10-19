@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  AlertTriangle, Blocks, ChevronRight, Command, FolderOpen, ListTodo, MessageSquare, Moon, PanelLeft,
-  Pencil, Plug, Plus, Puzzle, Search, Settings as SettingsIcon, SlidersHorizontal, Sun, Trash2, Wrench,
+  AlertTriangle, Blocks, ChevronRight, Command, FolderOpen, FolderPlus, FolderTree, GitBranch, ListTodo, MessageSquare, Moon,
+  PanelLeft, Pencil, Plug, Plus, Puzzle, Search, Settings as SettingsIcon, SlidersHorizontal, SquareTerminal, Sun,
+  Terminal as TerminalIcon, Trash2, Wrench,
 } from 'lucide-react'
 import { Badge } from './components/ui/badge'
 import { Button } from './components/ui/b-button'
@@ -10,9 +11,16 @@ import { StatusDot } from './components/ui/status-dot'
 import { Tooltip } from './components/ui/b-tooltip'
 import { Field, Confirm, Modal } from './components/shared'
 import { CommandPalette } from './components/CommandPalette'
+import { GitPanel } from './components/GitPanel'
 import { Notices } from './components/Notices'
 import { PendingInteractions } from './components/PendingInteractions'
+import { pluginIcon } from './components/plugins/icons'
+import { PluginPage } from './components/plugins/PluginPage'
+import { RunDock } from './components/RunDock'
+import { RunMarker } from './components/RunMarker'
 import { TaskDetailModal } from './components/TaskDetailModal'
+import { TerminalPanel } from './components/TerminalPanel'
+import { WorkspacePanel } from './components/WorkspacePanel'
 import { WorkspaceSwitcher } from './components/WorkspaceSwitcher'
 import { useStore } from './lib/store'
 import { connectionLabel, useConnection } from './lib/useConnection'
@@ -21,18 +29,24 @@ import { bridgeEvents, onReconnect, reconnect } from './bridge'
 import { useApiConfigsStore } from './stores/apiConfigs'
 import { useApprovalsStore } from './stores/approvals'
 import { useAgentsStore } from './stores/agents'
+import { useContributionsStore } from './stores/contributions'
 import { useConversationsStore } from './stores/conversations'
+import { useGitStore } from './stores/git'
 import { useMcpServersStore } from './stores/mcpServers'
+import { usePanelsStore } from './stores/panels'
 import { usePluginsStore } from './stores/plugins'
 import { useSettingsStore } from './stores/settings'
 import { useSkillsStore } from './stores/skills'
 import { useTasksStore } from './stores/tasks'
+import { useTerminalStore } from './stores/terminal'
 import { useNoticesStore } from './stores/ui'
+import { useWorkspaceBrowserStore } from './stores/workspaceBrowser'
 import { useWorkspaceStore } from './stores/workspace'
 import Chat from './views/Chat'
 import Mcp from './views/Mcp'
 import Models from './views/Models'
 import Plugins from './views/Plugins'
+import PowerShell from './views/PowerShell'
 import Settings from './views/Settings'
 import Skills from './views/Skills'
 import Tasks from './views/Tasks'
@@ -44,6 +58,7 @@ const navigation = [
   { id: 'models', label: '模型与 API', icon: SlidersHorizontal },
   { id: 'skills', label: '技能', icon: Blocks },
   { id: 'tools', label: '工具', icon: Wrench },
+  { id: 'powershell', label: 'PowerShell', icon: SquareTerminal },
   { id: 'plugins', label: '插件', icon: Puzzle },
   { id: 'mcp', label: 'MCP 服务', icon: Plug },
   { id: 'tasks', label: '任务', icon: ListTodo },
@@ -76,8 +91,13 @@ export default function App() {
   const tasks = useStore(useTasksStore)
   const agents = useStore(useAgentsStore)
   const plugins = useStore(usePluginsStore)
+  const contributions = useStore(useContributionsStore)
   const workspace = useStore(useWorkspaceStore)
   const notices = useStore(useNoticesStore)
+  const panels = useStore(usePanelsStore)
+  const git = useStore(useGitStore)
+  const browser = useStore(useWorkspaceBrowserStore)
+  const terminal = useStore(useTerminalStore)
   const connection = useConnection()
   const approvals = useStore(useApprovalsStore)
   const systemDark = useSystemDark()
@@ -97,6 +117,10 @@ export default function App() {
   const busy = conv.sending || conv.streamingMessageId !== null
   const dark = settings.theme === 'dark' || (settings.theme === 'system' && systemDark)
   const workspaceName = workspace.workspace.split(/[\\/]/).filter(Boolean).at(-1) ?? workspace.workspace
+  // Topbar Git badge: uncommitted changes in the current workspace's repository.
+  const gitBadge = git.summary?.repo
+    ? git.summary.staged + git.summary.unstaged + git.summary.untracked + git.summary.conflicted
+    : 0
 
   function go(id: string) {
     location.hash = `/${id}`
@@ -113,7 +137,6 @@ export default function App() {
   }
 
   async function newChat() {
-    if (busy) return
     try {
       await conv.createConversation()
       go('chat')
@@ -145,9 +168,9 @@ export default function App() {
     const change = () => setPage(location.hash.split('/')[1] || 'chat')
     window.addEventListener('hashchange', change)
     Promise.allSettled([
-      conv.loadAll(), api.loadAll(), skills.loadAll(), mcp.loadAll(),
+      conv.loadAll(), conv.loadRunning(), api.loadAll(), skills.loadAll(), mcp.loadAll(),
       settings.load(), agents.loadAll(), tasks.loadAll(),
-      plugins.loadAll(), workspace.load(), approvals.refresh(),
+      plugins.loadAll(), contributions.loadAll(), workspace.load(), approvals.refresh(), git.load(),
     ]).then(results => {
       const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected')
       if (failures.length) {
@@ -168,12 +191,15 @@ export default function App() {
     return () => window.clearTimeout(timer)
   }, [connection])
 
-  // Backend restarted or switched workspace: reload everything it serves.
+  // Backend restarted or switched workspace: reload everything it serves. The file tree and
+  // Git status are workspace-scoped; terminals are host-level and only need re-syncing.
   useEffect(() => {
     async function reloadAll() {
+      browser.reset()
       await Promise.allSettled([
         conv.refreshAfterBackendChange(), api.loadAll(), skills.loadAll(), mcp.loadAll(),
-        tasks.loadAll(), settings.load(), agents.loadAll(), plugins.loadAll(), workspace.load(), approvals.refresh(),
+        tasks.loadAll(), settings.load(), agents.loadAll(), plugins.loadAll(), contributions.loadAll(),
+        workspace.load(), approvals.refresh(), git.load(), terminal.sync(),
       ])
     }
     const offReconnect = onReconnect(() => { void reloadAll() })
@@ -199,6 +225,21 @@ export default function App() {
         event.preventDefault()
         setPalette(open => !open)
       }
+      // Bubble shortcuts mirror VSCode: explorer, source control and the integrated terminal.
+      if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === 'e') {
+        event.preventDefault()
+        panels.togglePanel('files')
+      }
+      if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === 'g') {
+        event.preventDefault()
+        panels.togglePanel('git')
+      }
+      if ((event.ctrlKey || event.metaKey) && !event.shiftKey && (event.key === '`' || event.key === '~')) {
+        event.preventDefault()
+        panels.togglePanel('terminal')
+        // Toggling stores the new state synchronously; opening takes focus right away.
+        if (panels.open.terminal) terminal.requestFocus()
+      }
     }
     window.addEventListener('keydown', key)
     return () => window.removeEventListener('keydown', key)
@@ -212,6 +253,12 @@ export default function App() {
   const activeTitle = conv.active?.title
     || (conv.messages.length ? '对话' : '新对话')
   const otherWorkspaces = workspace.list.filter(entry => !entry.isCurrent)
+  // Plugin pages slot into the sidebar before 设置, right after the built-in entries.
+  const navItems = [
+    ...navigation.slice(0, -1),
+    ...contributions.pages.map(entry => ({ id: entry.route, label: entry.title, icon: pluginIcon(entry.icon) })),
+    navigation[navigation.length - 1],
+  ]
 
   return <div className="workspace">
     {sidebarOpen ? <div className="sidebar-scrim" onClick={() => setSidebarOpen(false)} /> : null}
@@ -221,10 +268,24 @@ export default function App() {
         <div className="brand-copy"><strong>AllAgent.NET</strong><span>你的智能工作伙伴</span></div>
         <Badge size="sm">BETA</Badge>
       </div>
-      <Button className="new-chat" disabled={busy} icon={<Plus size={15} />} onClick={() => void newChat()}>
-        新建对话<span className="key-hint">Ctrl N</span>
-      </Button>
-      <nav aria-label="主导航">{navigation.map(item => <Button
+      <div className="new-chat-row">
+        <Tooltip content="新建对话 · Ctrl N">
+          <Button className="new-chat" icon={<Plus size={15} />} onClick={() => void newChat()}>
+            新建对话
+          </Button>
+        </Tooltip>
+        <Tooltip content="打开或新建工作区">
+          <Button
+            className="new-chat"
+            icon={<FolderPlus size={15} />}
+            onClick={() => workspace.openSwitcher()}
+            variant="outline"
+          >
+            新建工作区
+          </Button>
+        </Tooltip>
+      </div>
+      <nav aria-label="主导航" className="sidebar-nav">{navItems.map(item => <Button
         className={`nav-link ${page === item.id ? 'selected' : ''}`}
         icon={<item.icon size={15} />}
         key={item.id}
@@ -240,12 +301,6 @@ export default function App() {
       <div className="sidebar-section">
         <div className="section-row">
           <span>工作区</span>
-          <Tooltip content="打开或新建工作区"><Button
-            iconLabel="打开或新建工作区"
-            onClick={() => workspace.openSwitcher()}
-            size="icon-xs"
-            variant="ghost"
-          ><Plus size={13} /></Button></Tooltip>
         </div>
         <Input
           aria-label="搜索对话"
@@ -276,10 +331,10 @@ export default function App() {
               >
                 <Button
                   className="history-title"
-                  disabled={busy}
                   onClick={() => { void conv.selectConversation(item.id).then(() => go('chat')).catch(notices.report) }}
                   variant="ghost"
                 ><span>{item.title}</span></Button>
+                <RunMarker state={conv.runState(item.id)} />
                 <span className="history-time">{formatRelative(item.updatedAt)}</span>
                 <div className="history-actions">
                   <Tooltip content="重命名"><Button
@@ -311,6 +366,9 @@ export default function App() {
               <ChevronRight className={`ws-group-chevron ${groups[entry.workspace] ? 'is-open' : ''}`} size={13} />
               <FolderOpen size={13} />
               <span className="ws-group-name">{entry.name}</span>
+              {conv.runsIn(entry.dataDirectory).length
+                ? <span className="run-badge" title="此工作区有会话正在运行">{conv.runsIn(entry.dataDirectory).length} 运行中</span>
+                : null}
               <span className="ws-group-count">{entry.sessionCount}</span>
             </button>
             {groups[entry.workspace] ? <div className="ws-group-body">
@@ -333,10 +391,10 @@ export default function App() {
             >
               <Button
                 className="history-title"
-                disabled={busy}
                 onClick={() => { void conv.selectConversation(item.id).then(() => go('chat')).catch(notices.report) }}
                 variant="ghost"
               ><span>{item.title}</span></Button>
+              <RunMarker state={conv.runState(item.id)} />
               <span className="history-time">{formatRelative(item.updatedAt)}</span>
             </div>)}
             {!conv.conversations.length ? <p className="history-empty">你的下一段灵感，从这里开始。</p> : null}
@@ -360,8 +418,38 @@ export default function App() {
           <FolderOpen size={13} /><span>{workspaceName || '工作区'}</span>
         </button> : <span className="topbar-scope">工作空间</span>}
         <ChevronRight className="breadcrumb-slash" size={13} />
-        <strong>{navigation.find(item => item.id === page)?.id === 'chat' ? activeTitle : navigation.find(item => item.id === page)?.label ?? '对话'}</strong>
+        <strong>{navItems.find(item => item.id === page)?.id === 'chat' ? activeTitle : navItems.find(item => item.id === page)?.label ?? '对话'}</strong>
         <div className="topbar-right">
+          <Tooltip content="工作区文件 · Ctrl+Shift+E">
+            <Button
+              className={panels.open.files ? 'is-active' : undefined}
+              iconLabel="工作区文件"
+              onClick={() => panels.togglePanel('files')}
+              size="icon-sm"
+              variant="ghost"
+            ><FolderTree size={14} /></Button>
+          </Tooltip>
+          <Tooltip content={gitBadge ? `Git 管理 · ${gitBadge} 项更改 · Ctrl+Shift+G` : 'Git 管理 · Ctrl+Shift+G'}>
+            <Button
+              className={panels.open.git ? 'is-active' : undefined}
+              iconLabel="Git 管理"
+              onClick={() => panels.togglePanel('git')}
+              size="icon-sm"
+              variant="ghost"
+            ><span className="topbar-icon-badge"><GitBranch size={14} />{gitBadge ? <i>{gitBadge > 99 ? '99+' : gitBadge}</i> : null}</span></Button>
+          </Tooltip>
+          <Tooltip content="集成终端 · Ctrl+`">
+            <Button
+              className={panels.open.terminal ? 'is-active' : undefined}
+              iconLabel="集成终端"
+              onClick={() => {
+                panels.togglePanel('terminal')
+                if (panels.open.terminal) terminal.requestFocus()
+              }}
+              size="icon-sm"
+              variant="ghost"
+            ><TerminalIcon size={14} /></Button>
+          </Tooltip>
           <Tooltip content="命令面板 · Ctrl+Shift+P">
             <Button iconLabel="命令面板" onClick={() => setPalette(true)} size="icon-sm" variant="ghost"><Command size={14} /></Button>
           </Tooltip>
@@ -395,10 +483,12 @@ export default function App() {
         <Button onClick={() => reconnect()} size="xs" variant="outline">重试连接</Button>
         <Button onClick={() => location.reload()} size="xs" variant="ghost">刷新页面</Button>
       </div> : null}
-      {page === 'models' ? <Models />
+      {page.startsWith('plugin:') ? <PluginPage onNavigate={go} route={page} />
+        : page === 'models' ? <Models />
         : page === 'skills' ? <Skills />
           : page === 'tools' ? <Tools />
-            : page === 'plugins' ? <Plugins />
+            : page === 'powershell' ? <PowerShell />
+              : page === 'plugins' ? <Plugins />
               : page === 'mcp' ? <Mcp />
                 : page === 'tasks' ? <Tasks />
                   : page === 'settings' ? <Settings />
@@ -424,6 +514,10 @@ export default function App() {
       description="这段对话及其历史记录将从工作区移除。"
     /> : null}
     <Notices />
+    <RunDock />
+    <WorkspacePanel />
+    <GitPanel />
+    <TerminalPanel />
     <PendingInteractions />
     <WorkspaceSwitcher />
     <TaskDetailModal />

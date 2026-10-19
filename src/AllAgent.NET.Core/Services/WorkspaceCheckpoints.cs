@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using AllAgent.NET.Core.Models;
+using AllAgent.NET.Core.Runtime;
 using AllAgent.NET.Core.Tools;
 
 namespace AllAgent.NET.Core.Services;
@@ -26,13 +27,14 @@ public sealed class WorkspaceCheckpoint
     public List<Message> AfterMessages { get; set; } = [];
 }
 
-/// <summary>Host-side, persisted snapshots of file-tool writes. Never snapshots arbitrary Shell or MCP effects.</summary>
+/// <summary>Host-side, persisted snapshots of file-tool writes. Never snapshots arbitrary Shell or MCP effects.
+/// One active turn per conversation: independent sessions may run concurrently in the same workspace.</summary>
 public sealed partial class WorkspaceCheckpoints
 {
     private readonly WorkspacePolicy _workspace;
     private readonly WorkspacePolicy _storage;
     private readonly object _gate = new();
-    private WorkspaceCheckpoint? _active;
+    private readonly Dictionary<Guid, WorkspaceCheckpoint> _active = new();
     public string WorkspaceRoot => _workspace.Root;
     public WorkspaceCheckpoints(WorkspacePolicy workspace, string dataDirectory)
     {
@@ -45,41 +47,58 @@ public sealed partial class WorkspaceCheckpoints
     {
         lock (_gate)
         {
-            if (_active != null) throw new InvalidOperationException("A checkpoint turn is already active.");
+            if (_active.ContainsKey(sessionId)) throw new InvalidOperationException("A checkpoint turn is already active.");
             EnsureNoRevertJournal();
             var checkpoint = new WorkspaceCheckpoint { SessionId = sessionId, Label = ToolResult.Clip(label, 160), BeforeMessages = CloneMessages(messages ?? []) };
-            Save(checkpoint); _active = checkpoint; return checkpoint;
+            Save(checkpoint); _active[sessionId] = checkpoint; return checkpoint;
         }
     }
-    public void End(IEnumerable<Message>? messages = null)
+    public void End(Guid sessionId, IEnumerable<Message>? messages = null)
     {
         lock (_gate)
         {
-            if (_active == null) return;
-            var checkpoint = _active; _active = null;
+            if (!_active.Remove(sessionId, out var checkpoint)) return;
             checkpoint.AfterMessages = CloneMessages(messages ?? []); Save(checkpoint);
         }
     }
-    public void MarkExternalAction() { lock (_gate) { if (_active is { ExternalActions: false }) { _active.ExternalActions = true; Save(_active); } } }
+    /// <summary>Turns whose tool runs are currently in flight: the caller's own turn when known, every active turn otherwise.</summary>
+    private IEnumerable<WorkspaceCheckpoint> Targets()
+    {
+        if (AgentExecutionScope.ConversationId is { } session)
+            return _active.TryGetValue(session, out var checkpoint) ? [checkpoint] : [];
+        return _active.Values.ToArray();
+    }
+    public void MarkExternalAction()
+    {
+        lock (_gate)
+        {
+            foreach (var checkpoint in Targets())
+                if (!checkpoint.ExternalActions) { checkpoint.ExternalActions = true; Save(checkpoint); }
+        }
+    }
     public void BeforeWrite(string path)
     {
         lock (_gate)
         {
-            if (_active == null) return;
-            var relative = Path.GetRelativePath(_workspace.Root, _workspace.Resolve(path));
-            if (_active.Files.Any(f => string.Equals(f.Path, relative, StringComparison.OrdinalIgnoreCase))) return;
-            var before = Read(relative);
-            _active.Files.Add(new FileCheckpoint { Path = relative, Before = before }); Save(_active);
+            foreach (var checkpoint in Targets())
+            {
+                var relative = Path.GetRelativePath(_workspace.Root, _workspace.Resolve(path));
+                if (checkpoint.Files.Any(f => string.Equals(f.Path, relative, StringComparison.OrdinalIgnoreCase))) continue;
+                var before = Read(relative);
+                checkpoint.Files.Add(new FileCheckpoint { Path = relative, Before = before }); Save(checkpoint);
+            }
         }
     }
     public void AfterWrite(string path)
     {
         lock (_gate)
         {
-            if (_active == null) return;
-            var relative = Path.GetRelativePath(_workspace.Root, _workspace.Resolve(path));
-            var file = _active.Files.Single(f => string.Equals(f.Path, relative, StringComparison.OrdinalIgnoreCase));
-            file.After = Read(relative); file.Completed = true; Save(_active);
+            foreach (var checkpoint in Targets())
+            {
+                var relative = Path.GetRelativePath(_workspace.Root, _workspace.Resolve(path));
+                if (checkpoint.Files.SingleOrDefault(f => string.Equals(f.Path, relative, StringComparison.OrdinalIgnoreCase)) is not { } file) continue;
+                file.After = Read(relative); file.Completed = true; Save(checkpoint);
+            }
         }
     }
     public IReadOnlyList<WorkspaceCheckpoint> List(Guid sessionId)
@@ -97,7 +116,7 @@ public sealed partial class WorkspaceCheckpoints
     {
         lock (_gate)
         {
-            if (_active != null) throw new InvalidOperationException("Cannot restore while an agent turn is active.");
+            if (_active.Count > 0) throw new InvalidOperationException("Cannot restore while an agent turn is active.");
             EnsureNoRevertJournal();
             var checkpoint = List(sessionId).Single(c => c.Id == checkpointId);
             if (checkpoint.Undone != redo) throw new InvalidOperationException(redo ? "Checkpoint was not undone." : "Checkpoint already undone.");

@@ -1,10 +1,12 @@
+using AllAgent.NET.Core.Models;
 using AllAgent.NET.Core.Services;
 
 namespace AllAgent.NET.Core.Bridge;
 
-/// <summary>A reconnectable transcript of an active browser run. Adjacent token
-/// deltas are coalesced so storage grows with output, not token count.</summary>
-internal sealed class BridgeStreamJournal(List<MessageDto> history, string input)
+/// <summary>A reconnectable transcript of an active run. Adjacent token
+/// deltas are coalesced so storage grows with output, not token count.
+/// Reused by the browser bridge and by the terminal's background session runs.</summary>
+public sealed class BridgeStreamJournal(IReadOnlyList<Message> history, string input)
 {
     private readonly object _gate = new();
     private readonly LinkedList<(long Sequence, AgentEvent Event, DateTime Timestamp)> _events = new();
@@ -12,6 +14,11 @@ internal sealed class BridgeStreamJournal(List<MessageDto> history, string input
     private long _sequence;
     public string StreamId { get; set; } = "";
     public DateTime CreatedAt { get; } = DateTime.UtcNow;
+    /// <summary>The transcript as it looked when the run started; replaying the events on top reproduces the live state.</summary>
+    public IReadOnlyList<Message> History => history;
+    public string Input => input;
+    /// <summary>Number of appended events, so a viewer can tell whether a frame is stale.</summary>
+    public long Version { get { lock (_gate) return _sequence; } }
 
     public long Append(AgentEvent evt, DateTime? timestamp = null)
     {
@@ -41,12 +48,18 @@ internal sealed class BridgeStreamJournal(List<MessageDto> history, string input
         }
     }
 
+    /// <summary>Every retained event in order — used to rebuild a view when a viewer attaches late.</summary>
+    public IReadOnlyList<(long Sequence, AgentEvent Event, DateTime Timestamp)> Events()
+    {
+        lock (_gate) return _events.ToArray();
+    }
+
     public object Snapshot(Func<AgentEvent, string> name, Func<AgentEvent, object> data)
     {
         lock (_gate)
             return new
             {
-                streamId = StreamId, history, input, createdAt = CreatedAt,
+                streamId = StreamId, history = history.Select(MessageDto.From).ToArray(), input, createdAt = CreatedAt,
                 events = _events.Select(item => new { eventName = name(item.Event), data = data(item.Event), sequence = item.Sequence, timestamp = item.Timestamp }).ToArray()
             };
     }

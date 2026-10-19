@@ -33,6 +33,11 @@ public sealed class AgentService : IAsyncDisposable
 {
     public BackgroundTasks Jobs { get; }
     public bool IsRunning(Guid conversationId) => _conversations.ContainsKey(conversationId);
+    /// <summary>Conversations with a run in flight; hosts use it to mark background sessions.</summary>
+    public IReadOnlyCollection<Guid> RunningConversations => _conversations.Keys.ToArray();
+    public bool OwnsStream(string streamId) => _streams.ContainsKey(streamId);
+    /// <summary>Raised when a conversation starts or finishes a run, so hosts can rebroadcast run state.</summary>
+    public event Action<Guid>? RunStateChanged;
     public BrowserUseState BrowserUse => _options.BrowserUse;
     /// <summary>Root the runs of this service are confined to; hosts resolve `@` references against it.</summary>
     public string WorkspaceRoot => _options.WorkspaceRoot;
@@ -81,6 +86,7 @@ public sealed class AgentService : IAsyncDisposable
     private readonly ConcurrentDictionary<Guid, ApiConfig> _lastConfig = new();
     private readonly McpToolService? _mcp;
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _streams = new();
+    private readonly ConcurrentDictionary<Guid, string> _conversationStreams = new();
     private readonly ConcurrentDictionary<string, TaskCompletionSource> _completions = new();
     private readonly ConcurrentDictionary<Guid, byte> _conversations = new();
 
@@ -96,15 +102,27 @@ public sealed class AgentService : IAsyncDisposable
         Jobs.Completed += OnJobCompleted;
     }
 
+    /// <summary>Fallback composition for hosts that supply no instruction provider: project instructions plus the skill catalog.</summary>
+    private string BaseInstructions() => ProjectInstructions.Load(_options.WorkspaceRoot) + "\n" + _options.Skills!.Instructions;
+
+    /// <summary>
+    /// The host provider owns the project instructions and the skill catalog; this wrapper only appends the
+    /// delegated-role list, so one system prompt never carries the same catalog twice. A host that supplies no
+    /// provider (embedding) receives the fallback text instead.
+    /// </summary>
+    internal static string ComposeInstructions(string? hostInstructions, string fallbackInstructions, string childAgents) =>
+        (string.IsNullOrEmpty(hostInstructions) ? fallbackInstructions : hostInstructions) + "\nAvailable child agents:\n" + childAgents;
+
     public string StartStream(Guid conversationId, string userMessage, ApiConfig config,
         Func<string, AgentEvent, Task> onEvent, CancellationToken externalCt = default, bool internalMessage = false,
-        IReadOnlyList<ImageAttachment>? images = null, string? inputText = null)
+        IReadOnlyList<ImageAttachment>? images = null, string? inputText = null, string? sessionOperation = null)
     {
         if (!_conversations.TryAdd(conversationId, 0)) throw new InvalidOperationException("This conversation already has an active run.");
+        RunStateChanged?.Invoke(conversationId);
         _lastConfig[conversationId] = config;
         var id = Guid.NewGuid().ToString("N");
         var source = CancellationTokenSource.CreateLinkedTokenSource(externalCt);
-        _streams[id] = source;
+        _streams[id] = source; _conversationStreams[conversationId] = id;
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously); _completions[id] = completion;
         _ = Task.Run(async () =>
         {
@@ -114,11 +132,15 @@ public sealed class AgentService : IAsyncDisposable
             {
                 // Host-owned jobs remain inspectable after the parent turn completes.
                 var children = Jobs;
+                // The host provider already composes project instructions and the skill catalog
+                // (see TerminalApp.Instructions); only a host without a provider falls back to them here,
+                // so the same skill list is never appended twice to one system prompt.
+                var childAgents = string.Join("\n", new AgentRoleCatalog(_store).List().Select(r => r.Name + ": " + r.Description));
                 var runtimeOptions = _options with { BackgroundTasks = Jobs,
-                    InstructionsProvider = () => (_options.InstructionsProvider?.Invoke() ?? ProjectInstructions.Load(_options.WorkspaceRoot)) + "\n" + _options.Skills!.Instructions +
-                        "\nAvailable child agents:\n" + string.Join("\n", new AgentRoleCatalog(_store).List().Select(r => r.Name + ": " + r.Description)) };
+                    InstructionsProvider = () => ComposeInstructions(_options.InstructionsProvider?.Invoke(), BaseInstructions(), childAgents) };
                 await using var runtime = await AgentRuntime.CreateAsync(runtimeOptions, source.Token);
-                if (_mcp != null) runtime.Tools.Register(new McpToolSet(_mcp));
+                // MCP resources belong to every host, not only the terminal/Web runtimes.
+                if (_mcp != null) { runtime.Tools.Register(new McpResourceTools(_mcp)); runtime.Tools.Register(new McpToolSet(_mcp)); }
                 if (!_options.IsSubAgent)
                     runtime.Tools.Register(new AgentDelegationTools(children, async (request, token) =>
                     {
@@ -149,11 +171,16 @@ public sealed class AgentService : IAsyncDisposable
                         return new SubAgentLaunch(jobId);
                     }));
                 RuntimeInitializer?.Invoke(runtime);
-                var probe = await runtime.ProbeSandboxAsync(source.Token);
-                if (!probe.Ok) throw new InvalidOperationException(probe.Error);
+                // A session operation (compaction) only asks the model to summarize existing context:
+                // it needs no tools, so a missing microVM must not block it.
+                if (sessionOperation == null)
+                {
+                    var probe = await runtime.ProbeSandboxAsync(source.Token);
+                    if (!probe.Ok) throw new InvalidOperationException(probe.Error);
+                }
                 var engine = new AgentEngine(_store, new RequestRoutingAiProvider(ResolveProvider), runtime.CodeAct, runtimeOptions);
                 await foreach (var evt in engine.RunAsync(conversationId, userMessage, config, source.Token,
-                    internalMessage: internalMessage, images: images, inputText: inputText))
+                    internalMessage: internalMessage, images: images, inputText: inputText, sessionOperation: sessionOperation))
                 {
                     if (evt is AgentDone done) terminal = done;
                     else if (evt is AgentError error) failure = error;
@@ -165,6 +192,8 @@ public sealed class AgentService : IAsyncDisposable
             finally
             {
                 _streams.TryRemove(id, out _); _conversations.TryRemove(conversationId, out _); source.Dispose();
+                if (_conversationStreams.TryGetValue(conversationId, out var current) && current == id) _conversationStreams.TryRemove(conversationId, out _);
+                RunStateChanged?.Invoke(conversationId);
                 // A terminal UI event grants permission to send the next turn.
                 // Release the run first, and acknowledge cancellation only once
                 // both cleanup and terminal notifications have completed.
@@ -195,18 +224,22 @@ public sealed class AgentService : IAsyncDisposable
             IsSubAgent = true,
             HostToolsProvider = () => role.Tools,
             ConfigurationProvider = (_, current) => settings.Apply(current),
-            FullAccess = _options.FullAccess && !role.ReadOnly,
+            Permission = role.ReadOnly && _options.CurrentPermission == PermissionMode.Full ? PermissionMode.Ask : _options.CurrentPermission,
+            // A child holds the stance it was spawned with; a parent switching to full mid-flight
+            // must never widen a delegation, least of all a read-only one.
+            PermissionProvider = null,
+            SimpleModeProvider = null,
             InvocationPolicy = (tool, arguments) => rolePolicy.Validate(tool, arguments) ?? _options.InvocationPolicy?.Invoke(tool, arguments),
             InvocationAuthorization = async (tool, arguments, token) => ( _options.InvocationAuthorization == null ? null : await _options.InvocationAuthorization(tool, arguments, token)) ?? await rolePolicy.AuthorizeAsync(tool, arguments, token),
             Checkpoints = null,
             InstallationApprover = null,
             QuestionHandler = null,
             Approver = (request, _) => ValueTask.FromResult(request.Preapproved),
-            InstructionsProvider = () => (settings.IncludeProjectInstructions ? (_options.InstructionsProvider?.Invoke() ?? ProjectInstructions.Load(_options.WorkspaceRoot)) : "") +
+            InstructionsProvider = () => (settings.IncludeProjectInstructions ? (_options.InstructionsProvider?.Invoke() ?? BaseInstructions()) : "") +
                 "\nYou are a delegated agent. Stay within your assigned task, report evidence and limitations, and do not spawn agents or ask the user. Return missing information and permission blockers to the parent in your final response. Do not bypass host permissions.\n" + role.Instructions
         };
         await using var runtime = await AgentRuntime.CreateAsync(options, linked.Token);
-        if (_mcp != null) runtime.Tools.Register(new McpToolSet(_mcp));
+        if (_mcp != null) { runtime.Tools.Register(new McpResourceTools(_mcp)); runtime.Tools.Register(new McpToolSet(_mcp)); }
         RuntimeInitializer?.Invoke(runtime);
         var childProvider = new SubAgentAiProvider(new RequestRoutingAiProvider(ResolveProvider), settings,
             current => SubAgentModelSelection.Resolve(current, _store.ApiConfigs, settings.FallbackModel, settings.FallbackProvider));
@@ -229,6 +262,14 @@ public sealed class AgentService : IAsyncDisposable
         _completions.TryGetValue(streamId, out var completion);
         CancelStream(streamId);
         if (completion != null) await completion.Task.WaitAsync(ct);
+    }
+    /// <summary>Stops the run of a conversation addressed by id — the browser needs this for
+    /// sessions running in a workspace other than the one it is currently looking at.</summary>
+    public async Task<bool> CancelConversationAsync(Guid conversationId, CancellationToken ct = default)
+    {
+        if (!_conversationStreams.TryGetValue(conversationId, out var streamId)) return false;
+        await CancelStreamAsync(streamId, ct);
+        return true;
     }
 
     /// <summary>Optional host hook: a background child finished or a wake-up turn ended; the bridge pushes tasks.updated.</summary>

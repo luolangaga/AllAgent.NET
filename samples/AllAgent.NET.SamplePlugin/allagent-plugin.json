@@ -1,5 +1,21 @@
 {
   "sdkVersion": 1,
   "assembly": "AllAgent.NET.SamplePlugin.dll",
-  "entryType": "AllAgent.NET.SamplePlugin.ExamplePlugin"
+  "entryType": "AllAgent.NET.SamplePlugin.ExamplePlugin",
+  "web": {
+    "sdkVersion": 1,
+    "entry": "web/dashboard.html",
+    "capabilities": ["notifications", "storage"],
+    "contributes": {
+      "pages": [
+        { "id": "dashboard", "title": "示例仪表盘", "icon": "gauge", "entry": "web/dashboard.html", "order": 40 }
+      ],
+      "toolCards": [
+        { "tool": "example_clock", "entry": "web/tool-card.html" }
+      ],
+      "commands": [
+        { "id": "open-dashboard", "title": "打开示例仪表盘", "page": "dashboard" }
+      ]
+    }
+  }
 }

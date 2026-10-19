@@ -13,6 +13,23 @@ public record BridgeResponse(string Id, string Type, object? Data = null, string
 public class BridgeDispatcher
 {
     private readonly ConcurrentDictionary<string, Func<JsonElement, CancellationToken, Task<object?>>> _handlers = new();
+    private readonly ConcurrentDictionary<string, string[]> _slots = new();
+
+    /// <summary>Every registered method, so a host that keeps one dispatcher per workspace can swap them.</summary>
+    public IReadOnlyDictionary<string, Func<JsonElement, CancellationToken, Task<object?>>> Handlers => _handlers;
+
+    /// <summary>
+    /// Replaces every method previously installed under <paramref name="slot"/> while leaving unrelated
+    /// registrations alone. Switching the browser to another workspace swaps the active bundle without
+    /// disturbing the host-level methods (approvals, workspace controls) registered outside any slot.
+    /// </summary>
+    public void Install(string slot, IReadOnlyDictionary<string, Func<JsonElement, CancellationToken, Task<object?>>> handlers)
+    {
+        if (_slots.TryGetValue(slot, out var previous))
+            foreach (var method in previous) _handlers.TryRemove(method, out _);
+        foreach (var (method, handler) in handlers) _handlers[method] = handler;
+        _slots[slot] = handlers.Keys.ToArray();
+    }
 
     public void Register<TParams, TResult>(string method, Func<TParams, CancellationToken, Task<TResult>> handler)
     {

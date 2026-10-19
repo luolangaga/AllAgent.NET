@@ -36,7 +36,7 @@ public sealed class TerminalProductTests
     {
         var input = new InputState(); input.Set("/");
         var hints = input.Suggestions(CommandCatalog.Builtins);
-        Assert.Equal(new[] { "/help", "/model", "/login", "/new", "/workspace", "/session", "/todo", "/tasks", "/permissions", "/sandbox", "/questions", "/cache", "/undo", "/settings" }, hints.Select(h => h.Text));
+        Assert.Equal(new[] { "/help", "/model", "/login", "/new", "/workspace", "/web-ui", "/session", "/todo", "/tasks", "/permissions", "/sandbox", "/questions", "/cache", "/undo", "/settings" }, hints.Select(h => h.Text));
         Assert.Equal("/help", hints[0].Text);
         Assert.Contains(hints, h => h.Text == "/model");
         Assert.DoesNotContain(hints, h => h.Text == "/agent" || h.Advanced);

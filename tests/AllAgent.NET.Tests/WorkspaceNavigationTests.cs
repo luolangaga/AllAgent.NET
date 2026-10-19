@@ -1,6 +1,7 @@
 using AllAgent.NET.Terminal;
 using AllAgent.NET.Core.Data;
 using AllAgent.NET.Core.Models;
+using AllAgent.NET.Core.Runtime;
 using System.Text;
 using Xunit;
 
@@ -97,11 +98,11 @@ public sealed class WorkspaceNavigationTests
     {
         using var workspace = new TestWorkspace();
         var folder = Path.Combine(workspace.Root, "folder with spaces"); Directory.CreateDirectory(folder);
-        Assert.Equal(folder, WorkspaceNavigation.Resolve("folder with spaces", workspace.Root, false));
-        Assert.Equal(workspace.Root, WorkspaceNavigation.Resolve("..", folder, false));
-        Assert.Throws<DirectoryNotFoundException>(() => WorkspaceNavigation.Resolve("missing", workspace.Root, true));
+        Assert.Equal(folder, WorkspaceNavigation.Resolve("folder with spaces", workspace.Root, PermissionMode.Ask));
+        Assert.Equal(workspace.Root, WorkspaceNavigation.Resolve("..", folder, PermissionMode.Ask));
+        Assert.Throws<DirectoryNotFoundException>(() => WorkspaceNavigation.Resolve("missing", workspace.Root, PermissionMode.Full));
         File.WriteAllText(Path.Combine(workspace.Root, "file.txt"), "file");
-        Assert.Throws<DirectoryNotFoundException>(() => WorkspaceNavigation.Resolve("file.txt", workspace.Root, true));
+        Assert.Throws<DirectoryNotFoundException>(() => WorkspaceNavigation.Resolve("file.txt", workspace.Root, PermissionMode.Full));
     }
 
     [Theory]
@@ -121,14 +122,16 @@ public sealed class WorkspaceNavigationTests
         using var workspace = new TestWorkspace();
         var raw = new[] { "chat", "--workspace", workspace.Root, "--data-dir", "relative-data", "--resume", "old", "--config", "old-provider", "--ask", "--inline", "--no-initialize" };
         var previous = TerminalArguments.Parse(raw);
-        var next = TerminalArguments.Parse(WorkspaceNavigation.Arguments(raw, previous, workspace.Root, true));
+        var next = TerminalArguments.Parse(WorkspaceNavigation.Arguments(raw, previous, workspace.Root, PermissionMode.Full));
         Assert.Equal(previous.DataDirectory, next.DataDirectory);
         Assert.Null(next.Get("resume")); Assert.Null(next.Get("config"));
         Assert.DoesNotContain("ask", next.Flags); Assert.Contains("inline", next.Flags);
         Assert.Contains("no-initialize", next.Flags); Assert.Contains("full-access", next.Flags);
         var id = Guid.NewGuid();
-        var recovery = TerminalArguments.Parse(WorkspaceNavigation.Arguments(raw, previous, workspace.Root, false, id));
+        var recovery = TerminalArguments.Parse(WorkspaceNavigation.Arguments(raw, previous, workspace.Root, PermissionMode.Ask, id));
         Assert.Equal(id.ToString(), recovery.Get("resume")); Assert.Contains("ask", recovery.Flags);
+        var restricted = TerminalArguments.Parse(WorkspaceNavigation.Arguments(raw, previous, workspace.Root, PermissionMode.Restricted));
+        Assert.Contains("restricted", restricted.Flags); Assert.DoesNotContain("full-access", restricted.Flags); Assert.DoesNotContain("ask", restricted.Flags);
     }
 
     [Fact]
@@ -136,7 +139,7 @@ public sealed class WorkspaceNavigationTests
     {
         using var workspace = new TestWorkspace();
         var raw = new[] { "chat", "--", "--workspace-is-literal" };
-        var next = TerminalArguments.Parse(WorkspaceNavigation.Arguments(raw, TerminalArguments.Parse(raw), workspace.Root, false));
+        var next = TerminalArguments.Parse(WorkspaceNavigation.Arguments(raw, TerminalArguments.Parse(raw), workspace.Root, PermissionMode.Ask));
         Assert.Equal(workspace.Root, next.Workspace);
         Assert.Equal(Path.Combine(workspace.Root, ".allagent", "data"), next.DataDirectory);
         Assert.Equal(new[] { "--workspace-is-literal" }, next.Positionals);
@@ -148,7 +151,7 @@ public sealed class WorkspaceNavigationTests
     {
         using var workspace = new TestWorkspace();
         var raw = new[] { "chat", "--model", "--ask", "--name", "--workspace" };
-        var next = TerminalArguments.Parse(WorkspaceNavigation.Arguments(raw, TerminalArguments.Parse(raw), workspace.Root, true));
+        var next = TerminalArguments.Parse(WorkspaceNavigation.Arguments(raw, TerminalArguments.Parse(raw), workspace.Root, PermissionMode.Full));
         Assert.Equal("--ask", next.Get("model"));
         Assert.Equal("--workspace", next.Get("name"));
         Assert.DoesNotContain("ask", next.Flags);

@@ -45,22 +45,31 @@ internal static class SessionOperations
         if (selector != null) return store.Conversations.SingleOrDefault(c => (workspace == null || InWorkspace(c, workspace)) && c.Id.ToString().StartsWith(selector, StringComparison.OrdinalIgnoreCase)) ?? throw new ArgumentException("当前工作区内会话 ID 未唯一匹配。");
         var c = new Conversation { WorkspaceRoot = workspace == null ? null : Path.GetFullPath(workspace) }; store.AddConversation(c); return c;
     }
-    public static void List(DataStore store, TerminalUi ui, string? search = null)
+    /// <summary>Marks a session that is still working in the background, so the list can say so.</summary>
+    public static string RunLabel(SessionRuns? runs, Guid id) => runs?.Find(id) switch
+    {
+        null => "",
+        { State: SessionRunState.AwaitingApproval } => " · 需要授权",
+        { State: SessionRunState.AwaitingAnswer } => " · 需要回答",
+        { State: SessionRunState.Cancelling } => " · 正在停止",
+        _ => " · 运行中",
+    };
+    public static void List(DataStore store, TerminalUi ui, string? search = null, SessionRuns? runs = null)
     {
         var sessions = MainSessions(store, ui.Workspace).Where(c => string.IsNullOrEmpty(search) || c.Title.Contains(search, StringComparison.OrdinalIgnoreCase) || c.Id.ToString().StartsWith(search, StringComparison.OrdinalIgnoreCase)).Take(100).ToArray();
-        ManagementUi.Output(ui, sessions.Select(c => new { c.Id, c.Title, c.UpdatedAt, c.ModelId, messageCount = c.Messages.Count }), () =>
+        ManagementUi.Output(ui, sessions.Select(c => new { c.Id, c.Title, c.UpdatedAt, c.ModelId, messageCount = c.Messages.Count, running = runs?.IsRunning(c.Id) }), () =>
         {
             var table = new Table().AddColumn("ID").AddColumn("标题").AddColumn("模型 / 消息").AddColumn("最后更新");
-            foreach (var c in sessions) table.AddRow(c.Id.ToString()[..8], Markup.Escape(c.Title), Markup.Escape(c.ModelId) + " · " + c.Messages.Count, c.UpdatedAt.ToLocalTime().ToString("MM-dd HH:mm"));
+            foreach (var c in sessions) table.AddRow(c.Id.ToString()[..8], Markup.Escape(SingleLineTitle(c.Title) + RunLabel(runs, c.Id)), Markup.Escape(c.ModelId) + " · " + c.Messages.Count, c.UpdatedAt.ToLocalTime().ToString("MM-dd HH:mm"));
             TerminalOutput.Write(table);
         });
     }
-    public static Conversation Pick(DataStore store, TerminalUi ui)
+    public static Conversation Pick(DataStore store, TerminalUi ui, SessionRuns? runs = null)
     {
         ManagementUi.Interactive(ui);
         var sessions = MainSessions(store, ui.Workspace);
         if (sessions.Count == 0) throw new ArgumentException("暂无主会话。");
-        return ManagementUi.Choose("恢复会话", sessions, c => c.Id.ToString()[..8] + " · " + c.Title + " · " + c.UpdatedAt.ToLocalTime().ToString("MM-dd HH:mm"));
+        return ManagementUi.Choose("恢复会话", sessions, c => c.Id.ToString()[..8] + " · " + c.Title + RunLabel(runs, c.Id) + " · " + c.UpdatedAt.ToLocalTime().ToString("MM-dd HH:mm"));
     }
     public static Conversation Branch(DataStore store, Conversation original, string? name, Guid? beforeMessage = null)
     {

@@ -147,6 +147,97 @@ public sealed class WebPromptInputTests
         Assert.DoesNotContain("File references", user.Content);
     }
 
+    [Fact]
+    public async Task BrowserCompactionSummarisesContextWithoutPersistingAUserTurn()
+    {
+        using var workspace = new TestWorkspace();
+        using var store = new DataStore(Path.Combine(workspace.Root, "data"));
+        var conversation = new Conversation { Title = "compact" };
+        store.AddConversation(conversation);
+        store.AddMessage(conversation.Id, new Message { ConversationId = conversation.Id, Role = "user", Content = "把 Web 工作台升级为商业级产品" });
+        store.AddMessage(conversation.Id, new Message { ConversationId = conversation.Id, Role = "assistant", Content = "已完成主体重构，待回归。" });
+        var config = new ApiConfig { ProviderId = "web-fixture", DefaultModel = "fixture" };
+        store.AddApiConfig(config);
+        var provider = new AnswerProvider();
+        var factory = new AiProviderFactory([provider]);
+        await using var service = new AgentService(store, factory, workspace.Options with { CodeTimeout = TimeSpan.FromSeconds(60) });
+        await using var mcp = new McpToolService(store, new SkillExecutor());
+        var dispatcher = new BridgeDispatcher();
+        new BridgeHandlerRegistrar(dispatcher, store, service, factory, new BridgeEventPusher(), mcp).RegisterAll();
+
+        using var response = JsonDocument.Parse(await dispatcher.InvokeAsync(JsonSerializer.Serialize(new
+        {
+            id = "compact",
+            method = "chat.compact",
+            @params = new { conversationId = conversation.Id, apiConfigId = config.Id, focus = "保留迁移计划" },
+        }, JsonOptions.Default)));
+        Assert.Equal(JsonValueKind.Null, response.RootElement.GetProperty("error").ValueKind);
+        var streamId = response.RootElement.GetProperty("data").GetString();
+        Assert.NotNull(streamId);
+
+        // Compaction is an internal turn: it moves the summary boundary and never persists
+        // the focus text as a user bubble. The sandbox probe is skipped, so no microVM is needed.
+        var summary = await WaitForSummary(store, conversation.Id);
+        await WaitForIdle(service, conversation.Id);
+        Assert.False(string.IsNullOrWhiteSpace(summary));
+        Assert.NotNull(store.GetConversation(conversation.Id)!.ContextSummaryThroughId);
+        Assert.DoesNotContain(store.GetMessages(conversation.Id), message => message.Role == "user" && message.Content.Contains("保留迁移计划"));
+        Assert.Equal(2, store.GetMessages(conversation.Id).Count(message => !message.IsInternal));
+    }
+
+    [Fact]
+    public async Task BrowserCompactionRefusesToRunAlongsideAnActiveTurn()
+    {
+        using var workspace = new TestWorkspace();
+        using var store = new DataStore(Path.Combine(workspace.Root, "data"));
+        var conversation = new Conversation { Title = "busy" };
+        store.AddConversation(conversation);
+        store.AddMessage(conversation.Id, new Message { ConversationId = conversation.Id, Role = "user", Content = "早先的目标" });
+        var config = new ApiConfig { ProviderId = "web-fixture", DefaultModel = "fixture" };
+        store.AddApiConfig(config);
+        var provider = new AnswerProvider();
+        var factory = new AiProviderFactory([provider]);
+        await using var service = new AgentService(store, factory, workspace.Options with { CodeTimeout = TimeSpan.FromSeconds(60) });
+        await using var mcp = new McpToolService(store, new SkillExecutor());
+        var dispatcher = new BridgeDispatcher();
+        new BridgeHandlerRegistrar(dispatcher, store, service, factory, new BridgeEventPusher(), mcp).RegisterAll();
+
+        var running = service.StartStream(conversation.Id, "继续", config, (_, _) => Task.CompletedTask);
+        try
+        {
+            using var response = JsonDocument.Parse(await dispatcher.InvokeAsync(JsonSerializer.Serialize(new
+            {
+                id = "compact",
+                method = "chat.compact",
+                @params = new { conversationId = conversation.Id, apiConfigId = config.Id },
+            }, JsonOptions.Default)));
+            Assert.Equal(JsonValueKind.String, response.RootElement.GetProperty("error").ValueKind);
+            Assert.Contains("active run", response.RootElement.GetProperty("error").GetString());
+        }
+        finally { await service.CancelStreamAsync(running); }
+    }
+
+    private static async Task<string?> WaitForSummary(DataStore store, Guid conversationId)
+    {
+        for (var attempt = 0; attempt < 600; attempt++)
+        {
+            var summary = store.GetConversation(conversationId)?.ContextSummary;
+            if (!string.IsNullOrWhiteSpace(summary)) return summary;
+            await Task.Delay(25);
+        }
+        throw new TimeoutException("Compaction never produced a context summary.");
+    }
+
+    private static async Task WaitForIdle(AgentService service, Guid conversationId)
+    {
+        for (var attempt = 0; attempt < 600; attempt++)
+        {
+            if (!service.IsRunning(conversationId)) return;
+            await Task.Delay(25);
+        }
+        throw new TimeoutException("The compaction run never finished.");
+    }
+
     private static string TempTree()
     {
         var root = Path.Combine(Path.GetTempPath(), "allagent-files-" + Guid.NewGuid().ToString("N"));

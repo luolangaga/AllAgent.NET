@@ -8,7 +8,7 @@ AllAgent.NET 的普通和 full-access 模式都通过 `HyperlightProcessSandbox`
 
 差异包括：自定义 AST 限制、自定义 IPC 分片、`ok/data/error` 返回包装及逐次宿主工具审批。微软 .NET 设计描述的审批方式是基于工具目录为整个 `execute_code` 决定审批，AllAgent.NET 的 ask 模式在宿主调用时分别审批。因此不能宣称完整实现了微软公共 API 或全部设计要求。
 
-full-access 默认开启，只改变宿主工具的审批和路径权限，不能取消 microVM；缺少 PowerShell 或可运行的 Python guest/worker 必须报错。宿主 Python 供共享 pip 库使用，检查可执行性和 3.10–3.14 版本范围；缺少或版本不符时提示通过 winget 安装 Python 3.13。Python 与 PowerShell 7.6 安装成功后要求重启软件。`--ask` 恢复审批，plan 保留只读约束。
+full-access 只改变宿主工具的审批和路径权限，不能取消 microVM；缺少 PowerShell 或可运行的 Python guest/worker 必须报错。宿主 Python 供共享 pip 库使用，检查可执行性和 3.10–3.14 版本范围；缺少或版本不符时提示通过 winget 安装 Python 3.13。Python 与 PowerShell 7.6 安装成功后要求重启软件。默认限制模式（工作区内免审、工作区外授权），`--ask` 逐次授权，plan 保留只读约束。
 
 ## 提示词参考和本次修改
 

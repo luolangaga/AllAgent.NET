@@ -8,7 +8,7 @@ Projects in `AllAgent.NET.slnx`:
 |---|---|---|
 | `src/AllAgent.NET.Core` | .NET 10 class lib | Models, DataStore, AI providers, bridge, skills |
 | `src/AllAgent.NET.Terminal` | .NET 10 + Spectre.Console | Main terminal Agent host |
-| `src/AllAgent.NET.Sandbox` | .NET 10 + Microsoft.Agents.AI.Hyperlight | Isolated microVM worker; ships in host's `sandbox/` folder |
+| `src/AllAgent.NET.Sandbox` | .NET 10 + Microsoft.Agents.AI.Hyperlight | Isolated microVM worker; ships next to the host executable |
 | `src/AllAgent.NET.ToolGenerator` | Roslyn incremental generator | AgentTool JSON Schema and typed dispatch |
 | `tests/AllAgent.NET.Tests` | xUnit | Tool security, agent lifecycle and actual Hyperlight tests |
 | `src/AllAgent.NET.Desktop` | — | removed: the WPF GUI mode replaced it |
@@ -54,7 +54,7 @@ cd src/AllAgent.NET.Web
 npx tsc --noEmit
 ```
 
-**Important**: `AllAgent.NET.Terminal` has a `BeforeBuild` target that invokes `npm run build` in the Web project and copies `dist/` into `web/` next to the host. Pass `-p:SkipWebBuild=true` to suppress the npm step during dev iteration. The WPF shell ships in `gui/` (targets `CopyGuiShellFiles` / `IncludeGuiShellPublishFiles`); the browser worker in `browser/`.
+**Important**: `AllAgent.NET.Terminal` has a `BeforeBuild` target that invokes `npm run build` in the Web project and copies `dist/` into `web/` next to the host. Pass `-p:SkipWebBuild=true` to suppress the npm step during dev iteration. Every worker (WPF shell, browser, computer, sandbox, PowerShell) ships in the host's own directory and shares one self-contained runtime there (targets `CopyGuiShellFiles` / `IncludeGuiShellPublishFiles` and the siblings in `Directory.Build.targets`).
 
 ## Key conventions
 
@@ -65,6 +65,8 @@ npx tsc --noEmit
 - **Bridge handlers** are registered in `BridgeHandlerRegistrar.RegisterAll()` (shared surface) plus the host-specific registrations in `WebUiSession` (workspace, session controls, skills, plugins). New bridge methods must be registered in one of them.
 - **Built-in skills** (shell_exec, file_read, file_write, file_edit, list_directory) are seeded at startup if not already present; the terminal seeds the bundled SKILL.md catalog through `SkillCatalog.SeedBundled()`.
 - **Built-in plugins** ship in `builtin-plugins/<PackageId>/` next to the terminal host (build target `CopyBuiltinPlugins`); `PluginHost.InstallBuiltins` installs them into the shared plugins directory on first start and never overwrites an existing install. CommandCode is shipped this way; NuGet tool packages carry the same folder.
+- **Background main sessions**: a turn keeps running when the view moves elsewhere (`/new`, `/session`, another workspace). Workspace-scoped services live in process-level hosts (`TerminalHost`/`TerminalHosts` for the terminal, `WebUiSession` bundle cache for the browser), and runs are separated from views: `SessionRuns` pumps events into a `BridgeStreamJournal` and a view attaches/detaches. New running-time commands must be added to `TerminalUi.RunningHints` and the `RunningCommand` switch; new bridge methods that answer per workspace go through the bundle bindings (`BridgeDispatcher.Install`), while host-level ones (like `conversations.running`) are registered once in `RegisterStaticHandlers`.
+- **Plugin web extensions**: a plugin's `allagent-plugin.json` may carry a `web` block (`PluginWebManifest` in `src/AllAgent.NET.Core/Extensions/PluginWeb.cs`). `PluginHost` validates it (entries must resolve inside the install directory's `web/`, fail-soft: a bad block disables only the web part), exposes the `web.contributions` snapshot plus `plugin.<packageId>.*` bridge methods from `PluginContext.AddWebBridge`, and `PluginAssetServer` serves the payload from its own loopback origin (SDK at `/__sdk/…`, assets at `/p/<packageId>/…`). The Web shell renders plugins through `src/AllAgent.NET.Web/src/lib/pluginRuntime.ts` + `components/plugins/*` (sandboxed frames, capability-gated `host.*` API, theme/context sync) with the frame-side SDK in `src/AllAgent.NET.Web/src/plugin-sdk/` (built to `dist/sdk/` by `vite.sdk.config.ts`). Docs: `docs/plugin-web-ui.zh-CN.md`.
 - **Solution uses `.slnx`** (new .NET 9+ XML format). Standard `dotnet` CLI works, but IDEs may need updating.
 - **WebView bridge shim**: The JS bridge (`src/bridge/index.ts`) prefers an explicit `?bridge=` socket address, then the native WebView transports, then mock data for dev preview. Standalone browser dev keeps working with mock data.
 
@@ -86,4 +88,4 @@ App logs go to `%APPDATA%/AllAgent.NET/allagent.log`. The GUI shell writes `[Gui
 
 
 
-PowerShell SDK 7.6.7 is embedded in `src/AllAgent.NET.PowerShell` (.NET 10). Hosts ship its output in `powershell/`; system PowerShell is not required. `--pwsh` / `AgentOptions.PowerShellPath` override the SDK worker path, not a system pwsh executable. The Roslyn generator intentionally remains netstandard2.0.
+PowerShell SDK 7.6.7 is embedded in `src/AllAgent.NET.PowerShell` (.NET 10). Hosts ship its output next to the host executable with the SDK modules under `Modules/`; system PowerShell is not required. `--pwsh` / `AgentOptions.PowerShellPath` override the SDK worker path, not a system pwsh executable. The Roslyn generator intentionally remains netstandard2.0.

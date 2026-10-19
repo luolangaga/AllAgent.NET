@@ -116,6 +116,12 @@ internal sealed class FullScreenTerminal : IDisposable
     public Func<string, BackgroundTaskInfo?>? TaskLookup { get; set; }
     public Func<string, IReadOnlyList<BackgroundTaskInfo>>? InvocationTasks { get; set; }
     public Func<long>? TaskRevision { get; set; }
+    /// <summary>Main-session runs of this workspace: the sidebar marks them and the dock lists them.</summary>
+    public SessionRuns? Runs { get; set; }
+    public Func<int>? RunRevision { get; set; }
+    /// <summary>Runs living in the other workspaces this process has open, so they stay visible here.</summary>
+    public Func<IReadOnlyList<(string Name, int Running, int Waiting)>>? OtherWorkspaces { get; set; }
+    private int _sidebarRunRevision = -1;
     public Func<BackgroundTaskInfo, IRenderable>? TaskTranscript { get; set; }
     public Func<BackgroundTaskInfo, IRenderable>? TaskPreview { get; set; }
     public Guid SessionId { get; private set; }
@@ -141,7 +147,11 @@ internal sealed class FullScreenTerminal : IDisposable
         _native.Clear();
         _display.Start(new Text(""));
     }
-    public void Session(Guid id, string model, bool reload = false)
+    public void Session(Guid id, string model, bool reload = false) => Session(id, model, _store.GetVisibleMessages(id), reload);
+
+    /// <summary>Rebuilds the transcript from an explicit history. Re-attaching to a run uses the run's
+    /// own journal history: the persisted conversation may already contain iterations the live tail replays.</summary>
+    public void Session(Guid id, string model, IReadOnlyList<AllAgent.NET.Core.Models.Message> history, bool reload)
     {
         Model = model;
         if (SessionId == id && !reload) return;
@@ -150,7 +160,7 @@ internal sealed class FullScreenTerminal : IDisposable
         SessionId = id; _scroll = _lastRows = _lastTranscriptWidth = 0; _conversationPrompt = null; _transcriptSelectionStart = _transcriptSelectionEnd = null; _dragSelecting = _dragSelectingTranscript = false; _selectionNotice = null; _transcript.Clear(); _executions.Clear(); _traceCells.Clear(); CloseInspector();
         _messageAnchors.Clear(); _jumpTarget = null;
         var blocks = new Dictionary<string, CodeExecutionBlock>();
-        foreach (var message in _store.GetVisibleMessages(id))
+        foreach (var message in history)
         {
             if (!message.IsInternal && message.Role is "user" or "assistant" && (!string.IsNullOrEmpty(message.Content) || message.Images.Count > 0))
             {
@@ -507,8 +517,9 @@ internal sealed class FullScreenTerminal : IDisposable
     private IRenderable Sidebar()
     {
         var now = Environment.TickCount64;
-        if (_cachedSidebar != null && now - _sidebarTime < 1000) return _cachedSidebar;
-        _sidebarTime = now;
+        var runRevision = RunRevision?.Invoke() ?? 0;
+        if (_cachedSidebar != null && now - _sidebarTime < 1000 && runRevision == _sidebarRunRevision) return _cachedSidebar;
+        _sidebarTime = now; _sidebarRunRevision = runRevision;
         var sessions = SessionOperations.MainSessions(_store, _ui.Workspace).Take(5).ToArray();
         var c = _store.GetConversation(SessionId);
         var messages = _store.GetMessages(SessionId); var characters = messages.Sum(m => m.Content.Length + (m.ToolCallsJson?.Length ?? 0));
@@ -522,7 +533,8 @@ internal sealed class FullScreenTerminal : IDisposable
         for (var index = 0; index < sessions.Length; index++)
         {
             var session = sessions[index];
-            rows.Add(new SingleLineText((session.Id == SessionId ? "› " : "  ") + (index + 1) + ". " + SessionOperations.SingleLineTitle(session.Title), new Style(session.Id == SessionId ? Accent : Color.Grey)));
+            var marker = SessionOperations.RunLabel(Runs, session.Id);
+            rows.Add(new SingleLineText((session.Id == SessionId ? "› " : "  ") + (index + 1) + ". " + SessionOperations.SingleLineTitle(session.Title) + marker, new Style(session.Id == SessionId ? Accent : marker.Length > 0 ? Color.Yellow : Color.Grey)));
         }
         rows.Add(new Rule().RuleStyle("grey")); rows.Add(new Markup("[bold]扩展[/]"));
         if (DateTime.UtcNow - _skillsChecked > TimeSpan.FromSeconds(1)) { _enabledSkills = _skills.CachedList.Count(s => s.Enabled); _skillsChecked = DateTime.UtcNow; }
@@ -532,6 +544,25 @@ internal sealed class FullScreenTerminal : IDisposable
         foreach (var server in _store.McpServerConfigs.Take(4)) rows.Add(new Text(($"{(_mcp.IsConnected(server.Id) ? "●" : "○")} {server.Name}"), new Style(_mcp.IsConnected(server.Id) ? Color.Green : Color.Grey)).Crop());
         rows.Add(new Rule().RuleStyle("grey")); rows.Add(new Markup("[bold]操作[/]"));
         rows.Add(new Text("F1  打开操作菜单\nF2  切换模型 / 提供商\nF3  恢复会话\nF6  思考强度\nShift+Tab 规划模式\nCtrl+B 隐藏侧栏\nCtrl+P 搜索所有命令\n/exit 退出", new Style(Color.Grey)));
+        // Bottom-right: the sessions that are still working while this one is on screen.
+        rows.Add(new Rule().RuleStyle("grey")); rows.Add(new Markup("[bold]后台会话[/]"));
+        var elsewhere = (OtherWorkspaces?.Invoke() ?? []).Where(item => item.Running > 0).ToArray();
+        var background = (Runs?.Active ?? []).Where(run => run.ConversationId != SessionId).ToArray();
+        if (background.Length == 0 && elsewhere.Length == 0) rows.Add(new Text("没有其他会话在运行\n/new 开新会话 · 切走不会停止任务", new Style(Color.Grey)));
+        foreach (var workspace in elsewhere)
+            rows.Add(new SingleLineText("◇ " + workspace.Name + " · " + workspace.Running + " 个会话运行中" + (workspace.Waiting > 0 ? " · 待处理 " + workspace.Waiting : "") + "  /workspace 路径", new Style(Color.Cyan1)));
+        foreach (var run in background.Take(6))
+        {
+            var status = run.State switch
+            {
+                SessionRunState.AwaitingApproval => "需要授权 · 切回处理",
+                SessionRunState.AwaitingAnswer => "需要回答 · 切回处理",
+                SessionRunState.Cancelling => "正在停止",
+                _ => "运行中",
+            };
+            rows.Add(new SingleLineText("● " + SessionOperations.SingleLineTitle(run.Title) + " · " + status, new Style(run.Waiting ? Color.Yellow : Accent)));
+        }
+        if (background.Length > 6) rows.Add(new Text("… 还有 " + (background.Length - 6) + " 个", new Style(Color.Grey)));
         return _cachedSidebar = new Rows(rows);
     }
     internal static IRenderable Input(InputState state, bool secret = false)
@@ -558,6 +589,7 @@ internal sealed class FullScreenTerminal : IDisposable
             key.Add(_detailStart); key.Add(_detailEnd);
             key.Add(_transcriptSelectionStart); key.Add(_transcriptSelectionEnd); key.Add(_inspector); key.Add(_inspectorScroll); key.Add(_inspectorSelection);
             key.Add(_dialog); key.Add(_conversationPrompt);
+            key.Add(TaskRevision?.Invoke() ?? 0); key.Add(RunRevision?.Invoke() ?? 0);
             // The clock only matters while an activity line or detail view is animating.
             if (_activity != null || _inspector != null) key.Add(now / 1000);
             foreach (var hint in _hints) key.Add(hint);

@@ -47,7 +47,7 @@ public sealed class PythonPackageEnvironmentTests
         Assert.Contains("Demo usage documentation", environment.ReadDocument("demo"));
         Assert.False(Directory.Exists(Path.Combine(root, "python", "docs", "requests")));
         Assert.Equal("csv", environment.Aliases()["csv"]); Assert.False(environment.Aliases().ContainsKey("call_tool"));
-        var options = temporary.Options with { FullAccess = true, PythonPath = environment.PythonPath, PythonLibraries = environment };
+        var options = temporary.Options with { Permission = PermissionMode.Full, PythonPath = environment.PythonPath, PythonLibraries = environment };
         await using var runtime = await AgentRuntime.CreateAsync(options);
         Assert.DoesNotContain(File.ReadAllText(environment.CatalogPath), runtime.CodeAct.Instructions);
         Assert.Contains("Do not install or import third-party Python packages", runtime.CodeAct.Instructions);

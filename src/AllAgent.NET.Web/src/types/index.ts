@@ -31,7 +31,17 @@ export interface ReasoningPart {
   startedAt?: number
   completedAt?: number
 }
-export type MessagePart = { type: 'text'; text: string } | { type: 'tool'; id: string } | ReasoningPart
+export interface NoticePart {
+  type: 'notice'
+  id: string
+  text: string
+  /** `retry` covers transient connection failures; `info` covers run bookkeeping. */
+  kind: 'info' | 'retry'
+  status: 'pending' | 'settled' | 'failed'
+  /** Consecutive retries folded into this single timeline line. */
+  attempts: number
+}
+export type MessagePart = { type: 'text'; text: string } | { type: 'tool'; id: string } | ReasoningPart | NoticePart
 
 export interface Message {
   id: string
@@ -49,7 +59,6 @@ export interface Message {
   /** Fatal run error reported by the backend; rendered as an inline alert. */
   error?: string
   finishReason?: string
-  notice?: string
   toolCalls?: ToolCall[]
   /** Ordered live output: text stays at the point where it was emitted. */
   parts?: MessagePart[]
@@ -123,6 +132,7 @@ export interface ApiConfig {
   authenticationProviderId?: string | null
   effectiveContextTokens?: number
   effectiveProtocol?: string
+  effectiveMaxTokens?: number
 }
 
 export interface AppSettings {
@@ -135,6 +145,8 @@ export interface AppSettings {
   defaultModel: string
   streamingEnabled: boolean
   defaultProviderId: string
+  /** API config for AI commit messages; empty follows the model selected in the composer. */
+  gitCommitConfigId: string
 }
 
 export interface McpServerConfig {
@@ -194,6 +206,29 @@ export interface ContextUsage {
   estimated: boolean
 }
 
+/** One contribution to the footer line under the composer (account quota, plugin text, …). */
+export interface ModelFooterItem {
+  label: string
+  value: string
+}
+
+export interface ModelFooterSnapshot {
+  items: ModelFooterItem[]
+  /** The host is still fetching from a provider; poll again shortly instead of waiting a minute. */
+  refreshing: boolean
+}
+
+/** Cache and context counters the host keeps per conversation (terminal sidebar shows the same). */
+export interface ConversationUsage {
+  contextUsedTokens: number | null
+  contextEstimated: boolean
+  cacheHitRate: number | null
+  cacheInputTokens: number
+  cachedInputTokens: number
+  cacheWriteInputTokens: number
+  cacheRequests: number
+}
+
 export interface ApprovalRequest {
   requestId: string
   name: string
@@ -237,10 +272,21 @@ export interface WorkspaceEntry {
   dataDirectory: string
   sessionCount: number
   isCurrent: boolean
+  runningCount?: number
+}
+
+/** A conversation with a run in flight, in any workspace the host has open. */
+export interface RunningConversation {
+  conversationId: string
+  title: string
+  workspace: string
+  workspaceName: string
+  dataDirectory: string
+  state: 'running' | 'awaiting-approval' | 'awaiting-answer' | string
 }
 
 export interface SessionControlState {
-  permissionMode: 'ask' | 'full' | 'plan' | string
+  permissionMode: 'restricted' | 'ask' | 'full' | 'plan' | 'simple' | string
   permissionLabel: string
   sandboxMode: 'auto' | 'hyperlight' | 'monty' | string
   sandboxEffective: string
@@ -267,6 +313,17 @@ export interface PluginStatusInfo {
   error?: string | null
   tools?: string[] | null
   commands?: string[] | null
+  /** Web extension summary when the package ships a `web` block. */
+  web?: PluginWebStatusInfo | null
+}
+
+export interface PluginWebStatusInfo {
+  webEnabled: boolean
+  pages: number
+  panels: number
+  toolCards: number
+  capabilities: string[]
+  error?: string | null
 }
 
 export interface PluginPackageInfo {
@@ -304,6 +361,38 @@ export interface InstalledPluginInfo {
   version: string
   directory: string
   enabled: boolean
+}
+
+// PowerShell 能力商店: the shared module directory the host import-validated with its bundled SDK.
+export interface PowerShellModuleInfo {
+  name: string
+  version: string
+  commandCount: number
+  /** Import failure reported by the worker; a module with an error is not a capability. */
+  error?: string | null
+}
+
+export interface PowerShellStoreStatus {
+  workerAvailable: boolean
+  workerPath: string
+  root: string
+  modules: PowerShellModuleInfo[]
+}
+
+/** One PowerShell Gallery match; installing uses the exact name and version. */
+export interface PowerShellPackageInfo {
+  name: string
+  version: string
+  author: string
+  description: string
+}
+
+export interface PowerShellCommandPage {
+  name: string
+  version: string
+  total: number
+  commands: string[]
+  error?: string | null
 }
 
 // Account login state from the terminal /login list (OAuth providers, paste-in keys, API presets).
@@ -354,4 +443,292 @@ export interface CommandInfo {
 export interface SkillInvokeResult {
   text: string
   images: ImageAttachment[]
+}
+
+// ── Plugin web extensions ─────────────────────────────────────────────────────
+// Declarative contributions plus the sandboxed frame payload the host serves from its own
+// loopback origin. Entries are paths relative to the plugin install directory (inside web/).
+
+export interface PluginWebPage {
+  id: string
+  title: string
+  entry: string
+  icon?: string | null
+  order?: number
+}
+
+export interface PluginWebPanel {
+  id: string
+  title: string
+  entry: string
+  order?: number
+}
+
+export interface PluginWebToolCard {
+  tool: string
+  entry: string
+}
+
+export interface PluginWebCommand {
+  id: string
+  title: string
+  page?: string | null
+}
+
+export interface PluginWebSettingField {
+  key: string
+  label: string
+  type?: string
+  options?: string[] | null
+  default?: string | null
+}
+
+export interface PluginWebSettingsSection {
+  id: string
+  title: string
+  fields?: PluginWebSettingField[] | null
+}
+
+export interface PluginWebComposerAction {
+  id: string
+  title: string
+  page?: string | null
+  icon?: string | null
+}
+
+export interface PluginWebStatusItem {
+  id: string
+  label: string
+}
+
+export interface PluginWebContributions {
+  pages?: PluginWebPage[] | null
+  panels?: PluginWebPanel[] | null
+  toolCards?: PluginWebToolCard[] | null
+  commands?: PluginWebCommand[] | null
+  settings?: PluginWebSettingsSection[] | null
+  composerActions?: PluginWebComposerAction[] | null
+  statusBar?: PluginWebStatusItem[] | null
+}
+
+export interface PluginWebInfo {
+  packageId: string
+  pluginId: string
+  name: string
+  version: string
+  enabled: boolean
+  webEnabled: boolean
+  active: boolean
+  capabilities: string[]
+  contributes: PluginWebContributions | null
+  devUrl?: string | null
+  error?: string | null
+}
+
+export interface WebContributionsSnapshot {
+  sdkVersion: number
+  assetBaseUrl?: string | null
+  plugins: PluginWebInfo[]
+}
+
+// ── Workspace browser (read-only file bubble) ─────────────────────────────────
+// workspace.tree lists one directory level; workspace.readFile classifies by content.
+
+export interface WorkspaceTreeEntry {
+  name: string
+  /** Workspace-relative path with forward slashes. */
+  path: string
+  directory: boolean
+  size: number
+  modified: string
+  /** Symlink/junction entry; never expanded by the tree. */
+  link: boolean
+  hidden: boolean
+}
+
+export interface WorkspaceTreeResult {
+  path: string
+  entries: WorkspaceTreeEntry[]
+  truncated: boolean
+}
+
+export type WorkspaceFileKind = 'text' | 'image' | 'binary'
+
+export interface WorkspaceFileContent {
+  path: string
+  kind: WorkspaceFileKind
+  size: number
+  modified: string
+  text?: string | null
+  base64?: string | null
+  truncated: boolean
+}
+
+// ── Git panel ────────────────────────────────────────────────────────────────
+// Mirrors the C# `git.*` DTOs; entries carry git's two status letters (index/worktree).
+
+export interface GitFileEntry {
+  path: string
+  originalPath?: string | null
+  index: string
+  worktree: string
+}
+
+export interface GitSummary {
+  available: boolean
+  version: string
+  repo: boolean
+  root: string
+  branch?: string | null
+  detached: boolean
+  upstream?: string | null
+  ahead: number
+  behind: number
+  operation?: string | null
+  staged: number
+  unstaged: number
+  untracked: number
+  conflicted: number
+}
+
+export interface GitStatus {
+  branch?: string | null
+  detached: boolean
+  upstream?: string | null
+  ahead: number
+  behind: number
+  operation?: string | null
+  staged: GitFileEntry[]
+  unstaged: GitFileEntry[]
+  untracked: GitFileEntry[]
+  conflicted: GitFileEntry[]
+}
+
+export interface DiffLine {
+  kind: 'context' | 'added' | 'removed'
+  oldLine?: number | null
+  newLine?: number | null
+  text: string
+}
+
+export interface GitDiff {
+  path: string
+  commit?: string | null
+  staged: boolean
+  added: number
+  removed: number
+  truncated: boolean
+  binary: boolean
+  lines: DiffLine[]
+  note?: string | null
+}
+
+export interface GitCommit {
+  hash: string
+  short: string
+  author: string
+  authorEmail: string
+  date: string
+  subject: string
+  refs: string[]
+  /** Parent hashes; feeds the commit graph lanes. */
+  parents: string[]
+}
+
+export interface GitLog {
+  commits: GitCommit[]
+  more: boolean
+}
+
+export interface GitShowFile {
+  path: string
+  status: string
+  originalPath?: string | null
+}
+
+export interface GitShow {
+  commit: GitCommit
+  body: string
+  files: GitShowFile[]
+}
+
+export interface GitBranchInfo {
+  name: string
+  current: boolean
+  upstream?: string | null
+  date: string
+  subject: string
+}
+
+export interface GitRemoteBranch {
+  name: string
+  date: string
+  subject: string
+}
+
+export interface GitTagInfo {
+  name: string
+  date: string
+}
+
+export interface GitBranches {
+  current?: string | null
+  local: GitBranchInfo[]
+  remote: GitRemoteBranch[]
+  tags: GitTagInfo[]
+}
+
+export interface GitStash {
+  index: number
+  ref: string
+  message: string
+  date: string
+}
+
+export interface GitJob {
+  id: string
+  label: string
+}
+
+export interface GitRemoteInfo {
+  name: string
+  url: string
+  pushUrl: string
+}
+
+export interface GitIdentity {
+  name?: string | null
+  email?: string | null
+}
+
+export interface GitInstallResult {
+  ok: boolean
+  message: string
+}
+
+// ── Integrated terminal ──────────────────────────────────────────────────────
+// Host-side ConPTY sessions; output frames are base64 chunks with a per-session sequence.
+
+export interface TerminalShell {
+  id: string
+  label: string
+}
+
+export interface TerminalSession {
+  id: string
+  title: string
+  shellId: string
+  shellLabel: string
+  cwd: string
+  cols: number
+  rows: number
+  alive: boolean
+  exitCode?: number | null
+  sequence: number
+}
+
+export interface TerminalAttach {
+  session: TerminalSession
+  replay: string
+  sequence: number
 }

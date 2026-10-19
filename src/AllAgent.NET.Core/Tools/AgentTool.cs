@@ -41,7 +41,10 @@ public interface IAgentToolAccess
     ValueTask<ToolAccessGrant?> RequestAccessAsync(string name, JsonElement arguments, ToolApprover? approver, CancellationToken ct);
 }
 
-public sealed record ToolApprovalPolicy(bool RequiresApproval = true, string? ResolvedTarget = null);
+/// <summary>WorkspaceScoped marks an invocation whose only reachable effects are paths the host already
+/// authorized for this call: inside the workspace, or outside it through the external-directory question
+/// that already ran. Restricted mode runs those without a second prompt.</summary>
+public sealed record ToolApprovalPolicy(bool RequiresApproval = true, string? ResolvedTarget = null, bool WorkspaceScoped = false);
 public interface IAgentToolApprovalPolicy
 {
     ToolApprovalPolicy GetApprovalPolicy(string name, JsonElement arguments);
@@ -72,6 +75,7 @@ public sealed record ToolApprovalRequest(string Name, ToolRisk Risk, JsonElement
     [System.Text.Json.Serialization.JsonIgnore] public bool Preapproved { get; init; }
     [System.Text.Json.Serialization.JsonIgnore] public string? ResolvedTarget { get; init; }
     public bool ExternalPathApproved { get; init; }
+    public bool WorkspaceScoped { get; init; }
     public bool RequiresExplicitApproval { get; init; }
 }
 public delegate ValueTask<bool> ToolApprover(ToolApprovalRequest request, CancellationToken ct);

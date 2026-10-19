@@ -17,7 +17,7 @@ internal sealed class TestWorkspace : IDisposable
         if (!env.Ready) throw new InvalidOperationException("Tests require Python and the bundled PowerShell SDK worker: " + string.Join(";", env.Problems));
         Python = env.Python!; Pwsh = env.PowerShell!;
         // Lifecycle fixtures script exact model requests; memory has its own opt-in integration coverage.
-        Options = new AgentOptions { SharedDirectory = Path.Combine(Root, "author"), FullAccess = false, WorkspaceRoot = Root, PythonPath = Python, PowerShellPath = Pwsh, CodeTimeout = TimeSpan.FromSeconds(30), AuditPath = Path.Combine(Root, "audit.jsonl") };
+        Options = new AgentOptions { SharedDirectory = Path.Combine(Root, "author"), Permission = PermissionMode.Ask, WorkspaceRoot = Root, PythonPath = Python, PowerShellPath = Pwsh, CodeTimeout = TimeSpan.FromSeconds(30), AuditPath = Path.Combine(Root, "audit.jsonl") };
     }
     public SystemTools Tools => new(new WorkspacePolicy(Root), new(Python, Pwsh, []), new Dictionary<string, string> { ["probe"] = Path.Combine(AppContext.BaseDirectory, "probe", "AllAgent.NET.ProcessProbe.exe") });
     public void Dispose()

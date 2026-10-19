@@ -10,6 +10,9 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="FlaUI.UIA3" Version="5.0.0" />
+    <!-- FlaUI ships System.Management 8.0.0; the embedded PowerShell worker needs 10.0.5 and both
+         run from the same application directory, so the newer assembly is the one that ships. -->
+    <PackageReference Include="System.Management" Version="10.0.5" />
     <ProjectReference Include="../AllAgent.NET.Core/AllAgent.NET.Core.csproj" />
   </ItemGroup>
 </Project>

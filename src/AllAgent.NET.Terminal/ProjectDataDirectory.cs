@@ -50,6 +50,11 @@ internal static class ProjectDataDirectory
         var executable = Environment.ProcessPath;
         var actualProgramDirectory = executable != null && !string.Equals(Path.GetFileNameWithoutExtension(executable), "dotnet", StringComparison.OrdinalIgnoreCase)
             ? Path.GetDirectoryName(executable)! : AppContext.BaseDirectory;
-        return Path.Combine(programDirectory ?? actualProgramDirectory, "allagent-projects.json");
+        var directory = programDirectory ?? actualProgramDirectory;
+        if (WritableDirectory.CanWrite(directory)) return Path.Combine(directory, "allagent-projects.json");
+        // Program Files is read-only for standard users; keep the index with the other user data.
+        var fallback = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "AllAgent.NET");
+        Directory.CreateDirectory(fallback);
+        return Path.Combine(fallback, "allagent-projects.json");
     }
 }

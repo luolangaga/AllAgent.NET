@@ -19,7 +19,7 @@ public sealed class NativeRuntimeIntegrationTests
         using var w = new TestWorkspace(); using var store = new DataStore(Path.Combine(w.Root, "data"));
         var conversation = new Conversation(); store.AddConversation(conversation);
         var provider = new FixtureProvider("r = call_tool('file_write', path='large-native.txt', content='x' * 1100000)\nprint(r['ok'])");
-        var options = w.Options with { FullAccess = true, CodeTimeout = TimeSpan.FromMinutes(2) };
+        var options = w.Options with { Permission = PermissionMode.Full, CodeTimeout = TimeSpan.FromMinutes(2) };
         await using var runtime = await AgentRuntime.CreateAsync(options);
         var events = new List<AgentEvent>();
         await foreach (var evt in new AgentEngine(store, provider, runtime.CodeAct, options).RunAsync(conversation.Id, "Write a large file", new ApiConfig { DefaultModel = "fixture" })) events.Add(evt);
@@ -35,7 +35,7 @@ public sealed class NativeRuntimeIntegrationTests
         using var w = new TestWorkspace(); using var store = new DataStore(Path.Combine(w.Root, "data"));
         var conversation = new Conversation(); store.AddConversation(conversation);
         var provider = new FixtureProvider("r = call_tool('file_write', path='sample.txt', content='one\\ntwo\\nthree\\n')\nprint(r)\nr = call_tool('file_read', path='sample.txt', offset=2, limit=1)\nprint(r)\nr = call_tool('file_edit', path='sample.txt', edits=[{'old_string':'two', 'new_string':'changed'}])\nprint(r)");
-        var options = w.Options with { FullAccess = true };
+        var options = w.Options with { Permission = PermissionMode.Full };
         await using var runtime = await AgentRuntime.CreateAsync(options);
         var events = new List<AgentEvent>();
         await foreach (var evt in new AgentEngine(store, provider, runtime.CodeAct, options).RunAsync(conversation.Id, "Use host tools", new ApiConfig { DefaultModel = "fixture" })) events.Add(evt);
@@ -58,7 +58,7 @@ public sealed class NativeRuntimeIntegrationTests
         await File.WriteAllTextAsync(Path.Combine(w.Root, "source.log"), "needle ignored\n");
         var conversation = new Conversation(); store.AddConversation(conversation);
         var provider = new FixtureProvider("print(call_tool('file_search', pattern='needle', path='.', file_pattern='*.txt'))\nprint(call_tool('everything_search', query='*.txt', path='.'))\nprint(call_tool('run_shell', exe='dotnet', args=['--version'], timeout_seconds=30))");
-        var options = w.Options with { FullAccess = true, CodeTimeout = TimeSpan.FromMinutes(3) };
+        var options = w.Options with { Permission = PermissionMode.Full, CodeTimeout = TimeSpan.FromMinutes(3) };
         await using var runtime = await AgentRuntime.CreateAsync(options);
         var events = new List<AgentEvent>();
         await foreach (var evt in new AgentEngine(store, provider, runtime.CodeAct, options).RunAsync(conversation.Id, "Native tool checks", new ApiConfig { DefaultModel = "fixture" })) events.Add(evt);

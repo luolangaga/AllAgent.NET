@@ -44,6 +44,60 @@ public sealed class WebUiBridgeTests : IAsyncLifetime
     private sealed record EchoParams(string Value);
 
     [Fact]
+    public async Task PluginTaskStartsInTheSelectedWorkspaceAndCanBeOpenedThroughTheNormalBridge()
+    {
+        using var environment = new TestWorkspace();
+        var data = Path.Combine(_root, "data"); var shared = Path.Combine(_root, "shared");
+        var target = Path.Combine(_root, "selected-workspace"); Directory.CreateDirectory(target);
+        using var store = new DataStore(data, false, shared);
+        store.AddApiConfig(new ApiConfig { ProviderId = "host-account", DefaultModel = "account-model" });
+        await using var mcp = new McpToolService(store, new SkillExecutor());
+        await using var tasks = new BackgroundTasks(data);
+        await using var plugins = new PluginHost(shared);
+        var checkpoints = new WorkspaceCheckpoints(new WorkspacePolicy(_root), data);
+        var catalog = new SkillCatalog(store, _root, shared);
+        var host = new WebUiTerminalHost(store, mcp, tasks, checkpoints, catalog, _root, data);
+        var provider = new HostAccountProvider();
+        await using var session = WebUiSession.Start(host,
+            () => environment.Options with { WorkspaceRoot = _root, SharedDirectory = shared },
+            new AiProviderFactory(), plugins, shared, 1, _ => provider);
+        const string publicMessage = "请审查 GitHub PR #7。";
+        const string internalPrompt = "INTERNAL-WORKFLOW：核对 head SHA，然后审查变更。";
+        var task = await session.StartPluginTaskAsync(new(target, "GitHub review #7", internalPrompt, Message: publicMessage), default);
+        Assert.Equal(target, task.Workspace); Assert.NotEmpty(task.StreamId);
+        Assert.Empty(store.Conversations);
+        using var socket = new ClientWebSocket();
+        await socket.ConnectAsync(new Uri(session.Url.Replace("http://", "ws://") + "bridge"), default);
+        async Task<JsonDocument> Request(string id, string method, object? parameters = null)
+        {
+            var request = JsonSerializer.Serialize(new { id, method, @params = parameters });
+            await socket.SendAsync(Encoding.UTF8.GetBytes(request), WebSocketMessageType.Text, true, default);
+            // A live workspace also pushes stream/run/workspace events before the RPC response.
+            while (true)
+            {
+                var response = JsonDocument.Parse(await ReceiveAsync(socket));
+                if (response.RootElement.TryGetProperty("id", out var replyId) && replyId.GetString() == id) return response;
+                response.Dispose();
+            }
+        }
+        using (var current = await Request("current", "workspace.get"))
+            Assert.Equal(_root, current.RootElement.GetProperty("data").GetProperty("workspace").GetString());
+        using var switched = await Request("switch", "workspace.switch", new { path = target });
+        Assert.Equal(JsonValueKind.Null, switched.RootElement.GetProperty("error").ValueKind);
+        using var conversations = await Request("conversations", "conversations.list");
+        var conversation = Assert.Single(conversations.RootElement.GetProperty("data").EnumerateArray());
+        Assert.Equal(task.ConversationId.ToString(), conversation.GetProperty("id").GetString());
+        Assert.Equal("GitHub review #7", conversation.GetProperty("title").GetString());
+        using var stream = await Request("stream", "chat.getStreamState", new { conversationId = task.ConversationId });
+        if (stream.RootElement.GetProperty("data").ValueKind != JsonValueKind.Null)
+            Assert.Equal(publicMessage, stream.RootElement.GetProperty("data").GetProperty("input").GetString());
+        using var messages = await Request("messages", "conversations.getMessages", new { conversationId = task.ConversationId });
+        foreach (var message in messages.RootElement.GetProperty("data").EnumerateArray().Where(message => message.GetProperty("role").GetString() == "user"))
+            Assert.Equal(publicMessage, message.GetProperty("content").GetString());
+        Assert.DoesNotContain("INTERNAL-WORKFLOW", messages.RootElement.GetRawText());
+    }
+
+    [Fact]
     public async Task WebUiOwnsExplicitMcpConnectionsAndStoppingItPreservesTerminalServices()
     {
         var data = Path.Combine(_root, "data");
@@ -71,6 +125,93 @@ public sealed class WebUiBridgeTests : IAsyncLifetime
         finally { await session.DisposeAsync(); }
         Assert.True(terminalMcp.IsConnected(config.Id));
         Assert.True((await terminalMcp.ExecuteServerToolAsync(config.Id, "echo", JsonSerializer.SerializeToElement(new { proof = "still alive" }), CancellationToken.None)).Ok);
+    }
+
+    [Fact]
+    public async Task FileReferencesResolveAgainstTheWorkspaceAndMissingFilesReportTheFullPath()
+    {
+        var data = Path.Combine(_root, "data");
+        var shared = Path.Combine(_root, "shared");
+        using var store = new DataStore(data);
+        await using var mcp = new McpToolService(store, new SkillExecutor());
+        await using var tasks = new BackgroundTasks(data);
+        await using var plugins = new PluginHost(shared);
+        var checkpoints = new WorkspaceCheckpoints(new WorkspacePolicy(_root), data);
+        var catalog = new SkillCatalog(store, _root, shared);
+        var host = new WebUiTerminalHost(store, mcp, tasks, checkpoints, catalog, _root, data);
+        var session = WebUiSession.Start(host, () => new AgentOptions { WorkspaceRoot = _root, SharedDirectory = shared }, new AiProviderFactory(), plugins, shared, 1);
+        try
+        {
+            using var socket = new ClientWebSocket();
+            await socket.ConnectAsync(new Uri(session.Url.Replace("http://", "ws://") + "bridge"), CancellationToken.None);
+            // A reference the browser cannot serve is resolved against the workspace; a path that
+            // is not there is reported back instead of anything being opened.
+            using var missing = JsonDocument.Parse(await SendAsync(socket, JsonSerializer.Serialize(new { id = "open", method = "shell.openPath", @params = new { path = "pelican-bike.html" } })));
+            Assert.Contains(Path.Combine(_root, "pelican-bike.html"), missing.RootElement.GetProperty("error").GetString());
+        }
+        finally { await session.DisposeAsync(); }
+    }
+
+    [Fact]
+    public async Task BrowserReadsFooterContributionsAndTheConversationCacheRate()
+    {
+        var data = Path.Combine(_root, "data");
+        var shared = Path.Combine(_root, "shared");
+        using var store = new DataStore(data);
+        await using var terminalMcp = new McpToolService(store, new SkillExecutor());
+        await using var tasks = new BackgroundTasks(data);
+        await using var plugins = new PluginHost(shared);
+        var config = new ApiConfig { ProviderId = "codex", DisplayName = "Codex", DefaultModel = "gpt-5.1", AuthenticationProviderId = "codex" };
+        store.AddApiConfig(config);
+        var conversation = new Conversation { ModelId = "gpt-5.1" };
+        conversation.CacheInputTokens = 1000;
+        conversation.CachedInputTokens = 250;
+        conversation.CacheWriteInputTokens = 120;
+        conversation.CacheUsageRequests = 2;
+        conversation.ContextUsedTokens = 1234;
+        conversation.ContextUsageModel = "gpt-5.1";
+        conversation.ContextUsageEstimated = false;
+        store.AddConversation(conversation);
+        var checkpoints = new WorkspaceCheckpoints(new WorkspacePolicy(_root), data);
+        var catalog = new SkillCatalog(store, _root, shared);
+        var host = new WebUiTerminalHost(store, terminalMcp, tasks, checkpoints, catalog, _root, data);
+        var session = WebUiSession.Start(host, () => new AgentOptions { WorkspaceRoot = _root, SharedDirectory = shared }, new AiProviderFactory(), plugins, shared, 1);
+        try
+        {
+            using var socket = new ClientWebSocket();
+            await socket.ConnectAsync(new Uri(session.Url.Replace("http://", "ws://") + "bridge"), CancellationToken.None);
+            // Cache hit rate and the stored context count come from the conversation record.
+            using (var usage = JsonDocument.Parse(await SendAsync(socket, JsonSerializer.Serialize(new
+            {
+                id = "usage",
+                method = "conversations.usage",
+                @params = new { conversationId = conversation.Id },
+            }))))
+            {
+                var payload = usage.RootElement.GetProperty("data");
+                Assert.Equal(25d, payload.GetProperty("cacheHitRate").GetDouble(), 3);
+                Assert.Equal(2, payload.GetProperty("cacheRequests").GetInt64());
+                Assert.Equal(1234, payload.GetProperty("contextUsedTokens").GetInt32());
+                Assert.False(payload.GetProperty("contextEstimated").GetBoolean());
+            }
+            // Providers are fetched off the bridge call; the page polls while a refresh is in flight.
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            string? label = null;
+            while (label == null && !deadline.IsCancellationRequested)
+            {
+                using var footer = JsonDocument.Parse(await SendAsync(socket, JsonSerializer.Serialize(new
+                {
+                    id = "footer",
+                    method = "session.footer",
+                    @params = new { apiConfigId = config.Id, model = "gpt-5.1" },
+                })));
+                var items = footer.RootElement.GetProperty("data").GetProperty("items");
+                if (items.GetArrayLength() > 0) label = items[0].GetProperty("label").GetString();
+                else await Task.Delay(20);
+            }
+            Assert.Equal("Codex 额度", label);
+        }
+        finally { await session.DisposeAsync(); }
     }
 
     [Fact]
@@ -125,6 +266,50 @@ public sealed class WebUiBridgeTests : IAsyncLifetime
         Assert.Equal(2, messages.GetArrayLength());
         Assert.Equal("read @file", messages[0].GetProperty("content").GetString());
         Assert.True(messages[1].GetProperty("isInterrupted").GetBoolean());
+    }
+
+    [Fact]
+    public async Task BrowserManagesPowerShellComponentsInTheSharedModuleStore()
+    {
+        var data = Path.Combine(_root, "data");
+        var shared = Path.Combine(_root, "shared");
+        using var store = new DataStore(data);
+        await using var mcp = new McpToolService(store, new SkillExecutor());
+        await using var tasks = new BackgroundTasks(data);
+        await using var plugins = new PluginHost(shared);
+        var checkpoints = new WorkspaceCheckpoints(new WorkspacePolicy(_root), data);
+        var catalog = new SkillCatalog(store, _root, shared);
+        var host = new WebUiTerminalHost(store, mcp, tasks, checkpoints, catalog, _root, data);
+        var session = WebUiSession.Start(host, () => new AgentOptions { WorkspaceRoot = _root, SharedDirectory = shared }, new AiProviderFactory(), plugins, shared, 1);
+        try
+        {
+            using var socket = new ClientWebSocket();
+            await socket.ConnectAsync(new Uri(session.Url.Replace("http://", "ws://") + "bridge"), CancellationToken.None);
+
+            // A fresh shared directory has no modules, but the packaged SDK worker is reported: the
+            // page can tell "nothing installed yet" apart from "component missing".
+            using (var status = JsonDocument.Parse(await SendAsync(socket, "{\"id\":\"ps\",\"method\":\"powershell.status\"}")))
+            {
+                var payload = status.RootElement.GetProperty("data");
+                Assert.True(payload.GetProperty("workerAvailable").GetBoolean());
+                Assert.EndsWith(Path.Combine("powershell", "Modules"), payload.GetProperty("root").GetString());
+                Assert.Equal(0, payload.GetProperty("modules").GetArrayLength());
+            }
+
+            // Installing is gated like the terminal's /powershell: unsafe names and loose versions
+            // are rejected before any download starts.
+            using (var name = JsonDocument.Parse(await SendAsync(socket, JsonSerializer.Serialize(new { id = "ps-name", method = "powershell.install", @params = new { name = "../escape" } }))))
+                Assert.Contains("模块名称无效", name.RootElement.GetProperty("error").GetString());
+            using (var version = JsonDocument.Parse(await SendAsync(socket, JsonSerializer.Serialize(new { id = "ps-version", method = "powershell.install", @params = new { name = "Pester", version = "5.7.x" } }))))
+                Assert.Contains("版本格式无效", version.RootElement.GetProperty("error").GetString());
+            using (var search = JsonDocument.Parse(await SendAsync(socket, JsonSerializer.Serialize(new { id = "ps-search", method = "powershell.search", @params = new { query = "" } }))))
+                Assert.Contains("模块关键词", search.RootElement.GetProperty("error").GetString());
+
+            // Commands come from the verified catalog; an uninstalled module is an error, not an empty page.
+            using var commands = JsonDocument.Parse(await SendAsync(socket, JsonSerializer.Serialize(new { id = "ps-commands", method = "powershell.commands", @params = new { name = "Pester" } })));
+            Assert.Contains("能力清单", commands.RootElement.GetProperty("error").GetString());
+        }
+        finally { await session.DisposeAsync(); }
     }
 
     private sealed class HostAccountProvider : IAiProvider

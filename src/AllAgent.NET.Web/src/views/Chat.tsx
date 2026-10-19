@@ -7,6 +7,7 @@ import { Progress } from '@/components/ui/b-progress'
 import { Skeleton } from '@/components/ui/skeleton'
 import { MessageBubble } from '@/components/MessageBubble'
 import { PromptComposer, type PromptMeta } from '@/components/PromptComposer'
+import { SessionFooter } from '@/components/SessionFooter'
 import { TodoPanel } from '@/components/TodoPanel'
 import { invoke } from '@/bridge'
 import { useStore } from '@/lib/store'
@@ -16,6 +17,7 @@ import { useApiConfigsStore } from '@/stores/apiConfigs'
 import { useApprovalsStore } from '@/stores/approvals'
 import { useCommandsStore } from '@/stores/commands'
 import { useConversationsStore } from '@/stores/conversations'
+import { useModelSelectionStore } from '@/stores/modelSelection'
 import { useSettingsStore } from '@/stores/settings'
 import { useNoticesStore } from '@/stores/ui'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -35,16 +37,16 @@ export default function Chat({ ready, onNavigate, onPalette }: { ready: boolean;
   const notices = useStore(useNoticesStore)
   const workspace = useStore(useWorkspaceStore)
   const commands = useStore(useCommandsStore)
+  const modelSelection = useStore(useModelSelectionStore)
   const [draft, setDraft] = useState('')
   const [attachments, setAttachments] = useState<ImageAttachment[]>([])
-  const [selected, setSelected] = useState<string | null>(null)
   const [visibleCount, setVisibleCount] = useState(30)
   const [reasoning, setReasoning] = useState<ReasoningOptions | null>(null)
   const scroll = useRef<HTMLDivElement>(null)
   const follow = useRef(true)
 
   const enabledConfigs = api.configs.filter(config => config.isEnabled)
-  const config = enabledConfigs.find(item => item.id === selected)
+  const config = enabledConfigs.find(item => item.id === modelSelection.configId)
     ?? enabledConfigs.find(item => item.id === settings.defaultProviderId)
     ?? enabledConfigs[0]
   const busy = conv.sending || conv.streamingMessageId !== null
@@ -53,6 +55,18 @@ export default function Chat({ ready, onNavigate, onPalette }: { ready: boolean;
   const awaiting = approvals.approvals.length > 0 || approvals.questions.length > 0
   const messages = conv.messages.filter(message => message.role !== 'system' && message.role !== 'tool')
   const usage = conv.contextUsage
+  const stored = conv.conversationUsage
+  // The live event only arrives during a turn; a reloaded page falls back to the persisted
+  // counters with the selected configuration's capacity, like the terminal restores its meter.
+  const capacity = config?.effectiveContextTokens || config?.contextWindowTokens || 0
+  const meter = usage ?? (stored?.contextUsedTokens != null && capacity > 0
+    ? { usedTokens: stored.contextUsedTokens, capacityTokens: capacity, estimated: stored.contextEstimated }
+    : null)
+  // Cache counters accumulate on the conversation record (DataStore.RecordTokenUsage), so the
+  // hit rate survives reloads; a conversation without provider-reported cache usage shows none.
+  const cache = stored && stored.cacheRequests > 0 && stored.cacheHitRate !== null
+    ? { ...stored, hitRate: stored.cacheHitRate }
+    : null
 
   // Pin to the newest message on the next frame: the composer can still be resizing (the
   // draft just cleared), and setting scrollTop directly never scrolls ancestor containers
@@ -128,12 +142,12 @@ export default function Chat({ ready, onNavigate, onPalette }: { ready: boolean;
     if (!trimmed.includes(' ') && word.length > 1 && !commands.commands.some(item => item.text.toLowerCase() === word.toLowerCase())) {
       const matches = matchCommands(commands.commands, word)
       if (matches.length === 1) {
-        const consumed = await runCommand(matches[0].text, { go: onNavigate, openPalette: onPalette })
+        const consumed = await runCommand(matches[0].text, { go: onNavigate, openPalette: onPalette }, { apiConfigId: config?.id })
         if (consumed) setDraft('')
         return consumed
       }
     }
-    const consumed = await runCommand(trimmed, { go: onNavigate, openPalette: onPalette })
+    const consumed = await runCommand(trimmed, { go: onNavigate, openPalette: onPalette }, { apiConfigId: config?.id })
     if (consumed) setDraft('')
     return consumed
   }
@@ -222,17 +236,25 @@ export default function Chat({ ready, onNavigate, onPalette }: { ready: boolean;
           </div>}
     </div>
     <div className="composer-wrap">
-      {usage && usage.capacityTokens > 0 ? <div className="context-usage">
-        <span className="context-label">
-          上下文 {usage.estimated ? '≈' : ''}{formatTokens(usage.usedTokens)} / {formatTokens(usage.capacityTokens)}
-        </span>
-        <Progress
-          ariaLabel="上下文占用"
-          max={usage.capacityTokens}
-          size="sm"
-          tone={usage.usedTokens / usage.capacityTokens > 0.85 ? 'destructive' : 'default'}
-          value={usage.usedTokens}
-        />
+      {meter || cache ? <div className="context-usage">
+        {meter ? <>
+          <span className="context-label">
+            上下文 {meter.estimated ? '≈' : ''}{formatTokens(meter.usedTokens)} / {formatTokens(meter.capacityTokens)}
+          </span>
+          <Progress
+            ariaLabel="上下文占用"
+            max={meter.capacityTokens}
+            size="sm"
+            tone={meter.usedTokens / meter.capacityTokens > 0.85 ? 'destructive' : 'default'}
+            value={meter.usedTokens}
+          />
+        </> : null}
+        {cache ? <span
+          className="context-label cache-chip"
+          title={`缓存读取 ${formatTokens(cache.cachedInputTokens)} / 提示 ${formatTokens(cache.cacheInputTokens)} tok · 写入 ${formatTokens(cache.cacheWriteInputTokens)} tok · ${cache.cacheRequests} 次上报`}
+        >
+          缓存命中 {cache.hitRate.toFixed(1)}%{cache.cacheWriteInputTokens > 0 ? `（写入 ${formatTokens(cache.cacheWriteInputTokens)} tok）` : ''}
+        </span> : null}
       </div> : null}
       {ready && !enabledConfigs.length ? <Alert
         action={<Button onClick={() => onNavigate('models')} size="sm" variant="outline">前往配置</Button>}
@@ -255,13 +277,14 @@ export default function Chat({ ready, onNavigate, onPalette }: { ready: boolean;
         onDraftChange={setDraft}
         onNotify={notices.notify}
         onReport={notices.report}
-        onSelect={setSelected}
+        onSelect={id => modelSelection.select(id)}
         onSend={(text, meta) => void send(text, meta)}
         onSettings={() => onNavigate('settings')}
         onStop={() => void conv.cancelStream().catch(notices.report)}
         reasoning={reasoning}
-        selectedId={selected ?? config?.id ?? null}
+        selectedId={modelSelection.configId ?? config?.id ?? null}
       />
+      <SessionFooter configId={config?.id ?? null} model={conv.active?.modelId || config?.defaultModel || null} />
     </div>
   </section>
 }

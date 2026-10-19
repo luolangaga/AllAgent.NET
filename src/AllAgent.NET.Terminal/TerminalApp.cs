@@ -19,32 +19,41 @@ internal static class TerminalApp
     {
         ApiConfig? inheritedConfig = null;
         var planMode = false;
+        var simpleMode = false;
         var restartWebUi = false;
         var restartWebUiPort = 0;
         string[]? recovery = null;
-        while (true)
+        try
         {
-            try
+            while (true)
             {
-                var result = await RunWorkspaceAsync(raw, inheritedConfig, planMode, restartWebUi, restartWebUiPort);
-                if (result != 0 && recovery != null)
+                try
                 {
-                    Console.Error.WriteLine("工作区初始化失败，正在恢复原会话。");
-                    raw = recovery; recovery = null;
-                    continue;
+                    var result = await RunWorkspaceAsync(raw, inheritedConfig, planMode, simpleMode, restartWebUi, restartWebUiPort);
+                    if (result != 0 && recovery != null)
+                    {
+                        Console.Error.WriteLine("工作区初始化失败，正在恢复原会话。");
+                        raw = recovery; recovery = null;
+                        continue;
+                    }
+                    return result;
                 }
-                return result;
+                catch (WorkspaceChange change)
+                {
+                    raw = change.Arguments; recovery = change.PreviousArguments;
+                    inheritedConfig = change.Config; planMode = change.PlanMode; simpleMode = change.SimpleMode;
+                    restartWebUi = change.WebUiWasRunning; restartWebUiPort = change.WebUiPort;
+                }
             }
-            catch (WorkspaceChange change)
-            {
-                raw = change.Arguments; recovery = change.PreviousArguments;
-                inheritedConfig = change.Config; planMode = change.PlanMode;
-                restartWebUi = change.WebUiWasRunning; restartWebUiPort = change.WebUiPort;
-            }
+        }
+        finally
+        {
+            // Every workspace host is process-wide; the exit path is the only place that releases them.
+            await TerminalHosts.DisposeAllAsync();
         }
     }
 
-    private static async Task<int> RunWorkspaceAsync(string[] raw, ApiConfig? inheritedConfig, bool planMode, bool restartWebUi = false, int restartWebUiPort = 0)
+    private static async Task<int> RunWorkspaceAsync(string[] raw, ApiConfig? inheritedConfig, bool planMode, bool simpleMode, bool restartWebUi = false, int restartWebUiPort = 0)
     {
         Console.InputEncoding = System.Text.Encoding.UTF8; Console.OutputEncoding = new System.Text.UTF8Encoding(false);
         TerminalUi? ui = null;
@@ -52,9 +61,19 @@ internal static class TerminalApp
         {
             var args = TerminalArguments.Parse(raw); ui = new(args.Flags.Contains("json"), args.Flags.Contains("verbose"));
             if (args.Flags.Contains("help") || args.Command == "help") { Help(); return 0; }
-            var approval = new ToolsApproval(ui) { FullAccess = !args.Flags.Contains("ask"), PlanMode = planMode };
-            var options = args.Options(approval) with { FullAccess = approval.FullAccess && !planMode };
+            var approval = new ToolsApproval(ui) { Permission = args.Permission, PlanMode = planMode, SimpleMode = simpleMode };
+            // The permission stance lives on the mutable `approval` object, so every runtime — including
+            // ones built before a switch and browser runs in flight — resolves the current mode per call.
+            var options = args.Options(approval) with
+            {
+                PermissionProvider = () => approval.PlanMode ? PermissionMode.Ask : approval.Permission,
+                SimpleModeProvider = () => approval.SimpleMode,
+            };
+            // PLAN mode keeps every call behind the approver, which denies anything but reads.
+            if (planMode) options = options with { Permission = PermissionMode.Ask };
+            if (simpleMode) options = options with { SimpleMode = true };
             ui.Workspace = options.WorkspaceRoot;
+            if (args.WorkspaceFallback) TerminalOutput.Write(new Text("当前目录不可写（安装目录只读），已改用 " + options.WorkspaceRoot + " 作为工作区；用 /workspace <路径> 切换。\n"));
             // Configuration is global (shared directory); conversations stay per workspace.
             // An explicit --data-dir keeps the old single-manifest layout.
             var sharedConfig = args.Get("data-dir") == null ? args.SharedDirectory : null;
@@ -79,26 +98,17 @@ internal static class TerminalApp
             }
 
             DataDirectoryLease.EnsureNoLegacyWriter(dataDir);
-            ProjectDataDirectory.Register(args.Workspace, dataDir);
-            using var store = new DataStore(dataDir, false, sharedConfig);
+            // The workspace host is process-wide: switching workspaces later reuses it, so runs, jobs,
+            // sandboxes and MCP connections of this workspace survive the switch.
+            var host = await TerminalHosts.GetOrCreateAsync(args, dataDir, sharedConfig, options, ui);
+            await TerminalHosts.EvictIdleAsync(dataDir, sharedConfig, options, ui);
+            var store = host.Store;
             options = options with { SandboxMode = SavedSandboxMode(store) };
-            if (args.Get("data-dir") == null)
-            {
-                store.ImportProjectData(args.SharedDirectory, args.Workspace);
-                if (OperatingSystem.IsWindows())
-                {
-                    var folder = Path.GetDirectoryName(dataDir)!;
-                    File.SetAttributes(folder, File.GetAttributes(folder) | FileAttributes.Hidden);
-                }
-            }
-            options.BrowserUse.Root = Path.Combine(args.SharedDirectory, "browser-use");
-            var browser = new BrowserUseManager(store, options.BrowserUse, ui);
-            browser.Load();
-            if (args.Command == "browser") { await browser.ExecuteAsync(args.Positionals); return 0; }
-            var computer = new ComputerUseManager(store, options.ComputerUse, ui);
-            computer.Load();
-            if (args.Command == "computer") { computer.Execute(args.Positionals); return 0; }
             options = options with { SharedDirectory = args.SharedDirectory };
+            var browser = host.Browser;
+            var computer = host.Computer;
+            if (args.Command == "browser") { await browser.ExecuteAsync(args.Positionals); return 0; }
+            if (args.Command == "computer") { computer.Execute(args.Positionals); return 0; }
             ValueTask<bool> NotifyInstallationAsync(string message, CancellationToken ct)
             {
                 ct.ThrowIfCancellationRequested();
@@ -135,29 +145,35 @@ internal static class TerminalApp
             if (args.Command == "agents") { await roleManager.ExecuteAsync(args.Positionals); return 0; }
             ui.Inbox = new InputInbox(store, options.WorkspaceRoot);
             if (args.Command == "stats") { UsageStatistics.Show(store, ui); return 0; }
-            await using var plugins = new PluginHost(args.SharedDirectory);
-            plugins.ReserveAuthenticationIds("codex");
-            try { plugins.InstallBuiltins(Path.Combine(AppContext.BaseDirectory, "builtin-plugins")); }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { ui.Error("内置插件安装失败：" + ex.Message); }
-            await using var tasks = new BackgroundTasks(dataDir, args.BackgroundConcurrency);
+            var plugins = host.Plugins;
+            var tasks = host.Tasks;
             roleTasks = tasks;
+            // Main-session runs live beside the background jobs: a session keeps working when the view
+            // moves to another conversation, another workspace or a new chat.
+            var runs = host.Runs;
+            ui.Runs = runs;
             var extensions = new ExtensionManager(plugins, tasks, args.SharedDirectory, ui, args, store);
             var taskManager = new TaskManager(tasks, ui, store);
-            var catalog = new SkillCatalog(store, options.WorkspaceRoot, args.SharedDirectory);
-            var checkpoints = new WorkspaceCheckpoints(new WorkspacePolicy(options.WorkspaceRoot), dataDir);
-            checkpoints.RecoverRevert(store);
+            var catalog = host.Catalog;
+            var checkpoints = host.Checkpoints;
             var checkpointManager = new CheckpointManager(checkpoints, store, ui);
             approval.Checkpoints = checkpoints;
             options = options with { BackgroundTasks = tasks, Checkpoints = checkpoints, QuestionHandler = ui.RequestQuestionAsync, Hooks = plugins.Hooks, Extensions = plugins.Extensions, Skills = catalog };
-            catalog.SeedBundled();
             var models = new ModelManager(store, ui, args, () => plugins.Providers, extensions.FindAuthentication, () => extensions.Authentication, (id, ct) => extensions.LoginAsync([id], ct));
-            await using var mcp = new McpToolService(store, new SkillExecutor());
+            var mcp = host.Mcp;
             mcp.AuthenticationResolver = extensions.FindAuthentication;
-            plugins.ProvideService(store); plugins.ProvideService(catalog); plugins.ProvideService(tasks); plugins.ProvideService(mcp);
-            await plugins.LoadEnabledAsync();
             var mcpManager = new McpManager(store, mcp, ui, args); var skills = new SkillManager(catalog, ui, args);
             // Declared before command dispatch: the browser workspace host captures these, and CLI mode starts the same host.
-            AgentRuntime? runtime = null; string? runtimeRole = null; var connectedDefaults = false; WebUiSession? webUi = null;
+            var runtimes = host.Runtimes; var connectedDefaults = false; WebUiSession? webUi = null;
+            plugins.ProvideService(new PluginWorkspaceTasks(
+                () => ProjectDataDirectory.List().Where(entry => Directory.Exists(entry.Workspace))
+                    .Select(entry => new PluginWorkspace(entry.Workspace, Path.GetFileName(entry.Workspace))).ToArray(),
+                (request, ct) =>
+                {
+                    webUi ??= StartWebUi();
+                    webUi.UseTerminalPrompts = args.Command is not ("gui" or "web-ui");
+                    return webUi.StartPluginTaskAsync(request, ct);
+                }));
             switch (args.Command)
             {
                 case "config": case "providers": await models.ExecuteAsync(args.Positionals); return 0;
@@ -241,6 +257,18 @@ internal static class TerminalApp
                 if (saved != null) config = await models.SelectAsync(saved.Id.ToString());
             }
             var navigationModels = new Dictionary<Guid, ApiConfig>();
+            var navigationDrafts = new Dictionary<Guid, string>();
+            string RoleOf(Conversation session) => session.ParentConversationId == null ? "primary" : session.AgentRole ?? "general";
+            AgentRuntime? CurrentRuntime() => runtimes.GetValueOrDefault(RoleOf(conversation)) ?? runtimes.Values.FirstOrDefault();
+            async Task DisposeRuntimesAsync()
+            {
+                // The permission stance is process-wide, so every workspace host rebuilds its sandboxes.
+                foreach (var workspace in TerminalHosts.All)
+                {
+                    foreach (var instance in workspace.Runtimes.Values) await instance.DisposeAsync();
+                    workspace.Runtimes.Clear();
+                }
+            }
             options = options with
             {
                 InstructionsProvider = () => Instructions(options.WorkspaceRoot, catalog, approval.PlanMode, includeRoot: true) + "\nAvailable child agents:\n" + string.Join("\n", roles.List().Select(role => role.Name + ": " + role.Description)),
@@ -287,19 +315,19 @@ internal static class TerminalApp
                 child.SubAgentConfigId = selected.Id; child.ModelId = selected.DefaultModel; child.ProviderId = selected.ProviderId;
                 if (request.SessionId == null) store.AddConversation(child); else store.UpdateConversation(child);
                 var planning = approval.PlanMode || conversation.ParentConversationId != null && roles.Get(conversation.AgentRole ?? "general").ReadOnly;
-                var childFullAccess = approval.FullAccess && !planning;
+                var childPermission = planning ? PermissionMode.Ask : approval.Permission;
                 var firstRun = true;
                 var jobId = tasks.Start(prompt, child.Id, kind, (id, ct) =>
                 {
                     var fromInbox = !firstRun; firstRun = false;
-                    return RunJobAsync(id, child.Id, prompt, selected, planning, childFullAccess, ct, fromInbox, expanded);
+                    return RunJobAsync(id, child.Id, prompt, selected, planning, childPermission, ct, fromInbox, expanded);
                 }, conversation.Id, () => store.GetPendingInputs(child.Id).Any(input => input.Delivery == "steer"), ownerToken);
                 // Background children outlive the parent turn and report by notification; foreground children are cancelled with the parent turn.
                 if (background) tasks.NotifyParentOnCompletion(jobId);
                 return new(jobId);
             }
             plugins.ProvideService(new AgentTaskLauncher(task => StartJob(task, "插件任务", background: true).TaskId));
-            async IAsyncEnumerable<AgentEvent> RunJobAsync(string jobId, Guid session, string prompt, ApiConfig selected, bool planning, bool fullAccess, [EnumeratorCancellation] CancellationToken ct, bool fromInbox = false, PromptReferences.ExpandedPrompt? snapshot = null)
+            async IAsyncEnumerable<AgentEvent> RunJobAsync(string jobId, Guid session, string prompt, ApiConfig selected, bool planning, PermissionMode permission, [EnumeratorCancellation] CancellationToken ct, bool fromInbox = false, PromptReferences.ExpandedPrompt? snapshot = null)
             {
                 AgentRoleDefinition CurrentRole() => roles.Get(store.GetConversation(session)?.AgentRole ?? "general");
                 bool ReadOnly() => planning || CurrentRole().ReadOnly;
@@ -314,7 +342,11 @@ internal static class TerminalApp
                 {
                     IsSubAgent = true,
                     HostToolsProvider = () => CurrentRole().Tools,
-                    FullAccess = fullAccess,
+                    Permission = permission,
+                    // Delegated work freezes the stance it was dispatched with; a parent switching to full
+                    // access mid-flight must never widen a child, and read-only children stay read-only.
+                    PermissionProvider = null,
+                    SimpleModeProvider = null,
                     InvocationPolicy = (tool, arguments) => rolePolicy.Validate(tool, arguments) ?? options.InvocationPolicy?.Invoke(tool, arguments),
                     InvocationAuthorization = async (tool, arguments, token) => (options.InvocationAuthorization == null ? null : await options.InvocationAuthorization(tool, arguments, token)) ?? await rolePolicy.AuthorizeAsync(tool, arguments, token),
                     ConfigurationProvider = (childId, current) =>
@@ -348,7 +380,13 @@ internal static class TerminalApp
             }
             async Task<AgentEngine> EngineAsync()
             {
-                var role = conversation.ParentConversationId == null ? "primary" : conversation.AgentRole ?? "general";
+                if (config == null || !config.IsEnabled) config = await models.SelectAsync(args.Get("config"), args.Get("model"));
+                ui.SetThinkingEffort(config);
+                return await BuildEngineAsync(conversation, config);
+            }
+            async Task<AgentEngine> BuildEngineAsync(Conversation session, ApiConfig sessionConfig)
+            {
+                var role = RoleOf(session);
                 var resumedRole = role == "primary" ? null : roles.Get(role);
                 var resumedPolicy = resumedRole == null ? null : new SubAgentRolePolicy(() => approval.PlanMode || roles.Get(role).ReadOnly,
                     options.WorkspaceRoot, options.ExternalDirectoryPermissions, () => roles.Get(role), approval.ApproveAsync, parentTools: options.HostToolsProvider);
@@ -356,29 +394,33 @@ internal static class TerminalApp
                 {
                     IsSubAgent = role != "primary",
                     HostToolsProvider = () => resumedRole == null ? null : roles.Get(role).Tools,
-                    FullAccess = options.FullAccess && !approval.PlanMode && resumedRole?.ReadOnly != true,
+                    Permission = approval.PlanMode || resumedRole?.ReadOnly == true ? PermissionMode.Ask : options.Permission,
+                    // Read-only roles keep the stance they were opened with: a later switch to full access
+                    // must never widen them. Every other role follows the live stance.
+                    PermissionProvider = resumedRole?.ReadOnly == true ? null : options.PermissionProvider,
                     InvocationPolicy = resumedPolicy == null ? options.InvocationPolicy : (tool, arguments) => resumedPolicy.Validate(tool, arguments) ?? options.InvocationPolicy?.Invoke(tool, arguments),
                     InvocationAuthorization = resumedPolicy == null ? options.InvocationAuthorization : async (tool, arguments, token) => (options.InvocationAuthorization == null ? null : await options.InvocationAuthorization(tool, arguments, token)) ?? await resumedPolicy.AuthorizeAsync(tool, arguments, token),
                     Approver = resumedRole == null ? options.Approver : (request, token) => approval.PlanMode || roles.Get(role).ReadOnly ? ValueTask.FromResult(false) : options.Approver?.Invoke(request, token) ?? ValueTask.FromResult(request.Preapproved),
                     InstructionsProvider = () => (resumedRole?.Execution?.IncludeProjectInstructions == false ? "" : options.InstructionsProvider?.Invoke() ?? "") + (resumedRole == null ? "" : "\n" + roles.Get(role).Instructions)
                 };
-                if (runtime != null && runtimeRole != role) { await runtime.DisposeAsync(); runtime = null; }
-                if (config == null || !config.IsEnabled) config = await models.SelectAsync(args.Get("config"), args.Get("model"));
-                ui.SetThinkingEffort(config);
-                if (runtime == null)
+                // One runtime per role: sessions with different roles work side by side, and moving the
+                // view to another session never disposes a runtime that a run is still using.
+                if (!runtimes.TryGetValue(role, out var runtime))
                 {
                     var doctor = new EnvironmentDoctor();
-                    var environment = await ManagementUi.Busy("检查 Python 和 PowerShell 环境", ct => options.FullAccess ? doctor.EnsureAsync(NotifyInstallationAsync, options.PythonPath, options.PowerShellPath, ct) : ui.Interactive && !ui.Json ? doctor.EnsureAsync(ConfirmAsync, options.PythonPath, options.PowerShellPath, ct) : doctor.CheckAsync(options.PythonPath, options.PowerShellPath, ct));
+                    var environment = await ManagementUi.Busy("检查 Python 和 PowerShell 环境", token => options.FullAccess ? doctor.EnsureAsync(NotifyInstallationAsync, options.PythonPath, options.PowerShellPath, token) : ui.Interactive && !ui.Json ? doctor.EnsureAsync(ConfirmAsync, options.PythonPath, options.PowerShellPath, token) : doctor.CheckAsync(options.PythonPath, options.PowerShellPath, token));
                     if (!environment.Ready) throw new InvalidOperationException(string.Join("\n", environment.Problems) + " 使用 doctor --install。");
                     options = options with { PythonPath = environment.Python, PowerShellPath = environment.PowerShell };
-                    var executionLabel = executionOptions.FullAccess ? "双后端沙箱（完全访问）" : "双后端沙箱";
+                    var executionLabel = "双后端沙箱（" + (executionOptions.Permission switch { PermissionMode.Full => "完全访问", PermissionMode.Restricted => "限制模式", _ => "逐次授权" }) + "）";
                     if (!ui.Json) TerminalOutput.MarkupLine("[dim]正在检查 " + executionLabel + "…[/]");
                     executionOptions = executionOptions with { PythonPath = options.PythonPath, PowerShellPath = options.PowerShellPath };
-                    runtime = await ManagementUi.Busy("启动 " + executionLabel, ct => AgentRuntime.CreateAsync(executionOptions, ct)); runtimeRole = role; var probe = await ManagementUi.Busy("验证 " + executionLabel, ct => runtime.ProbeSandboxAsync(ct));
-                    if (!probe.Ok) { await runtime.DisposeAsync(); runtime = null; throw new InvalidOperationException(probe.Error); }
+                    runtime = await ManagementUi.Busy("启动 " + executionLabel, token => AgentRuntime.CreateAsync(executionOptions, token));
+                    var probe = await ManagementUi.Busy("验证 " + executionLabel, token => runtime.ProbeSandboxAsync(token));
+                    if (!probe.Ok) { await runtime.DisposeAsync(); throw new InvalidOperationException(probe.Error); }
                     ReportSandbox(runtime, ui);
                     runtime.Tools.Register(new McpResourceTools(mcp));
                     if (resumedRole == null) runtime.Tools.Register(new AgentDelegationTools(tasks, StartDelegatedAsync));
+                    runtimes[role] = runtime;
                 }
                 if (!connectedDefaults)
                 {
@@ -387,7 +429,7 @@ internal static class TerminalApp
                 }
                 runtime.Tools.Replace<McpToolSet>(new McpToolSet(mcp));
                 runtime.Tools.Replace<PluginToolSet>((PluginToolSet)plugins.ToolSet());
-                if (FullScreenTerminal.Current != null) ui.Header(options.WorkspaceRoot, config.DefaultModel, conversation.Id);
+                if (FullScreenTerminal.Current != null && session.Id == conversation.Id) ui.Header(options.WorkspaceRoot, sessionConfig.DefaultModel, session.Id);
                 IAiProvider executionProvider = new RequestRoutingAiProvider(Provider);
                 if (resumedRole != null)
                 {
@@ -399,7 +441,9 @@ internal static class TerminalApp
             void Navigate(Conversation target)
             {
                 if (config != null) navigationModels[conversation.Id] = ManagementUi.Clone(config);
+                navigationDrafts[conversation.Id] = ui.Draft;
                 conversation = target;
+                ui.Draft = navigationDrafts.GetValueOrDefault(target.Id) ?? "";
                 if (navigationModels.TryGetValue(target.Id, out var remembered)) config = ManagementUi.Clone(remembered);
                 else if (target.SubAgentConfigId is { } saved && store.ApiConfigs.Any(c => c.Id == saved && c.IsEnabled))
                     config = SubAgentModelSelection.Resolve(config ?? store.ApiConfigs.First(c => c.Id == saved), store.ApiConfigs, target.ModelId, saved.ToString());
@@ -416,24 +460,28 @@ internal static class TerminalApp
                 new SessionControls(
                     () => approval.PlanMode,
                     () => approval.FullAccess,
-                    () => new SessionControlState(approval.PlanMode ? "plan" : approval.FullAccess ? "full" : "ask", approval.ModeLabel, SavedSandboxMode(store).ToString().ToLowerInvariant(), runtime?.SandboxName ?? "首次任务时验证", false),
+                    () => new SessionControlState(approval.PlanMode ? "plan" : approval.SimpleMode ? "simple" : approval.ModeKey, approval.ModeLabel, SavedSandboxMode(store).ToString().ToLowerInvariant(), runtimes.Values.FirstOrDefault()?.SandboxName ?? "首次任务时验证", false),
                     SetPermissionModeAsync,
                     SetSandboxModeAsync),
                 port);
             async Task SetPermissionModeAsync(string mode)
             {
-                if (mode is not ("ask" or "full" or "plan")) throw new ArgumentException("权限模式：ask / full / plan。");
-                if (tasks.Active) throw new InvalidOperationException("请先完成或取消后台任务，再切换权限。");
-                approval.PlanMode = mode == "plan"; approval.FullAccess = mode == "full";
-                options = options with { FullAccess = approval.FullAccess, CodeTimeout = args.Get("code-timeout") == null ? TimeSpan.FromSeconds(approval.FullAccess ? 600 : 60) : options.CodeTimeout };
-                if (runtime != null) { await runtime.DisposeAsync(); runtime = null; }
+                if (mode is not ("restricted" or "ask" or "full" or "plan" or "simple")) throw new ArgumentException("权限模式：restricted / ask / full / plan / simple。");
+                // plan and simple are overlays on the selected mode; leaving them restores that mode.
+                if (mode is not ("plan" or "simple")) approval.Permission = mode switch { "full" => PermissionMode.Full, "ask" => PermissionMode.Ask, _ => PermissionMode.Restricted };
+                approval.PlanMode = mode == "plan";
+                approval.SimpleMode = mode == "simple";
+                options = options with { Permission = approval.PlanMode ? PermissionMode.Ask : approval.Permission, SimpleMode = approval.SimpleMode, CodeTimeout = args.Get("code-timeout") == null ? TimeSpan.FromSeconds(approval.PlanMode || approval.Permission == PermissionMode.Ask ? 60 : 600) : options.CodeTimeout };
+                // The live providers make the new stance apply to every in-flight call at once. Sandboxes are
+                // rebuilt only when idle: disposing a runtime a run is using would abort that run.
+                if (!TerminalHosts.All.Any(workspace => workspace.Busy)) await DisposeRuntimesAsync();
                 if (webUi != null) await webUi.RefreshRuntimeAsync();
             }
             async Task SetSandboxModeAsync(string mode)
             {
                 if (mode is not ("auto" or "hyperlight" or "monty")) throw new ArgumentException("沙箱模式：auto / hyperlight / monty。");
-                if (tasks.Active) throw new InvalidOperationException("请先完成或取消后台任务，再切换沙箱。");
-                if (runtime != null) { await runtime.DisposeAsync(); runtime = null; runtimeRole = null; }
+                if (TerminalHosts.All.Any(workspace => workspace.Busy)) throw new InvalidOperationException("请先完成或停止正在运行的会话与后台任务，再切换沙箱。");
+                await DisposeRuntimesAsync();
                 store.SetSetting("terminal:sandbox", mode);
                 options = options with { SandboxMode = mode switch { "hyperlight" => SandboxMode.Hyperlight, "monty" => SandboxMode.Monty, _ => SandboxMode.Auto } };
                 if (webUi != null) await webUi.RefreshRuntimeAsync();
@@ -470,7 +518,7 @@ internal static class TerminalApp
                 if (args.Command == "run")
                 {
                     var engine = await EngineAsync(); if (!ui.Json) ui.Header(options.WorkspaceRoot, config!.DefaultModel, conversation.Id);
-                    await RunTurnAsync(engine, conversation.Id, string.Join(" ", args.Positionals), config!, ui, checkpoints, store);
+                    await RunTurnAsync(runs, engine, conversation.Id, string.Join(" ", args.Positionals), config!, ui, checkpoints, store);
                     return ui.LastReason is "stop" or "STOP" ? 0 : ui.LastReason == "cancelled" ? 130 : 1;
                 }
                 using var screen = !args.Flags.Contains("inline") && AnsiConsole.Profile.Capabilities.Ansi ? new FullScreenTerminal(store, catalog, mcp, ui) : null;
@@ -478,10 +526,20 @@ internal static class TerminalApp
                 if (screen != null) screen.ModelFooter = () => modelFooter.Read(config, ui.FooterRevision);
                 screen?.Enter();
                 if (screen != null) screen.ExtensionSummary = () => $"插件 · {plugins.Status.Count(p => p.Enabled && p.Error == null)} 个\n任务 · {tasks.List.Count(j => j.State is BackgroundTaskState.Running or BackgroundTaskState.Queued)} 运行 / 排队\n等待处理 · {tasks.List.Count(j => j.State is BackgroundTaskState.AwaitingAnswer or BackgroundTaskState.AwaitingApproval)} 个  /tasks";
-                if (screen != null) screen.TaskNotice = () => (tasks.List.Count(j => j.State is BackgroundTaskState.AwaitingAnswer or BackgroundTaskState.AwaitingApproval) is var count && count > 0 ? $"后台待处理 {count} · /tasks | " : "") + (ui.Inbox?.Label is { Length: > 0 } inboxLabel ? inboxLabel + " | " : "");
+                if (screen != null) screen.TaskNotice = () => (tasks.List.Count(j => j.State is BackgroundTaskState.AwaitingAnswer or BackgroundTaskState.AwaitingApproval) is var count && count > 0 ? $"后台待处理 {count} · /tasks | " : "") +
+                    (runs.Active.Count(run => run.ConversationId != conversation.Id) is var others && others > 0 ? $"后台会话 {others} 个运行中 | " : "") +
+                    (runs.Find(conversation.Id) is { Waiting: true } waitingRun ? (waitingRun.State == SessionRunState.AwaitingApproval ? "本会话等待授权 | " : "本会话等待回答 | ") : "") +
+                    (ui.Inbox?.Label is { Length: > 0 } inboxLabel ? inboxLabel + " | " : "");
                 if (screen != null) screen.TaskLookup = tasks.Get;
                 if (screen != null) screen.InvocationTasks = id => tasks.List.Where(task => task.ParentToolCallId == id).OrderBy(task => task.CreatedAt).ToArray();
                 if (screen != null) screen.TaskRevision = () => tasks.Revision;
+                if (screen != null) screen.Runs = runs;
+                if (screen != null) screen.RunRevision = () => runs.Revision + TerminalHosts.All.Sum(workspace => workspace.Runs.Revision);
+                if (screen != null) screen.OtherWorkspaces = () => TerminalHosts.All
+                    .Where(workspace => !string.Equals(workspace.DataDirectory, dataDir, StringComparison.OrdinalIgnoreCase) && workspace.Runs.Any)
+                    .Select(workspace => (Name: Path.GetFileName(Path.TrimEndingDirectorySeparator(workspace.Workspace)) is { Length: > 0 } name ? name : workspace.Workspace,
+                        Running: workspace.Runs.Count, Waiting: workspace.Runs.Active.Count(run => run.Waiting)))
+                    .ToArray();
                 if (screen != null)
                 {
                     var taskViews = new Dictionary<string, TaskTranscriptView>();
@@ -510,18 +568,49 @@ internal static class TerminalApp
                     {
                         case "/tasks": await taskManager.ExecuteAsync(words.Skip(1).ToArray(), ct); break;
                         case "/help": ChatHelp(catalog, words.ElementAtOrDefault(1) == "all"); break;
-                        case "/status": TerminalOutput.Write(new Panel(new Text($"工作区：{options.WorkspaceRoot}\n会话：{conversation.Id}\n模型：{config?.DefaultModel}\n权限：{approval.ModeLabel}\n{ui.ContextLabel}\n运行任务：{tasks.List.Count(task => BackgroundTasks.IsActive(task.State))}")).Header("执行中 · 会话状态")); break;
+                        case "/status":
+                            TerminalOutput.Write(new Panel(new Text($"工作区：{options.WorkspaceRoot}\n会话：{conversation.Id}\n模型：{config?.DefaultModel}\n权限：{approval.ModeLabel}\n{ui.ContextLabel}\n本会话正在运行：{runs.IsRunning(conversation.Id)}\n其他后台会话：{runs.Active.Count(run => run.ConversationId != conversation.Id)} 个\n运行任务：{tasks.List.Count(task => BackgroundTasks.IsActive(task.State))}")).Header("执行中 · 会话状态")); break;
                         case "/sandbox":
                             if (words.Length > 2 || (words.Length == 2 && !string.Equals(words[1], "status", StringComparison.OrdinalIgnoreCase)))
                                 throw new InvalidOperationException("请先停止当前任务，再切换沙箱。");
-                            ShowSandbox(options, runtime, ui); break;
+                            ShowSandbox(options, CurrentRuntime(), ui); break;
                         case "/browser":
                             if (words.Length > 2 || words.ElementAtOrDefault(1) is not (null or "on" or "off" or "status")) throw new ArgumentException("任务执行中支持 /browser on|off|status；连接请先停止任务。");
                             await browser.ExecuteAsync(words.Skip(1).ToArray()); break;
+                        // Switching sessions while a task runs is the point of background runs: the
+                        // current session keeps working and the view moves on.
+                        case "/new": case "/clear":
+                            Navigate(SessionOperations.Get(store, null, options.WorkspaceRoot)); ui.DetachRequested = true; break;
+                        case "/session": case "/sessions": case "/resume":
+                            if (words.Length == 1) { SessionOperations.List(store, ui, null, runs); break; }
+                            Navigate(SessionOperations.Get(store, words[1], options.WorkspaceRoot)); ui.DetachRequested = true; break;
+                        case "/parent": Navigate(SessionOperations.Parent(store, conversation)); ui.DetachRequested = true; break;
+                        case "/children":
+                            if (words.Length == 1) { foreach (var child in SessionOperations.Children(store, conversation.Id)) TerminalOutput.Write(new Text(child.Id.ToString()[..8] + " · " + child.AgentRole + " · " + SessionOperations.SingleLineTitle(child.Title) + SessionOperations.RunLabel(runs, child.Id) + "\n")); break; }
+                            Navigate(SessionOperations.Child(store, conversation, words[1], ui)); ui.DetachRequested = true; break;
+                        case "/rename":
+                            conversation.Title = words.ElementAtOrDefault(1) ?? throw new ArgumentException("用法：/rename 标题。");
+                            store.UpdateConversation(conversation); ManagementUi.Success(ui, "会话已重命名。"); break;
+                        case "/copy":
+                            var copyText = words.ElementAtOrDefault(1) switch
+                            {
+                                null => SessionTranscript.Format(conversation),
+                                "last" => SessionTranscript.LastReply(store.GetVisibleMessages(conversation.Id)),
+                                "id" => conversation.Id.ToString(),
+                                _ => throw new ArgumentException("用法：/copy [last|id]。")
+                            };
+                            if (!ClipboardText.Write(copyText)) throw new IOException("剪贴板写入失败，请重试或使用 /export。");
+                            ManagementUi.Success(ui, "已复制到剪贴板。"); break;
+                        case "/export":
+                            var exportPath = Path.Combine(Path.GetTempPath(), "session-" + Guid.NewGuid().ToString("N") + ".md");
+                            await SessionTranscript.ExportAsync(conversation, exportPath, words[1] != "--no-thinking", words[1] != "--no-tools");
+                            ManagementUi.Success(ui, "会话已导出：" + Path.GetFullPath(exportPath)); break;
+                        case "/todo": TodoCommand.Execute(store, ui, conversation.Id, words.Skip(1).ToArray()); break;
+                        case "/context": SessionOperations.Context(conversation, options.MaxContextCharacters); break;
                         case "/thinking": ui.ShowThinking = !ui.ShowThinking; break;
                         case "/details": ui.Verbose = !ui.Verbose; break;
                         case "/web-ui" when words.ElementAtOrDefault(1) is null or "status" or "stop": await WebUiAsync(words.Skip(1).ToArray()); break;
-                        default: throw new ArgumentException("此命令需要在当前任务停止后执行。运行中可用 /tasks、/status、/help、/thinking、/details、/queue、/steer 和 /web-ui status；Esc 停止任务。");
+                        default: throw new ArgumentException("此命令需要在当前任务停止后执行。运行中可用 /new、/session [ID]、/children、/todo、/status、/copy、/export、/tasks、/help、/thinking、/details、/queue、/steer 和 /web-ui status；Esc 停止任务。");
                     }
                 };
                 if (!args.Flags.Contains("no-initialize") && store.GetSetting("environment:initialized") != "1")
@@ -541,12 +630,23 @@ internal static class TerminalApp
                 editor.WakeRequested = () => conversation.Revert == null && tasks.PendingNotifications(conversation.Id).Count > 0;
                 while (true)
                 {
-                    if (!tasks.IsSessionRunning(conversation.Id) && ui.Inbox?.Next is { } pendingInput)
+                    // A session that kept working while the view was elsewhere is picked up exactly where it is.
+                    if (runs.Find(conversation.Id) is { IsFinished: false, Attached: false } liveRun)
+                    {
+                        try { await ui.AttachRunAsync(liveRun, CancellationToken.None); }
+                        catch (OperationCanceledException) { }
+                        catch (Exception ex) { ui.Error(ex.Message); }
+                        continue;
+                    }
+                    foreach (var finished in runs.TakeFinished())
+                        ManagementUi.Success(ui, "后台会话已完成 · " + SessionOperations.SingleLineTitle(finished.Title) +
+                            (finished.Failure != null ? " · " + finished.Failure : finished.FinishReason is null or "stop" or "STOP" ? "" : " · " + finished.FinishReason));
+                    if (!tasks.IsSessionRunning(conversation.Id) && !runs.IsRunning(conversation.Id) && ui.Inbox?.Next is { } pendingInput)
                     {
                         try
                         {
                             var pendingEngine = await EngineAsync();
-                            await RunTurnAsync(pendingEngine, conversation.Id, pendingInput.Content, config!, ui, checkpoints, store, pendingInput: pendingInput);
+                            await RunTurnAsync(runs, pendingEngine, conversation.Id, pendingInput.Content, config!, ui, checkpoints, store, pendingInput: pendingInput);
                         }
                         catch (OperationCanceledException) { ui.Error("待处理输入执行已取消。"); }
                         catch (Exception ex) { ui.Error(ex.Message); }
@@ -557,7 +657,7 @@ internal static class TerminalApp
                         }
                         continue;
                     }
-                    if (conversation.Revert == null && tasks.PendingNotifications(conversation.Id).Count > 0)
+                    if (conversation.Revert == null && !runs.IsRunning(conversation.Id) && tasks.PendingNotifications(conversation.Id).Count > 0)
                     {
                         var results = SubAgentNotifications.Deliver(store, tasks, conversation.Id);
                         if (results.Count > 0)
@@ -566,7 +666,7 @@ internal static class TerminalApp
                             {
                                 ManagementUi.Success(ui, "收到子代理完成结果 · 正在继续父任务。");
                                 var resumedEngine = await EngineAsync();
-                                await RunTurnAsync(resumedEngine, conversation.Id, "Review the newly delivered delegated task results and continue the existing parent objective. Verify claims before relying on them.", config!, ui, checkpoints, store, internalMessage: true);
+                                await RunTurnAsync(runs, resumedEngine, conversation.Id, "Review the newly delivered delegated task results and continue the existing parent objective. Verify claims before relying on them.", config!, ui, checkpoints, store, internalMessage: true);
                             }
                             catch (OperationCanceledException) { ui.Error("父任务继续处理已取消；子代理结果已保存。"); }
                             catch (Exception ex) { ui.Error(ex.Message); }
@@ -574,7 +674,7 @@ internal static class TerminalApp
                         continue;
                     }
                     ui.SetThinkingEffort(config);
-                    var text = await editor.ReadAsync($"{config?.DisplayName ?? "未选择提供商"} · {config?.DefaultModel ?? "按需配置"} · 思考 {config?.ReasoningEffort ?? "default"} · {approval.ModeLabel} · 会话 {conversation.Id.ToString()[..8]} · {ui.Inbox?.Label}", initial: ui.Draft);
+                    var text = await editor.ReadAsync($"{config?.DisplayName ?? "未选择提供商"} · {config?.DefaultModel ?? "按需配置"} · 思考 {config?.ReasoningEffort ?? "default"} · {approval.ModeLabel} · 会话 {conversation.Id.ToString()[..8]}{runs.Label(conversation.Id)} · {ui.Inbox?.Label}", initial: ui.Draft);
                     if (editor.InterruptedDraft != null) { ui.Draft = editor.InterruptedDraft; editor.InterruptedDraft = null; }
                     else if (screen == null) ui.Draft = "";
                     if (string.IsNullOrWhiteSpace(text)) continue;
@@ -595,18 +695,19 @@ internal static class TerminalApp
                                         TerminalOutput.Write(new Panel(new Text(options.WorkspaceRoot)).Header("当前工作目录 · /workspace 路径 切换"));
                                         continue;
                                     }
-                                    var targetWorkspace = WorkspaceNavigation.Resolve(string.Join(' ', rest), options.WorkspaceRoot, approval.FullAccess);
+                                    var targetWorkspace = WorkspaceNavigation.Resolve(string.Join(' ', rest), options.WorkspaceRoot, approval.Permission);
                                     if (SessionOperations.InWorkspace(new Conversation { WorkspaceRoot = options.WorkspaceRoot }, targetWorkspace))
                                     { ManagementUi.Success(ui, "当前已在此工作目录：" + targetWorkspace); continue; }
-                                    if (tasks.Active) throw new InvalidOperationException("请先完成或取消后台任务，再切换工作目录。");
-                                    var nextArguments = WorkspaceNavigation.Arguments(raw, args, targetWorkspace, approval.FullAccess);
+                                    // Background runs and jobs belong to their workspace host and keep
+                                    // going here; the terminal just moves its screen to the other workspace.
+                                    var nextArguments = WorkspaceNavigation.Arguments(raw, args, targetWorkspace, approval.Permission);
                                     var nextDirectory = TerminalArguments.Parse(nextArguments).DataDirectory;
                                     DataDirectoryLease.EnsureNoLegacyWriter(nextDirectory);
                                     using (var targetStore = new DataStore(nextDirectory)) { }
                                     if (config == null && args.Get("config") != null)
                                         config = await models.SelectAsync(args.Get("config"), args.Get("model"));
-                                    var previousArguments = WorkspaceNavigation.Arguments(raw, args, options.WorkspaceRoot, approval.FullAccess, conversation.Id);
-                                    throw new WorkspaceChange(nextArguments, previousArguments, config, approval.PlanMode, webUi != null, webUi?.Port ?? 0);
+                                    var previousArguments = WorkspaceNavigation.Arguments(raw, args, options.WorkspaceRoot, approval.Permission, conversation.Id);
+                                    throw new WorkspaceChange(nextArguments, previousArguments, config, approval.PlanMode, approval.SimpleMode, webUi != null, webUi?.Port ?? 0);
                                 case "/help": ChatHelp(catalog, rest.FirstOrDefault() == "all"); continue;
                                 case "/stats": UsageStatistics.Show(store, ui); continue;
                                 case "/timeline":
@@ -640,7 +741,7 @@ internal static class TerminalApp
                                 case "/steer":
                                     if (string.IsNullOrWhiteSpace(tail)) throw new ArgumentException("用法：/steer 任务说明");
                                     await ui.Inbox!.EnqueueAsync(tail, "steer"); continue;
-                                case "/plugins": await CancelableAsync(ct => extensions.PluginsAsync(rest, ct)); runtime?.Tools.Replace<PluginToolSet>((PluginToolSet)plugins.ToolSet()); continue;
+                                case "/plugins": await CancelableAsync(ct => extensions.PluginsAsync(rest, ct)); CurrentRuntime()?.Tools.Replace<PluginToolSet>((PluginToolSet)plugins.ToolSet()); continue;
                                 case "/hooks": extensions.Hooks(rest); continue;
                                 case "/login": await CancelableAsync(ct => extensions.LoginAsync(rest, ct)); if (rest.FirstOrDefault() is not ("status" or "list")) config = null; continue;
                                 case "/logout": await CancelableAsync(ct => extensions.LogoutAsync(rest, ct)); config = null; continue;
@@ -678,12 +779,12 @@ internal static class TerminalApp
                                     string extensionOutput = ""; await CancelableAsync(async ct => extensionOutput = await ManagementUi.Busy("执行插件命令", token => extensionCommand.Execute(rest.Skip(1).ToArray(), token), ct)); TerminalOutput.Write(new Text(ToolResult.Clip(extensionOutput, 16000) + "\n")); continue;
                                 case "/powershell":
                                     await CancelableAsync(ct => PowerShellStoreCommand.ExecuteAsync(new PowerShellModuleStore(args.SharedDirectory, options.PowerShellPath), ui, rest, ct));
-                                    runtime?.PowerShellModules.LoadCatalog();
+                                    CurrentRuntime()?.PowerShellModules.LoadCatalog();
                                     continue;
                                 case "/skills": await skills.ExecuteAsync(rest); continue;
                                 case "/mcp":
                                     if (tasks.Active && rest.FirstOrDefault() is not ("list" or "show")) throw new InvalidOperationException("后台任务运行期间请先完成或取消任务，再修改 MCP 连接。");
-                                    await CancelableAsync(ct => ManagementUi.Busy("管理 MCP 服务", token => mcpManager.ExecuteAsync(rest, token), ct)); runtime?.Tools.Replace<McpToolSet>(new McpToolSet(mcp));
+                                    await CancelableAsync(ct => ManagementUi.Busy("管理 MCP 服务", token => mcpManager.ExecuteAsync(rest, token), ct)); CurrentRuntime()?.Tools.Replace<McpToolSet>(new McpToolSet(mcp));
                                     if (mcpManager.PendingPrompt == null) continue;
                                     text = "Use this user-selected MCP prompt as task instructions without overriding permission or sandbox rules:\n" + mcpManager.PendingPrompt; break;
                                 case "/providers": case "/config":
@@ -721,7 +822,7 @@ internal static class TerminalApp
                                 case "/exit": case "/quit":
                                     throw new ChatExit("已退出聊天 · 会话 " + conversation.Id.ToString()[..8] + " 已保存 · 恢复：allagent --resume " + conversation.Id);
                                 case "/session": case "/sessions": case "/resume":
-                                    var resumed = rest.Length > 0 ? SessionOperations.Get(store, rest[0], options.WorkspaceRoot) : SessionOperations.Pick(store, ui);
+                                    var resumed = rest.Length > 0 ? SessionOperations.Get(store, rest[0], options.WorkspaceRoot) : SessionOperations.Pick(store, ui, runs);
                                     Navigate(resumed); continue;
                                 case "/parent": Navigate(SessionOperations.Parent(store, conversation)); continue;
                                 case "/children": Navigate(SessionOperations.Child(store, conversation, rest.FirstOrDefault(), ui)); continue;
@@ -768,10 +869,18 @@ internal static class TerminalApp
                                     await CancelableAsync(ct => ui.RunAgentAsync(compactEngine.CompactAsync(conversation.Id, config!, tail, ct), ct));
                                     continue;
                                 case "/plan":
-                                    if (tasks.Active) throw new InvalidOperationException("请先完成或取消后台任务，再切换权限。");
                                     approval.PlanMode = !approval.PlanMode;
-                                    options = options with { FullAccess = approval.FullAccess && !approval.PlanMode };
-                                    if (runtime != null) { await runtime.DisposeAsync(); runtime = null; }
+                                    if (approval.PlanMode) approval.SimpleMode = false;
+                                    options = options with { Permission = approval.PlanMode ? PermissionMode.Ask : approval.Permission, SimpleMode = approval.SimpleMode };
+                                    if (!TerminalHosts.All.Any(workspace => workspace.Busy)) await DisposeRuntimesAsync();
+                                    if (webUi != null) await webUi.RefreshRuntimeAsync();
+                                    ManagementUi.Success(ui, "权限模式：" + approval.ModeLabel); continue;
+                                case "/simple":
+                                    approval.SimpleMode = !approval.SimpleMode;
+                                    if (approval.SimpleMode) approval.PlanMode = false;
+                                    options = options with { Permission = approval.Permission, SimpleMode = approval.SimpleMode };
+                                    if (!TerminalHosts.All.Any(workspace => workspace.Busy)) await DisposeRuntimesAsync();
+                                    if (webUi != null) await webUi.RefreshRuntimeAsync();
                                     ManagementUi.Success(ui, "权限模式：" + approval.ModeLabel); continue;
                                 case "/permissions":
                                     if (rest.FirstOrDefault() == "directories")
@@ -781,22 +890,31 @@ internal static class TerminalApp
                                         TerminalOutput.Write(new Panel(new Text(directories.Count == 0 ? "此会话未记住外部目录。" : string.Join('\n', directories))).Header("外部目录权限 · 此会话")); continue;
                                     }
                                     var mode = rest.FirstOrDefault();
-                                    if (mode == null && ui.Interactive) mode = ManagementUi.Choose("权限模式", new[] { "ask", "full", "plan" }, value => value switch { "full" => "完全访问 · 不逐次审核 · 可访问工作区外文件", "plan" => "只读规划", _ => "逐次授权" });
+                                    if (mode == null && ui.Interactive) mode = ManagementUi.Choose("权限模式", new[] { "restricted", "ask", "full", "plan", "simple" }, value => value switch { "restricted" => "限制模式 · 工作区内读写免审 · 工作区外需授权", "full" => "完全访问 · 不逐次审核 · 可访问工作区外文件", "plan" => "只读规划", "simple" => "简单模式 · 仅保留 PowerShell、读文件、改文件三个工具", _ => "逐次授权" });
                                     if (mode != null) await SetPermissionModeAsync(mode);
-                                    TerminalOutput.Write(new Panel(new Text(approval.ModeLabel + "\n" + (approval.PlanMode ? "文件读取可用；写入、Shell 和 MCP 操作停用。" : approval.FullAccess ? "文件、Shell、MCP 与插件工具不再逐次审核；允许工作区外的文件和已安装可执行程序。\n双击 Esc / Ctrl+C 仍可停止任务。" : "文件写入、未信任的 Shell 程序和 MCP 操作执行前显示参数并询问；可信 Shell 别名免逐次确认。"))).Header("当前权限")); continue;
+                                    TerminalOutput.Write(new Panel(new Text(approval.ModeLabel + "\n" + (approval.PlanMode
+                                        ? "文件读取可用；写入、Shell 和 MCP 操作停用。"
+                                        : approval.SimpleMode
+                                        ? "仅保留 PowerShell、读文件与改文件三个工具；技能、MCP、子代理、插件、浏览器与桌面工具停用，新建文件用 PowerShell。审批沿用当前权限。"
+                                        : approval.Permission switch
+                                        {
+                                            PermissionMode.Full => "文件、Shell、MCP 与插件工具不再逐次审核；允许工作区外的文件和已安装可执行程序。\n双击 Esc / Ctrl+C 仍可停止任务。",
+                                            PermissionMode.Restricted => "工作区内的文件读写直接执行；工作区外的路径、未信任的程序与 MCP / 桌面 / 插件工具执行前询问；可信 Shell 别名免逐次确认。",
+                                            _ => "文件写入、未信任的 Shell 程序和 MCP 操作执行前显示参数并询问；可信 Shell 别名免逐次确认。"
+                                        }))).Header("当前权限")); continue;
                                 case "/sandbox":
                                     if (rest.Length > 1) throw new ArgumentException("用法：/sandbox [status|auto|hyperlight|monty]。");
                                     var sandboxChoice = rest.FirstOrDefault()?.ToLowerInvariant();
-                                    if (sandboxChoice is null or "status") { ShowSandbox(options, runtime, ui); continue; }
+                                    if (sandboxChoice is null or "status") { ShowSandbox(options, CurrentRuntime(), ui); continue; }
                                     await SetSandboxModeAsync(sandboxChoice);
                                     ManagementUi.Success(ui, "沙箱选择已保存：" + sandboxChoice + "，下次任务执行前验证并启用。");
-                                    ShowSandbox(options, runtime, ui); continue;
-                                case "/tools": if (runtime == null) await EngineAsync(); ShowTools(runtime!.Tools.Definitions, ui); continue;
+                                    ShowSandbox(options, CurrentRuntime(), ui); continue;
+                                case "/tools": if (CurrentRuntime() == null) await EngineAsync(); ShowTools(CurrentRuntime()!.Tools.Definitions, ui); continue;
                                 case "/browser": await browser.ExecuteAsync(rest); continue;
                                 case "/web-ui": await WebUiAsync(rest); continue;
                                 case "/computer": computer.Execute(rest); continue;
                                 case "/status":
-                                    TerminalOutput.Write(new Panel(new Text($"工作区：{options.WorkspaceRoot}\n会话：{conversation.Id}\n模型：{config?.DisplayName ?? "未选择"} / {config?.DefaultModel}\n思考：{config?.ReasoningEffort ?? "default"}\n权限：{approval.ModeLabel}\n沙箱：{(runtime != null ? runtime.SandboxName + " 已验证" : "首次任务时检查")}\n技能：{catalog.List().Count(s => s.Enabled)}\nMCP：{mcp.GetAllServerTools().Count} 个已连接\n审计：{options.AuditPath}")).Header("会话状态")); continue;
+                                    TerminalOutput.Write(new Panel(new Text($"工作区：{options.WorkspaceRoot}\n会话：{conversation.Id}\n模型：{config?.DisplayName ?? "未选择"} / {config?.DefaultModel}\n思考：{config?.ReasoningEffort ?? "default"}\n权限：{approval.ModeLabel}\n沙箱：{(CurrentRuntime()?.SandboxName is { } sandbox ? sandbox + " 已验证" : "首次任务时检查")}\n技能：{catalog.List().Count(s => s.Enabled)}\nMCP：{mcp.GetAllServerTools().Count} 个已连接\n后台会话：{runs.Active.Count} 个运行中\n审计：{options.AuditPath}")).Header("会话状态")); continue;
                                 case "/install-pip":
                                     throw new ArgumentException("pip 清单功能已移除，请使用 /powershell 搜索和安装 PowerShell 模块。");
                                 case "/doctor":
@@ -854,12 +972,19 @@ internal static class TerminalApp
                             screen?.UserMessage(originalCommand);
                         }
                         preparedPrompt ??= await PromptReferences.ExpandWithImagesAsync(text, options.WorkspaceRoot, allowExplicitExternalImages: true);
+                        if (runs.IsRunning(conversation.Id))
+                        {
+                            // The session is already working: text is guidance for that run, never a second turn.
+                            store.EnqueueInput(conversation.Id, text, preparedPrompt.Text, preparedPrompt.Images, "steer");
+                            ManagementUi.Success(ui, "消息已作为指导发送，将继续当前会话任务。");
+                            continue;
+                        }
                         if (tasks.TryPostInput(conversation.Id, () => store.EnqueueInput(conversation.Id, text, preparedPrompt.Text, preparedPrompt.Images, "steer")))
                         {
                             ManagementUi.Success(ui, "消息已接收，将继续当前会话任务。");
                             continue;
                         }
-                        var engine = await EngineAsync(); await RunTurnAsync(engine, conversation.Id, text, config!, ui, checkpoints, store, preparedPrompt: preparedPrompt);
+                        var engine = await EngineAsync(); await RunTurnAsync(runs, engine, conversation.Id, text, config!, ui, checkpoints, store, preparedPrompt: preparedPrompt);
                     }
                     catch (WorkspaceChange) { throw; }
                     catch (ChatExit) { throw; }
@@ -867,13 +992,22 @@ internal static class TerminalApp
                     catch (Exception ex) { ui.Error(ex.Message); }
                 }
             }
-            finally { if (webUi != null) await webUi.DisposeAsync(); await tasks.DisposeAsync(); if (runtime != null) await runtime.DisposeAsync(); }
+            finally
+            {
+                // Host-owned services (store, jobs, runs, sandboxes, MCP) stay alive across a workspace
+                // switch; only the screen-scoped objects built above are released here.
+                if (webUi != null) await webUi.DisposeAsync();
+            }
         }
         catch (WorkspaceChange) { throw; }
         catch (ChatExit exit) { TerminalOutput.Write(new Text("\n" + exit.Message + "\n", new Style(Color.Grey))); return 0; }
         catch (OperationCanceledException) { return 130; }
         catch (Exception ex) { if (ui != null) ui.Error(ex.Message); else Console.Error.WriteLine(ex.Message); return 1; }
     }
+    /// <summary>
+    /// Host-level instruction block: project instructions, the skill catalog and plan mode. This is the single
+    /// place the catalog enters a prompt — AgentService only appends the delegated-role list on top of it.
+    /// </summary>
     internal static string Instructions(string workspace, SkillCatalog catalog, bool plan, bool includeRoot = true)
     {
         var parts = new List<string> { ProjectInstructions.Load(workspace, includeRoot) };
@@ -890,21 +1024,16 @@ internal static class TerminalApp
         var path = new WorkspacePolicy(workspace).Resolve(".allagent/AGENT.md"); Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         using var file = new StreamWriter(new FileStream(path, FileMode.CreateNew)); file.Write("# Project instructions\n\nDescribe the project, build/test commands, coding conventions and delivery requirements here.\n"); ManagementUi.Success(ui, "项目指令模板已创建：" + path);
     }
-    private static async Task RunTurnAsync(AgentEngine engine, Guid id, string text, ApiConfig config, TerminalUi ui, WorkspaceCheckpoints checkpoints, DataStore store, bool internalMessage = false, PendingInput? pendingInput = null, PromptReferences.ExpandedPrompt? preparedPrompt = null)
+    private static async Task RunTurnAsync(SessionRuns runs, AgentEngine engine, Guid id, string text, ApiConfig config, TerminalUi ui, WorkspaceCheckpoints checkpoints, DataStore store, bool internalMessage = false, PendingInput? pendingInput = null, PromptReferences.ExpandedPrompt? preparedPrompt = null)
     {
-        checkpoints.Begin(id, text, store.GetVisibleMessages(id));
-        try { await CancelableAsync(async ct =>
-        {
-            var prompt = preparedPrompt ?? (pendingInput == null ? await PromptReferences.ExpandWithImagesAsync(text, ui.Workspace, ct, allowExplicitExternalImages: !internalMessage)
-                : new PromptReferences.ExpandedPrompt(pendingInput.Content, pendingInput.Images));
-            if (pendingInput == null && prompt.Images.Count > 0 && !ui.Json) TerminalOutput.Write(ImageAttachmentsView.Render(prompt.Images));
-            await ui.RunAgentAsync(engine.RunAsync(id, prompt.Text, config, ct, internalMessage, prompt.Images, fromInbox: pendingInput != null, inputText: text), ct);
-        }); }
-        finally
-        {
-            checkpoints.End(store.GetVisibleMessages(id));
-            if (ui.Inbox?.Session == id && store.GetConversation(id)?.Revert == null) ui.Inbox.AutomaticDeliveryPaused = false;
-        }
+        var prompt = preparedPrompt ?? (pendingInput == null ? await PromptReferences.ExpandWithImagesAsync(text, ui.Workspace, CancellationToken.None, allowExplicitExternalImages: !internalMessage)
+            : new PromptReferences.ExpandedPrompt(pendingInput.Content, pendingInput.Images));
+        if (pendingInput == null && prompt.Images.Count > 0 && !ui.Json) TerminalOutput.Write(ImageAttachmentsView.Render(prompt.Images));
+        // The run owns its lifecycle from here: it keeps working when the view moves to another
+        // session, and it — not the view — closes the checkpoint and delivers the result.
+        var run = runs.Start(store, checkpoints, id, engine, prompt.Text, config, internalMessage, prompt.Images, inputText: text, fromInbox: pendingInput != null);
+        await ui.AttachRunAsync(run, CancellationToken.None);
+        if (ui.Inbox?.Session == id && store.GetConversation(id)?.Revert == null) ui.Inbox.AutomaticDeliveryPaused = false;
     }
     internal static async Task CancelableAsync(Func<CancellationToken, Task> action)
     {
@@ -933,7 +1062,7 @@ internal static class TerminalApp
             table.AddRow("宿主 Python 3.10–3.14（沙箱运行依赖）", Markup.Escape(environment.Python ?? "缺失或版本不符")); table.AddRow("内嵌 PowerShell SDK", Markup.Escape(environment.PowerShell ?? "缺失"));
             table.AddRow("ripgrep", Markup.Escape(ripgrep ?? "缺失"));
             table.AddRow("PowerShell 能力", Markup.Escape(powershell.Summary));
-            table.AddRow("执行模式", options.FullAccess ? "自动选择 Hyperlight / Monty · 免审批" : "自动选择 Hyperlight / Monty"); table.AddRow("工作区", Markup.Escape(options.WorkspaceRoot));
+            table.AddRow("执行模式", "自动选择 Hyperlight / Monty · " + (options.Permission switch { PermissionMode.Full => "完全访问 · 宿主工具免审批", PermissionMode.Restricted => "限制模式 · 工作区内免审", _ => "逐次授权" })); table.AddRow("工作区", Markup.Escape(options.WorkspaceRoot));
             TerminalOutput.Write(table); foreach (var issue in environment.Problems) ui.Error(issue);
         });
         if (!environment.Ready) return 1;
@@ -1019,7 +1148,7 @@ internal static class TerminalApp
         allagent -guimode                     原生窗口工作台：静默后台启动，关窗即退出
         allagent gui [--gui-url URL]          前台运行同一个窗口（Ctrl+C 退出；--gui-url 指向 Vite 开发服务器）
         allagent gui --gui-devtools           窗口内启用开发者工具
-        allagent computer on|off|status        电脑操作开关（默认关闭）
+        allagent computer status              电脑操作状态（始终可用，技能按需加载）
         操作模式由 AI 根据任务自动选择；/computer-use 加载内置电脑操作技能
         allagent computer isolated URL Token文件路径（独立 Windows Worker 隧道）
 
@@ -1028,7 +1157,7 @@ internal static class TerminalApp
         --model ID --effort 级别 --budget Token数 --verbose --json
         --subagent-model ID --subagent-provider 配置ID/名称（默认跟随当前模型）
         --context-window 100k|200k|400k|1M|Token数
-        --full-access --ask --max-tools N --timeout 秒 --code-timeout 秒
+        --full-access --restricted --ask --max-tools N --timeout 秒 --code-timeout 秒
         --background-concurrency N（默认 0：不限并发；正整数：主动限制后台并发）
         --allow-shell alias=绝对可执行文件路径（可重复；加入可信列表后免确认）
 
@@ -1041,6 +1170,6 @@ internal static class TerminalApp
         ALLAGENT_MODEL / ALLAGENT_API_KEY / ALLAGENT_BASE_URL / ALLAGENT_PROVIDER
         ALLAGENT_PROTOCOL / ALLAGENT_REASONING_PROTOCOL / ALLAGENT_EFFORT
         模型与扩展管理无需启动沙箱；首次任务才检查运行环境。
-        默认完全访问（沙箱内执行、宿主工具免审批）；--ask 开启逐次审批。
+        默认限制模式（工作区内文件读写免审；工作区外路径、未信任程序与外部工具逐次授权）；--full-access 完全访问，--ask 逐次审批。
         """));
 }

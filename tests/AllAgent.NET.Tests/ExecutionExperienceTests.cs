@@ -57,7 +57,7 @@ public sealed class ExecutionExperienceTests
     {
         using var workspace = new TestWorkspace(); using var external = new TestWorkspace();
         var approverCalls = 0;
-        await using var runtime = await AgentRuntime.CreateAsync(workspace.Options with { FullAccess = true, Approver = (_, _) => { approverCalls++; return ValueTask.FromResult(false); } });
+        await using var runtime = await AgentRuntime.CreateAsync(workspace.Options with { Permission = PermissionMode.Full, Approver = (_, _) => { approverCalls++; return ValueTask.FromResult(false); } });
         var path = Path.Combine(external.Root, "outside.txt");
         var result = await runtime.Tools.CallAsync("file_write", JsonSerializer.SerializeToElement(new { path, content = "完全访问验证" }), default);
         Assert.True(result.Ok, result.ToJson()); Assert.Equal(0, approverCalls); Assert.Equal("完全访问验证", await File.ReadAllTextAsync(path));
@@ -115,12 +115,13 @@ public sealed class ExecutionExperienceTests
     }
 
     [Fact]
-    public void CliHasUnlimitedIterationsAndAskModeIsExplicit()
+    public void CliDefaultsToRestrictedAndPermissionFlagsStayExplicit()
     {
         var normal = TerminalArguments.Parse(["run", "task"]).Options(new(new(false, false)));
-        Assert.True(normal.FullAccess); Assert.Equal(Timeout.InfiniteTimeSpan, normal.RunTimeout); Assert.Equal(int.MaxValue, normal.MaxToolCalls);
-        Assert.False(TerminalArguments.Parse(["run", "task", "--ask"]).Options(new(new(false, false))).FullAccess);
-        Assert.True(TerminalArguments.Parse(["run", "task", "--full-access"]).Options(new(new(false, false))).FullAccess);
+        Assert.Equal(PermissionMode.Restricted, normal.Permission); Assert.Equal(Timeout.InfiniteTimeSpan, normal.RunTimeout); Assert.Equal(int.MaxValue, normal.MaxToolCalls);
+        Assert.Equal(PermissionMode.Ask, TerminalArguments.Parse(["run", "task", "--ask"]).Options(new(new(false, false))).Permission);
+        Assert.Equal(PermissionMode.Restricted, TerminalArguments.Parse(["run", "task", "--restricted"]).Options(new(new(false, false))).Permission);
+        Assert.Equal(PermissionMode.Full, TerminalArguments.Parse(["run", "task", "--full-access"]).Options(new(new(false, false))).Permission);
         Assert.Throws<ArgumentException>(() => TerminalArguments.Parse(["run", "task", "--max-iterations", "30"]));
     }
 }

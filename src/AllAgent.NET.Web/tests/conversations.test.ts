@@ -87,9 +87,9 @@ describe('conversation streaming', () => {
     const store = useConversationsStore()
     await store.sendMessage('task', 'config-1')
     event('agent.notice', { message: '正在自动继续', resetResponse: false })
-    expect(store.messages[1].notice).toBe('正在自动继续')
+    expect(store.messages[1].parts?.at(-1)).toMatchObject({ type: 'notice', text: '正在自动继续', kind: 'info', status: 'settled' })
     event('agent.token', { text: 'partial' })
-    expect(store.messages[1].notice).toBeUndefined()
+    expect(store.messages[1].content).toBe('partial')
     event('agent.done', { reason: 'timeout' })
     expect(store.messages[1]).toMatchObject({ status: 'error', finishReason: 'timeout', content: 'partial' })
     expect(store.messages[1].error).toContain('超时')
@@ -156,9 +156,33 @@ describe('conversation streaming', () => {
     event('agent.token', { text: 'completed' })
     event('agent.iteration', { current: 2 })
     event('agent.token', { text: 'partial' })
-    event('agent.notice', { resetResponse: true })
+    event('agent.notice', { message: '模型连接暂时失败，2 秒后重试（1/5）', resetResponse: true })
     expect(store.messages[1].content).toBe('completed')
+    expect(store.messages[1].parts?.at(-1)).toMatchObject({ type: 'notice', kind: 'retry', status: 'pending' })
     event('agent.done', { reason: 'stop' })
+  })
+
+  it('folds repeated retries into one line and settles it once output resumes', async () => {
+    const { useConversationsStore } = await import('../src/stores/conversations')
+    const store = useConversationsStore()
+    await store.sendMessage('hi', 'config-1')
+    event('agent.notice', { message: '模型连接暂时失败，2 秒后重试（1/5）', resetResponse: true })
+    event('agent.notice', { message: '模型连接暂时失败，4 秒后重试（2/5）', resetResponse: true })
+    const notices = store.messages[1].parts?.filter(part => part.type === 'notice') ?? []
+    expect(notices).toHaveLength(1)
+    expect(notices[0]).toMatchObject({ kind: 'retry', status: 'pending', attempts: 2, text: '模型连接暂时失败，4 秒后重试（2/5）' })
+    event('agent.token', { text: 'recovered' })
+    expect(notices[0]).toMatchObject({ status: 'settled' })
+    expect(store.messages[1].content).toBe('recovered')
+  })
+
+  it('keeps a retry line as failed when the run gives up', async () => {
+    const { useConversationsStore } = await import('../src/stores/conversations')
+    const store = useConversationsStore()
+    await store.sendMessage('hi', 'config-1')
+    event('agent.notice', { message: '模型连接暂时失败，8 秒后重试（3/5）', resetResponse: true })
+    event('agent.done', { reason: 'error' })
+    expect(store.messages[1].parts?.[0]).toMatchObject({ type: 'notice', status: 'failed', text: '模型连接暂时失败，8 秒后重试（3/5）' })
   })
 
   it('cancels the native stream and detaches late events', async () => {
@@ -273,7 +297,8 @@ describe('conversation history races', () => {
       else reply(request, true)
     }
     const sending = store.sendMessage('first input', 'config-1')
-    await expect(store.createConversation()).rejects.toThrow('请先停止')
+    // Only the submit window itself still owns the optimistic bubbles.
+    await expect(store.createConversation()).rejects.toThrow()
     expect(store.sending).toBe(true)
     expect(createRequest).toBeDefined()
     reply(createRequest!, createdConversation)
@@ -282,6 +307,38 @@ describe('conversation history races', () => {
     expect(store.messages).toHaveLength(2)
     expect(store.streamingMessageId).not.toBeNull()
     event('agent.done', { reason: 'stop' })
+  })
+
+  it('starts another conversation while a run in flight keeps streaming in the background', async () => {
+    const { useConversationsStore } = await import('../src/stores/conversations')
+    const store = useConversationsStore()
+    let creates = 0
+    handle = request => {
+      if (request.method === 'conversations.create') reply(request, { ...createdConversation, id: `conv-${++creates}` })
+      else if (request.method === 'chat.startStream') reply(request, 'stream-1')
+      else reply(request, true)
+    }
+    await store.sendMessage('long task', 'config-1')
+    event('agent.token', { text: 'working' })
+    expect(store.activeId).toBe('conv-1')
+    expect(store.streamingMessageId).not.toBeNull()
+
+    // Nothing here needs the run to stop: the view moves on, the run does not.
+    const next = await store.createConversation()
+    expect(next.id).toBe('conv-2')
+    expect(store.activeId).toBe('conv-2')
+    expect(store.messages).toEqual([])
+    // The host reports the session that is still working, so the list can mark it.
+    host.__bridgeCallback(JSON.stringify({ type: 'runs.changed', conversations: [{ conversationId: 'conv-1', title: 'New Conversation', workspace: 'C:/work', workspaceName: 'work', dataDirectory: 'C:/work/.allagent/data', state: 'running' }] }))
+    expect(store.isRunning('conv-1')).toBe(true)
+    expect(store.runState('conv-1')).toBe('running')
+    expect(store.isRunning('conv-2')).toBe(false)
+    // The detached stream neither leaks into the visible conversation nor gets cancelled.
+    event('agent.token', { text: ' still running' })
+    expect(store.messages).toEqual([])
+    event('agent.done', { reason: 'stop' })
+    host.__bridgeCallback(JSON.stringify({ type: 'runs.changed', conversations: [] }))
+    expect(store.isRunning('conv-1')).toBe(false)
   })
 
   it('ignores stale conversation reads', async () => {

@@ -25,7 +25,7 @@ const providers = [
 
 const defaultConfig: ApiConfig = {
   id: '', providerId: 'openai', displayName: '', baseUrl: providers[0].url, apiKey: '',
-  defaultModel: '', temperature: 0.7, maxTokens: 4096, isEnabled: true,
+  defaultModel: '', temperature: 0.7, maxTokens: 0, isEnabled: true,
   thinkingEnabled: false, thinkingBudget: 8000,
   contextWindowTokens: 100000, protocol: '', reasoningProtocol: 'auto', reasoningEffort: 'default',
   models: [], apiKeyEnvironmentVariable: null, authenticationProviderId: null,
@@ -203,6 +203,7 @@ export default function Models() {
             <Badge size="sm" variant="dot">协议 {config.effectiveProtocol || config.protocol || config.providerId}</Badge>
             <Badge size="sm" variant="dot">{config.models?.length ? `${config.models.length} 个模型` : config.defaultModel}</Badge>
             <Badge size="sm" variant="dot">上下文 {formatTokens(config.effectiveContextTokens ?? config.contextWindowTokens ?? 0)}</Badge>
+            <Badge size="sm" variant="dot">输出 {formatTokens(config.effectiveMaxTokens ?? config.maxTokens ?? 0)}</Badge>
             {config.thinkingEnabled ? <Badge color="violet" size="sm" variant="dot">思考 {config.reasoningEffort || 'default'}</Badge> : null}
             {config.authenticationProviderId ? <Badge color="blue" size="sm" variant="dot">登录 · {config.authenticationProviderId}</Badge> : null}
             {config.apiKeyEnvironmentVariable ? <Badge color="gray" size="sm" variant="dot">env:{config.apiKeyEnvironmentVariable}</Badge> : null}
@@ -229,7 +230,7 @@ export default function Models() {
       footer={<>
         <Button disabled={busy} onClick={() => setEditing(null)} variant="outline">取消</Button>
         <Button
-          disabled={!editing.displayName.trim() || !editing.baseUrl.trim() || !editing.defaultModel.trim() || editing.maxTokens <= 0 || editing.thinkingBudget < 512}
+          disabled={!editing.displayName.trim() || !editing.baseUrl.trim() || !editing.defaultModel.trim() || !Number.isInteger(editing.maxTokens) || editing.maxTokens < 0 || editing.thinkingBudget < 512}
           loading={busy}
           onClick={() => void run(() => store.save(savePayload(editing))).then(ok => { if (ok) setEditing(null) })}
         >保存配置</Button>
@@ -303,7 +304,7 @@ export default function Models() {
       </div> : null}
       <div className="field-pair">
         <Field label="Temperature（0–2）" onChange={value => update({ temperature: Number(value) })} type="number" value={editing.temperature} />
-        <Field label="最大输出 Tokens" onChange={value => update({ maxTokens: Number(value) })} type="number" value={editing.maxTokens} />
+        <Field label="最大输出 Tokens（0 = 自动）" onChange={value => update({ maxTokens: Number(value) })} type="number" value={editing.maxTokens} />
       </div>
       <Field
         description={`实际生效：${formatTokens(editing.effectiveContextTokens ?? editing.contextWindowTokens ?? 0)} tokens（含按模型记录的容量）。`}

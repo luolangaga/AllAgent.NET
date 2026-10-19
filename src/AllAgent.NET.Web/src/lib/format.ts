@@ -55,6 +55,14 @@ export function formatDateTime(iso: string): string {
   return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
+/** Fixed `yyyy/MM/dd HH:mm` for the commit graph's date column. */
+export function formatGitDate(iso: string): string {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return ''
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `${date.getFullYear()}/${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
 export function formatRelative(iso: string): string {
   const date = new Date(iso).getTime()
   if (Number.isNaN(date)) return ''

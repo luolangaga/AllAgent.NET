@@ -18,7 +18,7 @@ public sealed class BrowserTransportTests
         var catalog = new SkillCatalog(store, workspace.Root, workspace.Root, workspace.Root);
         var options = workspace.Options with
         {
-            SandboxMode = SandboxMode.Monty, Skills = catalog, FullAccess = true,
+            SandboxMode = SandboxMode.Monty, Skills = catalog, Permission = PermissionMode.Full,
             SharedDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "AllAgent.NET"),
             BrowserUse = new BrowserUseState { Root = Path.Combine(workspace.Root, "browser") }
         };

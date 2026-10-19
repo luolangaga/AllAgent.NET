@@ -18,26 +18,6 @@ namespace AllAgent.NET.Core.Bridge;
 /// </summary>
 public sealed class WebUiServer : IAsyncDisposable
 {
-    private static readonly Dictionary<string, string> MimeTypes = new(StringComparer.OrdinalIgnoreCase)
-    {
-        [".html"] = "text/html; charset=utf-8",
-        [".js"] = "application/javascript; charset=utf-8",
-        [".mjs"] = "application/javascript; charset=utf-8",
-        [".css"] = "text/css; charset=utf-8",
-        [".json"] = "application/json; charset=utf-8",
-        [".map"] = "application/json; charset=utf-8",
-        [".svg"] = "image/svg+xml",
-        [".png"] = "image/png",
-        [".jpg"] = "image/jpeg",
-        [".jpeg"] = "image/jpeg",
-        [".gif"] = "image/gif",
-        [".webp"] = "image/webp",
-        [".ico"] = "image/x-icon",
-        [".woff"] = "font/woff",
-        [".woff2"] = "font/woff2",
-        [".txt"] = "text/plain; charset=utf-8",
-    };
-
     private sealed class Client(WebSocket socket)
     {
         public WebSocket Socket { get; } = socket;
@@ -105,7 +85,7 @@ public sealed class WebUiServer : IAsyncDisposable
         {
             // Loopback only, and only under the host name we published: any
             // other Host header is a DNS-rebinding attempt, not a browser tab.
-            if (!IsLoopbackHost(context.Request))
+            if (!LoopbackHttp.IsLoopbackHost(context.Request))
             {
                 context.Response.StatusCode = 403;
                 context.Response.Close();
@@ -123,12 +103,6 @@ public sealed class WebUiServer : IAsyncDisposable
             Log($"[WebUiServer] request failed: {ex.Message}");
             try { context.Response.Abort(); } catch { /* connection already gone */ }
         }
-    }
-
-    private static bool IsLoopbackHost(HttpListenerRequest request)
-    {
-        var host = request.Url?.Host ?? "";
-        return host is "127.0.0.1" or "localhost" or "::1" or "[::1]";
     }
 
     private async Task AcceptBridgeAsync(HttpListenerContext context, BridgeDispatcher dispatcher, CancellationToken ct)
@@ -238,7 +212,7 @@ public sealed class WebUiServer : IAsyncDisposable
         }
         var isIndex = string.Equals(file, indexPath, StringComparison.OrdinalIgnoreCase);
         context.Response.StatusCode = 200;
-        context.Response.ContentType = MimeTypes.GetValueOrDefault(Path.GetExtension(file), "application/octet-stream");
+        context.Response.ContentType = LoopbackHttp.ContentTypeFor(file);
         // Entry scripts currently have stable names (assets/index.js). Caching
         // those across host upgrades mixes a new bridge with an old frontend.
         var extension = Path.GetExtension(file).ToLowerInvariant();
@@ -266,24 +240,7 @@ public sealed class WebUiServer : IAsyncDisposable
         _cts.Dispose();
     }
 
-    private static int GetFreePort()
-    {
-        using var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
-        return port;
-    }
+    private static int GetFreePort() => LoopbackHttp.GetFreePort();
 
-    private static void Log(string message)
-    {
-        try
-        {
-            var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-            var logPath = Path.Combine(appData, "AllAgent.NET", "allagent.log");
-            Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
-            File.AppendAllText(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {message}{Environment.NewLine}");
-        }
-        catch { /* logging must never crash */ }
-    }
+    private static void Log(string message) => LoopbackHttp.Log(message);
 }

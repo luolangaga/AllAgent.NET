@@ -84,7 +84,7 @@ public sealed class ComputerUseOverlayTests
         var path = Path.GetFullPath($"../../../../../tests/AllAgent.NET.ComputerUseFixture/bin/{configuration}/net10.0-windows/AllAgent.NET.ComputerUseFixture.exe", AppContext.BaseDirectory);
         using var fixture = Process.Start(new ProcessStartInfo(path) { UseShellExecute = false, CreateNoWindow = true });
         Assert.NotNull(fixture);
-        var state = new ComputerUseState(); state.Configure(true, ComputerInteractionMode.BackgroundOnly);
+        var state = new ComputerUseState(); state.Configure(ComputerInteractionMode.BackgroundOnly);
         var tools = new ComputerUseTools(state);
         try
         {
@@ -107,11 +107,11 @@ public sealed class ComputerUseOverlayTests
                 Assert.True((await tools.ModeAsync("foreground", "Check that mode switching retains the indicator")).Ok);
                 Assert.True((await tools.ActionAsync(id, edit, "set_value", "保持同一个提示窗口")).Ok);
                 Assert.Equal(indicator, FindWindow(null, "AllAgent Computer Use Indicator"));
-                state.Configure(false, ComputerInteractionMode.BackgroundOnly);
+                // Switching modes revokes the running operation and hides the indicator.
+                state.Configure(ComputerInteractionMode.BackgroundOnly);
                 await WaitForNoIndicatorAsync();
-                Assert.False((await tools.ActionAsync(id, edit, "set_value", "must not write")).Ok);
             }
-            state.Configure(true, ComputerInteractionMode.BackgroundOnly);
+            state.Configure(ComputerInteractionMode.BackgroundOnly);
             using (state.BeginActivityScope())
             {
                 var failed = await tools.ActionAsync(id, "stale", "invoke"); Assert.False(failed.Ok);
@@ -128,7 +128,7 @@ public sealed class ComputerUseOverlayTests
             var directFailure = await tools.ActionAsync(id, "stale", "invoke"); Assert.False(directFailure.Ok);
             await WaitForNoIndicatorAsync();
         }
-        finally { state.Configure(false, ComputerInteractionMode.BackgroundOnly); BoundedProcess.Kill(fixture); }
+        finally { state.Configure(ComputerInteractionMode.BackgroundOnly); BoundedProcess.Kill(fixture); }
     }
 
     private static async Task WaitForNoIndicatorAsync()

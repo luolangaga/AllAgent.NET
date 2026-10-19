@@ -7,6 +7,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AssemblyName>allagent</AssemblyName>
+    <ApplicationIcon>Assets\allagent.ico</ApplicationIcon>
     <CopyAgentSandbox>true</CopyAgentSandbox>
     <CopyBrowserWorker>true</CopyBrowserWorker>
     <CopyGuiShell>true</CopyGuiShell>
@@ -27,6 +28,7 @@
   <ItemGroup>
     <ProjectReference Include="../AllAgent.NET.Browser/AllAgent.NET.Browser.csproj" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" SetTargetFramework="TargetFramework=net10.0-windows" />
     <ProjectReference Include="../../plugins/AllAgent.NET.CommandCode/AllAgent.NET.CommandCode.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
+    <ProjectReference Include="../../plugins/AllAgent.NET.GitHub/AllAgent.NET.GitHub.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
     <None Include="../../docs/nuget-tool.zh-CN.md" Pack="true" PackagePath="/README.md" />
     <ProjectReference Include="../AllAgent.NET.Core/AllAgent.NET.Core.csproj" />
     <ProjectReference Include="../AllAgent.NET.Gui/AllAgent.NET.Gui.csproj" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" SetTargetFramework="TargetFramework=net10.0-windows" />
@@ -85,21 +87,6 @@
     <ItemGroup>
       <_PortableRuntimeFile Include="@(ResolvedFileToPublish)" Condition="'%(Extension)' == '.pdb' Or '%(Extension)' == '.so' Or '%(Extension)' == '.dylib' Or $([System.String]::Copy('%(RelativePath)').Replace('\','/').StartsWith('ref/'))" />
       <ResolvedFileToPublish Remove="@(_PortableRuntimeFile)" />
-    </ItemGroup>
-  </Target>
-  <!-- Tool packing collects ResolvedFileToPublish, not files copied after Publish. -->
-  <Target Name="IncludeSandboxInToolPackage" AfterTargets="ComputeFilesToPublish" Condition="'$(PackAsTool)' == 'true'">
-    <PropertyGroup>
-      <ToolSandboxPublishDirectory>$(MSBuildProjectDirectory)/obj/$(Configuration)/$(TargetFramework)/tool-sandbox/</ToolSandboxPublishDirectory>
-    </PropertyGroup>
-    <MSBuild Projects="../AllAgent.NET.Sandbox/AllAgent.NET.Sandbox.csproj" Targets="Publish"
-             Properties="Configuration=$(Configuration);PublishDir=$(ToolSandboxPublishDirectory);CopyAgentSandbox=false;PublishSingleFile=false;SelfContained=false;UseAppHost=true;RuntimeIdentifier=$(RuntimeIdentifier)" />
-    <ItemGroup>
-      <ToolSandboxFiles Include="$(ToolSandboxPublishDirectory)**/*" Exclude="$(ToolSandboxPublishDirectory)pi/**/*;$(ToolSandboxPublishDirectory)**/everything/**;$(ToolSandboxPublishDirectory)**/ref/**;$(ToolSandboxPublishDirectory)**/runtimes/linux*/**;$(ToolSandboxPublishDirectory)**/runtimes/osx*/**;$(ToolSandboxPublishDirectory)**/*.pdb;$(ToolSandboxPublishDirectory)**/*.so;$(ToolSandboxPublishDirectory)**/*.dylib" />
-      <ResolvedFileToPublish Include="@(ToolSandboxFiles)">
-        <RelativePath>sandbox/%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
-        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-      </ResolvedFileToPublish>
     </ItemGroup>
   </Target>
 </Project>

@@ -109,11 +109,17 @@ a { color: inherit; }
 .brand-copy strong { display: block; font-size: 13.5px; font-weight: 600; letter-spacing: -0.3px; }
 .brand-copy span { display: block; font-size: 10.5px; color: var(--muted-foreground); margin-top: 1px; }
 
-.new-chat { width: 100%; justify-content: flex-start; margin-bottom: 10px; }
-.new-chat > span { width: 100%; }
-.key-hint { margin-left: auto; opacity: 0.5; font-size: 10px; font-weight: 400; }
+.new-chat-row { display: flex; gap: 6px; margin-bottom: 10px; }
+.new-chat { flex: 1 1 0; min-width: 0; justify-content: center; padding-inline: 8px; font-size: 12.5px; }
 
-nav { display: flex; flex-direction: column; gap: 1px; }
+/* The nav grows with plugin pages; cap it so the conversation list keeps its space. */
+.sidebar-nav {
+  display: flex; flex-direction: column; gap: 1px;
+  flex: 0 1 auto; min-height: 0;
+  max-height: min(42vh, 320px);
+  overflow-y: auto; overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
 .nav-link { width: 100%; justify-content: flex-start; color: var(--muted-foreground); height: 31px; font-size: 12.5px; }
 .nav-link > span { width: 100%; justify-content: flex-start; }
 .nav-link.selected { background: var(--surface); color: var(--foreground); box-shadow: 0 1px 2px rgb(0 0 0 / 0.05); }
@@ -157,6 +163,49 @@ nav { display: flex; flex-direction: column; gap: 1px; }
 }
 .history-row:hover .history-actions, .history-row:focus-within .history-actions { display: flex; }
 .history-empty { padding: 8px 6px; color: var(--muted-foreground); font-size: 11.5px; line-height: 1.8; }
+
+/* Sessions with a run in flight: a marker on the row, a count on the workspace group. */
+.run-marker { display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0; }
+.run-marker em { font-style: normal; font-size: 10px; color: var(--status-dot-active, var(--color-brand, #0ea5e9)); }
+.run-marker.is-waiting em { color: var(--status-dot-warning, #f59e0b); }
+.run-badge {
+  flex-shrink: 0; font-size: 9.5px; font-variant-numeric: tabular-nums;
+  padding: 1px 6px; border-radius: 999px; color: var(--status-dot-active, var(--color-brand, #0ea5e9));
+  background: color-mix(in oklab, var(--status-dot-active, var(--color-brand, #0ea5e9)) 14%, transparent);
+}
+
+/* Bottom-right dock: sessions still running while another one is on screen. */
+.run-dock {
+  position: fixed; right: 16px; bottom: 16px; z-index: 40; width: 320px;
+  display: flex; flex-direction: column; gap: 4px;
+  background: var(--card); color: var(--card-foreground);
+  border: 1px solid var(--border); border-radius: 14px; padding: 9px 10px;
+  box-shadow: 0 18px 38px -24px rgba(15, 23, 42, 0.45);
+}
+.run-dock.is-collapsed { width: auto; max-width: 320px; }
+.run-dock > header { display: flex; align-items: center; gap: 8px; }
+.run-dock > header strong { flex: 1; min-width: 0; font-size: 11.5px; font-weight: 600; }
+.run-dock-list { display: flex; flex-direction: column; gap: 2px; max-height: 42vh; overflow-y: auto; }
+.run-dock-row { display: flex; align-items: center; gap: 2px; border-radius: 9px; }
+.run-dock-row:hover { background: var(--accent); }
+.run-dock-row.is-waiting { background: color-mix(in oklab, var(--status-dot-warning, #f59e0b) 10%, transparent); }
+.run-dock-open {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px;
+  background: transparent; border: none; border-radius: 9px; padding: 5px 6px; text-align: left;
+}
+.run-dock-title {
+  flex: 1; min-width: 0; font-size: 11.5px; color: var(--foreground);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.run-dock-open small { flex-shrink: 0; font-size: 10px; color: var(--muted-foreground); }
+.run-dock-row.is-waiting .run-dock-open small { color: var(--status-dot-warning, #f59e0b); }
+.run-dock-open em {
+  flex-shrink: 0; font-style: normal; font-size: 9.5px; color: var(--muted-foreground);
+  max-width: 88px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+@media (max-width: 720px) {
+  .run-dock { left: 12px; right: 12px; width: auto; }
+}
 
 .sidebar-footer {
   display: flex; gap: 8px; align-items: center;
@@ -314,6 +363,18 @@ nav { display: flex; flex-direction: column; gap: 1px; }
 .plugin-search [data-slot="input-shell"] { flex: 1; }
 .plugin-empty { padding: 6px 20px 16px; }
 .plugin-import { padding: 0 20px 18px; }
+.ps-commands {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 320px;
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--muted) 50%, transparent);
+}
+.ps-commands code { font-size: 11.5px; line-height: 1.9; overflow-wrap: anywhere; }
 .settings-inline-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .resource-icon-row { display: inline-flex; align-items: center; gap: 7px; }
 .conversation-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
@@ -358,6 +419,37 @@ nav { display: flex; flex-direction: column; gap: 1px; }
 .message.user .message-content { font-size: 13px; }
 .message-footer { display: flex; justify-content: flex-end; margin-top: 4px; }
 .message-copy { color: var(--muted-foreground); }
+/* Run notes are transcript entries: they appear where the event happened and a
+   retry settles into「连接已恢复」instead of hanging under the message. */
+.message-notice {
+  display: flex; align-items: flex-start; gap: 8px;
+  margin: 8px 0 4px; padding: 7px 11px;
+  border: 1px solid color-mix(in oklab, var(--border) 85%, transparent);
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--muted) 55%, transparent);
+  color: var(--muted-foreground);
+  font-size: 12px; line-height: 1.7;
+  animation: message-notice-in 0.22s ease-out;
+}
+.message-notice > span:last-child { min-width: 0; overflow-wrap: anywhere; }
+.message-notice-icon { display: inline-flex; flex: none; margin-top: 3px; }
+.message-notice.is-pending {
+  color: color-mix(in oklab, #f59e0b 74%, var(--foreground));
+  border-color: color-mix(in oklab, #f59e0b 26%, var(--border));
+  background: color-mix(in oklab, #f59e0b 9%, transparent);
+}
+.message-notice.is-failed {
+  color: var(--destructive);
+  border-color: color-mix(in oklab, var(--destructive) 28%, var(--border));
+  background: color-mix(in oklab, var(--destructive) 8%, transparent);
+}
+.notice-spin { animation: notice-spin 1s linear infinite; }
+@keyframes notice-spin { to { transform: rotate(360deg); } }
+@keyframes message-notice-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .message-notice { animation: none; }
+  .notice-spin { animation: none; }
+}
 .message-loading { padding: 4px 0 8px; }
 .message-reasoning { margin: 2px 0 8px; background: transparent; border: 1px solid var(--border); border-radius: 10px; max-width: none; }
 .message-reasoning > button { padding: 6px 10px; }
@@ -366,7 +458,7 @@ nav { display: flex; flex-direction: column; gap: 1px; }
 .reasoning-wait { font-size: 12.5px; color: var(--muted-foreground); }
 
 /* Compact tool traces: rows hug their content instead of spanning the column. */
-.tool-trace { margin: 6px 0 10px; margin-inline: 0; max-width: 560px; }
+.tool-trace { margin: 6px 0 10px; margin-inline: 0; max-width: min(620px, 100%); }
 .tool-trace [data-slot="accordion-item"] { border-top: none; }
 .tool-trace [data-slot="accordion-trigger"] {
   width: auto; max-width: 100%; gap: 10px;
@@ -380,13 +472,119 @@ nav { display: flex; flex-direction: column; gap: 1px; }
 .tool-body { display: flex; flex-direction: column; gap: 10px; padding: 2px 2px 10px; }
 .tool-body p { font-size: 12.5px; color: var(--muted-foreground); }
 .tool-body ul { margin: 0; padding-left: 20px; list-style: disc; font-size: 12.5px; line-height: 1.9; }
-.tool-lines {
-  margin: 0; padding: 12px 14px; max-height: 320px; overflow: auto;
-  border: 1px solid var(--border); border-radius: 10px; background: var(--muted);
+.tool-child { margin-left: 12px; padding-left: 10px; border-left: 2px solid color-mix(in oklab, var(--border) 75%, transparent); }
+
+/* Tool cards: the collapsed row summarises the call (target plus +/− or hit counts);
+   the expanded body renders the diff, matches or command output instead of raw JSON. */
+.tool-trigger { flex: 1; min-width: 0; }
+.tool-name { flex-shrink: 0; }
+.tool-target {
+  min-width: 0; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--font-mono); font-size: 11.5px; color: var(--muted-foreground);
+}
+.tool-metric {
+  flex-shrink: 0; display: inline-flex; align-items: center; padding: 0 5px;
+  border: 1px solid var(--border); border-radius: 5px;
+  background: color-mix(in oklab, var(--muted) 60%, transparent);
+  font-size: 10.5px; line-height: 16px; font-variant-numeric: tabular-nums; color: var(--muted-foreground);
+}
+.tool-metric.add { color: #15803d; border-color: color-mix(in oklab, #16a34a 35%, transparent); background: color-mix(in oklab, #16a34a 12%, transparent); }
+.tool-metric.del { color: #b91c1c; border-color: color-mix(in oklab, #dc2626 32%, transparent); background: color-mix(in oklab, #dc2626 10%, transparent); }
+.tool-metric.ok { color: #15803d; border-color: color-mix(in oklab, #16a34a 30%, transparent); }
+.tool-metric.error { color: var(--destructive); border-color: color-mix(in oklab, var(--destructive) 35%, transparent); }
+:root.dark .tool-metric.add, :root.dark .tool-metric.ok { color: #4ade80; }
+:root.dark .tool-metric.del, :root.dark .tool-metric.error { color: #f87171; }
+.tool-body-stack { display: flex; flex-direction: column; gap: 10px; }
+
+.tool-diff {
+  border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+  background: color-mix(in oklab, var(--surface) 92%, transparent);
+}
+.tool-diff-head {
+  display: flex; align-items: center; gap: 7px; padding: 6px 10px;
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+  background: color-mix(in oklab, var(--muted) 55%, transparent);
+}
+.tool-diff-path {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--font-mono); font-size: 11.5px;
+}
+.tool-diff-tag { margin-left: auto; flex-shrink: 0; font-size: 10.5px; color: var(--muted-foreground); }
+.tool-diff-body { max-height: 380px; overflow: auto; font-family: var(--font-mono); font-size: 11.5px; line-height: 1.7; }
+.tool-diff-row { display: flex; align-items: baseline; width: 100%; min-width: max-content; }
+.tool-diff-row code { flex: 1; padding-right: 12px; white-space: pre; }
+.tool-diff-no {
+  flex-shrink: 0; width: 34px; padding-right: 6px; text-align: right; user-select: none;
+  color: color-mix(in oklab, var(--muted-foreground) 70%, transparent); font-variant-numeric: tabular-nums;
+}
+.tool-diff-mark { flex-shrink: 0; width: 14px; text-align: center; user-select: none; }
+.tool-diff-row.added { background: color-mix(in oklab, #16a34a 12%, transparent); }
+.tool-diff-row.removed { background: color-mix(in oklab, #dc2626 10%, transparent); }
+.tool-diff-row.added .tool-diff-mark, .tool-diff-row.added .tool-diff-no { color: #15803d; }
+.tool-diff-row.removed .tool-diff-mark, .tool-diff-row.removed .tool-diff-no { color: #b91c1c; }
+:root.dark .tool-diff-row.added { background: color-mix(in oklab, #4ade80 14%, transparent); }
+:root.dark .tool-diff-row.removed { background: color-mix(in oklab, #f87171 14%, transparent); }
+:root.dark .tool-diff-row.added .tool-diff-mark, :root.dark .tool-diff-row.added .tool-diff-no { color: #86efac; }
+:root.dark .tool-diff-row.removed .tool-diff-mark, :root.dark .tool-diff-row.removed .tool-diff-no { color: #fca5a5; }
+
+.tool-search { display: flex; flex-direction: column; gap: 10px; }
+.tool-search-file {
+  border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+  background: color-mix(in oklab, var(--surface) 92%, transparent);
+}
+.tool-search-head {
+  display: flex; align-items: center; gap: 7px; padding: 6px 10px;
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 60%, transparent);
+  background: color-mix(in oklab, var(--muted) 55%, transparent);
+  font-family: var(--font-mono); font-size: 11.5px;
+}
+.tool-search-head > span:not(.tool-search-count) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-search-count { flex-shrink: 0; font-size: 10.5px; color: var(--muted-foreground); }
+.tool-search-hit { display: flex; gap: 10px; padding: 3px 10px; font-family: var(--font-mono); font-size: 11.5px; line-height: 1.75; }
+.tool-search-hit + .tool-search-hit { border-top: 1px solid color-mix(in oklab, var(--border) 38%, transparent); }
+.tool-search-hit code { flex: 1; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.tool-search-line { flex-shrink: 0; width: 38px; text-align: right; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+
+.tool-paths { display: flex; flex-direction: column; gap: 3px; max-height: 300px; overflow: auto; }
+.tool-path { display: flex; align-items: center; gap: 7px; }
+.tool-path code { font-size: 11.5px; overflow-wrap: anywhere; }
+.tool-entries { display: flex; flex-direction: column; gap: 1px; max-height: 320px; overflow: auto; }
+.tool-entry { display: flex; align-items: center; gap: 8px; padding: 2px 0; font-size: 12.5px; }
+.tool-entry-kind { font-size: 10.5px; color: var(--muted-foreground); }
+
+.tool-command {
+  margin: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 9px;
+  background: color-mix(in oklab, var(--muted) 65%, transparent);
   font-family: var(--font-mono); font-size: 12px; line-height: 1.7;
   white-space: pre-wrap; overflow-wrap: anywhere;
 }
-.tool-child { margin-left: 12px; padding-left: 10px; border-left: 2px solid color-mix(in oklab, var(--border) 75%, transparent); }
+.tool-command-mark { margin-right: 2px; color: var(--muted-foreground); }
+.tool-output-block { display: flex; flex-direction: column; gap: 3px; }
+.tool-output-label { font-size: 10.5px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted-foreground); }
+.tool-output {
+  margin: 0; padding: 9px 11px; max-height: 260px; overflow: auto;
+  border: 1px solid var(--border); border-radius: 9px;
+  background: color-mix(in oklab, var(--muted) 50%, transparent);
+  font-family: var(--font-mono); font-size: 11.5px; line-height: 1.7;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.tool-output-block.error .tool-output { border-color: color-mix(in oklab, var(--destructive) 35%, transparent); color: var(--destructive); }
+
+.tool-body .tool-hint, .tool-hint { font-size: 11.5px; line-height: 1.65; color: var(--muted-foreground); overflow-wrap: anywhere; }
+.tool-body .tool-empty, .tool-empty { font-size: 12px; color: var(--muted-foreground); }
+.tool-todos { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.tool-todo { display: flex; gap: 8px; font-size: 12.5px; line-height: 1.7; }
+.tool-todo.completed { color: var(--muted-foreground); text-decoration: line-through; }
+.tool-todo-mark { flex-shrink: 0; color: var(--muted-foreground); }
+.tool-question { font-size: 12.5px; }
+.tool-answer { padding-left: 10px; border-left: 2px solid var(--border); font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.tool-results { display: flex; flex-direction: column; gap: 8px; }
+.tool-result { display: flex; flex-direction: column; gap: 2px; padding: 7px 9px; border: 1px solid var(--border); border-radius: 9px; }
+.tool-result strong { font-size: 12.5px; font-weight: 500; }
+.tool-result-url { font-size: 11px; color: var(--muted-foreground); overflow-wrap: anywhere; }
+.tool-result-snippet { font-size: 11.5px; line-height: 1.65; color: var(--muted-foreground); }
+
+@media (max-width: 720px) { .tool-target { max-width: 150px; } }
 
 /* Sub-agent calls get their own card: live step preview, click through to the task dialog. */
 .subagent-card {
@@ -416,27 +614,90 @@ button.subagent-row:hover { background: color-mix(in oklab, var(--muted) 62%, tr
 .subagent-time { flex-shrink: 0; font-size: 10.5px; color: color-mix(in oklab, var(--muted-foreground) 75%, transparent); }
 .subagent-chevron { flex-shrink: 0; color: color-mix(in oklab, var(--muted-foreground) 65%, transparent); }
 
-.chat > .todo-bar { width: min(840px, 100%); margin: 0 auto; padding: 10px 24px 0; flex-shrink: 0; }
-.todo-header {
-  display: flex; align-items: center; gap: 10px; width: 100%;
-  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
-  padding: 8px 12px; cursor: pointer; color: var(--foreground); font-size: 12.5px;
+/* ── TODO panel ──────────────────────────────────────────────────────────── */
+/* One card holds the header and the checklist so the whole thing can animate
+   as a single surface: the meter fills the free width instead of a stub. */
+.chat > .todo-bar {
+  width: min(840px, 100%); margin: 0 auto; padding: 10px 24px 0; flex-shrink: 0;
+  --todo-accent: #10b981;
 }
-.todo-bar.is-open .todo-header { border-radius: 12px 12px 0 0; border-bottom-color: transparent; }
-.todo-title { font-weight: 600; }
-.todo-progress { width: 110px; flex-shrink: 0; }
-.todo-current { display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted-foreground); font-size: 11.5px; }
-.todo-chevron { margin-left: auto; color: var(--muted-foreground); transition: transform 0.18s ease; flex-shrink: 0; }
-.todo-chevron.open { transform: rotate(180deg); }
-.todo-body { border: 1px solid var(--border); border-top: none; border-radius: 0 0 12px 12px; padding: 12px 14px 14px; background: var(--surface); }
+:root.dark .chat > .todo-bar { --todo-accent: #34d399; }
+
+.todo-card {
+  display: flex; flex-direction: column; overflow: hidden;
+  border: 1px solid var(--border); border-radius: 14px; background: var(--surface);
+  transition: border-color 0.2s ease, box-shadow 0.24s ease;
+}
+.todo-card.is-open {
+  border-color: color-mix(in oklab, var(--foreground) 13%, var(--border));
+  box-shadow: 0 18px 36px -30px rgb(0 0 0 / 0.55);
+}
+
+.todo-header {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  background: transparent; border: 0; border-radius: 0;
+  padding: 9px 12px 9px 13px; cursor: pointer;
+  color: var(--foreground); font-size: 12.5px; text-align: left;
+  transition: background-color 0.16s ease;
+}
+.todo-header:hover { background: color-mix(in oklab, var(--muted) 62%, transparent); }
+.todo-header:focus-visible { outline: 2px solid var(--ring-color); outline-offset: -2px; }
+
+.todo-mark {
+  display: grid; place-items: center; flex: none; width: 22px; height: 22px;
+  border-radius: 7px; color: var(--muted-foreground);
+  background: color-mix(in oklab, var(--foreground) 7%, transparent);
+  transition: color 0.2s ease, background-color 0.2s ease;
+}
+.todo-bar.is-done .todo-mark {
+  color: var(--todo-accent);
+  background: color-mix(in oklab, var(--todo-accent) 15%, transparent);
+}
+.todo-title { font-weight: 600; letter-spacing: 0.01em; }
+
+.todo-meter {
+  display: flex; align-items: center; gap: 9px;
+  flex: 1 1 160px; min-width: 84px; margin-left: 2px;
+}
+.todo-progress { flex: 1 1 auto; min-width: 0; }
+.todo-track { box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--border) 65%, transparent); }
+.todo-percent {
+  flex: none; min-width: 32px; text-align: right;
+  font-size: 11px; font-variant-numeric: tabular-nums; letter-spacing: -0.01em;
+  color: var(--muted-foreground); transition: color 0.2s ease;
+}
+.todo-bar.is-done .todo-percent { color: var(--todo-accent); font-weight: 600; }
+
+.todo-current {
+  display: inline-flex; align-items: center; gap: 6px;
+  flex: 0 1 auto; min-width: 0; max-width: 34%;
+  color: var(--muted-foreground); font-size: 11.5px;
+}
+.todo-current-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.todo-chevron { display: inline-flex; flex: none; color: var(--muted-foreground); }
+
+.todo-body-shell { overflow: hidden; }
+.todo-body { border-top: 1px solid color-mix(in oklab, var(--border) 80%, transparent); padding: 12px 14px 14px; }
 .todo-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .todo-list li { display: flex; align-items: center; gap: 10px; }
-.todo-list li > span { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 13px; }
+.todo-text { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 13px; line-height: 1.5; }
+/* Status is agent-owned metadata: show it, never wrap it in a control. */
+.todo-state {
+  flex: none; min-width: 40px; text-align: right;
+  font-size: 11px; letter-spacing: -0.01em; color: var(--muted-foreground);
+  transition: color 0.2s ease;
+}
+.todo-state.in_progress { color: var(--brand); }
+.todo-state.completed { color: color-mix(in oklab, var(--todo-accent) 82%, var(--muted-foreground)); }
 .todo-done { text-decoration: line-through; opacity: 0.55; }
-.todo-status { width: 108px; height: 34px; min-height: 34px; padding: 0 10px; }
+
 .todo-add { display: flex; gap: 8px; margin-top: 12px; align-items: center; }
 .todo-add [data-slot="input-shell"] { flex: 1; }
 .todo-empty { font-size: 12.5px; color: var(--muted-foreground); margin: 6px 0; }
+
+@media (max-width: 780px) {
+  .todo-current { display: none; }
+}
 
 .composer-wrap { flex-shrink: 0; width: min(840px, 100%); margin: 0 auto; padding: 8px 24px 14px; display: flex; flex-direction: column; gap: 8px; }
 .composer-area { display: flex; flex-direction: column; position: relative; }
@@ -446,10 +707,57 @@ button.subagent-row:hover { background: color-mix(in oklab, var(--muted) 62%, tr
   padding: 0 4px 8px; font-size: 11px; color: var(--muted-foreground);
 }
 .composer-model { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-meta-actions { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.permission-picker { position: relative; display: inline-flex; min-width: 0; }
+.permission-chip {
+  display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 172px;
+  padding: 3px 8px; border: 1px solid color-mix(in oklab, var(--border) 88%, transparent);
+  border-radius: 999px; background: color-mix(in oklab, var(--surface) 92%, transparent);
+  color: var(--foreground); font: inherit; font-size: 11px; font-weight: 500; cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.permission-chip:hover { background: var(--accent); border-color: color-mix(in oklab, var(--border) 60%, transparent); }
+.permission-chip-icon { display: inline-flex; flex-shrink: 0; color: var(--muted-foreground); }
+.permission-chip > svg { flex-shrink: 0; color: var(--muted-foreground); transition: transform 0.18s ease; }
+.permission-chip > svg.is-open { transform: rotate(180deg); }
+.permission-chip[data-mode="full"] .permission-chip-icon { color: color-mix(in oklab, var(--destructive) 78%, var(--muted-foreground)); }
+.permission-chip[data-mode="plan"] .permission-chip-icon { color: var(--brand); }
+.permission-chip[data-mode="simple"] .permission-chip-icon { color: color-mix(in oklab, var(--brand) 55%, var(--muted-foreground)); }
+.permission-chip-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.permission-menu {
+  position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 61;
+  display: flex; flex-direction: column; gap: 2px; width: 268px; max-width: calc(100vw - 32px);
+  padding: 6px; border: 1px solid color-mix(in oklab, var(--border) 88%, transparent);
+  border-radius: 16px; background: color-mix(in oklab, var(--surface) 96%, transparent);
+  backdrop-filter: blur(12px) saturate(1.15);
+  box-shadow: 0 24px 48px -20px rgb(0 0 0 / 0.28), 0 4px 12px -6px rgb(0 0 0 / 0.12);
+  transform-origin: bottom right;
+}
+.permission-menu-head { display: flex; flex-direction: column; gap: 2px; padding: 5px 10px 7px; }
+.permission-menu-head strong { font-size: 11.5px; font-weight: 600; letter-spacing: -0.01em; }
+.permission-menu-head span { font-size: 10.5px; line-height: 1.55; color: var(--muted-foreground); }
+.permission-item {
+  position: relative; isolation: isolate; display: flex; align-items: center; gap: 10px; width: 100%;
+  border: none; border-radius: 11px; padding: 7px 10px; background: transparent; color: inherit;
+  font: inherit; text-align: left; cursor: pointer;
+}
+.permission-item-hover { position: absolute; inset: 0; z-index: -1; border-radius: inherit; background: var(--accent); }
+.permission-item-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+.permission-item-text strong { font-size: 12.5px; font-weight: 500; letter-spacing: -0.01em; }
+.permission-item-text em { font-size: 10.5px; font-style: normal; line-height: 1.5; color: var(--muted-foreground); }
+.permission-item.is-current .permission-item-text strong { font-weight: 600; }
+.permission-item-check { flex-shrink: 0; color: var(--brand); }
 .composer-hint { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--muted-foreground); padding: 10px 4px 0; }
 .context-usage { display: flex; align-items: center; gap: 10px; font-size: 10.5px; color: var(--muted-foreground); padding: 0 4px; }
 .context-usage > div { flex: 1; }
 .context-label { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.cache-chip { white-space: nowrap; font-variant-numeric: tabular-nums; color: color-mix(in oklab, var(--brand) 72%, var(--muted-foreground)); }
+/* Footer line under the composer: account quota and plugin contributions, mirroring the terminal. */
+.session-footer { display: flex; flex-wrap: wrap; gap: 3px 14px; padding: 2px 4px 0; font-size: 10.5px; line-height: 1.5; color: var(--muted-foreground); }
+.session-footer-item { display: inline-flex; align-items: baseline; gap: 4px; min-width: 0; font-variant-numeric: tabular-nums; }
+.session-footer-item:not(:first-child)::before { content: '·'; margin-right: 4px; color: color-mix(in oklab, var(--muted-foreground) 60%, transparent); }
+.session-footer-label { color: color-mix(in oklab, var(--muted-foreground) 82%, transparent); }
+.session-footer-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 320px; }
 
 .welcome { width: min(720px, 100%); padding: 28px 28px 12px; margin: auto; }
 .welcome-mark {
@@ -477,7 +785,7 @@ button.subagent-row:hover { background: color-mix(in oklab, var(--muted) 62%, tr
 /* Iconiq components bring their own springs; these are the hand-rolled
    controls, matched to the same motion language. */
 @media (prefers-reduced-motion: no-preference) {
-  .idea, .ws-group-head, .history-row, .task-row, .todo-header, .topbar-workspace {
+  .idea, .ws-group-head, .history-row, .task-row, .topbar-workspace {
     transition:
       transform 0.17s cubic-bezier(0.34, 1.56, 0.64, 1),
       background-color 0.15s ease,
@@ -485,7 +793,7 @@ button.subagent-row:hover { background: color-mix(in oklab, var(--muted) 62%, tr
       box-shadow 0.18s ease;
   }
   .idea:hover, .task-row:hover { transform: translateY(-1.5px); box-shadow: 0 8px 20px -12px rgb(0 0 0 / 0.3); }
-  .idea:active, .task-row:active, .todo-header:active, .ws-group-head:active, .topbar-workspace:active {
+  .idea:active, .task-row:active, .ws-group-head:active, .topbar-workspace:active {
     transform: scale(0.975);
     transition-duration: 0.09s;
   }
@@ -513,6 +821,8 @@ button.subagent-row:hover { background: color-mix(in oklab, var(--muted) 62%, tr
 }
 .markdown code { font-family: var(--font-mono); }
 .markdown :not(pre) > code { background: var(--muted); padding: 2px 5px; border-radius: 5px; font-size: 12.5px; }
+.markdown :not(pre) > code.file-ref { cursor: pointer; text-decoration: underline dotted var(--border); text-underline-offset: 4px; }
+.markdown :not(pre) > code.file-ref:hover { background: var(--accent); color: var(--foreground); }
 .markdown blockquote { border-left: 3px solid var(--border); margin: 14px 0; padding-left: 14px; color: var(--muted-foreground); }
 .markdown table { display: block; overflow: auto; border-collapse: collapse; margin: 12px 0; }
 .markdown td, .markdown th { padding: 8px 12px; border: 1px solid var(--border); }
@@ -706,4 +1016,393 @@ button.subagent-row:hover { background: color-mix(in oklab, var(--muted) 62%, tr
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* ── Plugin web extensions ───────────────────────────────────────────────────
+   Plugin pages and tool cards render inside sandboxed iframes on the plugin asset origin;
+   the shell around them keeps the host's spacing, borders and tokens. */
+.plugin-page { display: flex; flex-direction: column; flex: 1; min-height: 0; gap: 10px; padding: 14px clamp(12px, 2vw, 24px) 18px; }
+.plugin-page-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.plugin-page-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.plugin-page-title strong { font-size: 14px; font-weight: 600; }
+.plugin-page-package { font-size: 11px; color: var(--muted-foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-page-meta { display: flex; align-items: center; gap: 10px; }
+.plugin-page-caps { font-size: 11px; color: var(--muted-foreground); max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-page-missing { display: flex; gap: 8px; justify-content: center; margin-top: 12px; }
+
+.plugin-frame-shell { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.plugin-frame { display: block; flex: 1; width: 100%; min-height: 0; border: 0; background: transparent; }
+.plugin-page-frame .plugin-frame { border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.plugin-frame-loading {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 8px;
+  font-size: 12px; color: var(--muted-foreground); border-radius: 12px;
+  background: color-mix(in oklab, var(--surface) 84%, transparent);
+}
+.plugin-frame-spinner {
+  width: 13px; height: 13px; border-radius: 999px;
+  border: 2px solid color-mix(in oklab, var(--muted-foreground) 30%, transparent);
+  border-top-color: var(--brand); animation: plugin-spin 0.8s linear infinite;
+}
+@keyframes plugin-spin { to { transform: rotate(360deg); } }
+.plugin-frame-error {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 8px;
+  padding: 16px; border: 1px dashed var(--border); border-radius: 12px;
+  font-size: 12px; line-height: 1.7; color: var(--muted-foreground);
+}
+.plugin-frame-error strong { font-size: 13px; color: var(--foreground); }
+
+.plugin-tool-card { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: color-mix(in oklab, var(--surface) 92%, transparent); }
+.plugin-tool-card .plugin-frame { min-height: 140px; }
+
+.plugin-web-block {
+  display: flex; flex-direction: column; gap: 6px; margin-top: 2px; padding: 8px 10px;
+  border: 1px solid color-mix(in oklab, var(--border) 80%, transparent); border-radius: 10px;
+  background: color-mix(in oklab, var(--muted) 45%, transparent);
+}
+.plugin-web-head { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.plugin-web-title { font-size: 12px; font-weight: 600; }
+.plugin-web-caps { font-size: 10.5px; color: var(--muted-foreground); max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-web-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+
+/* ── Floating panels (文件 / Git / 终端 气泡) ────────────────────────────────
+   Topbar toggles open draggable, resizable windows above the page. They stack below
+   modals so the command palette and dialogs always win; the AI layout itself is untouched. */
+.floating-panel {
+  position: fixed; display: flex; flex-direction: column; overflow: hidden;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: 0 18px 38px -24px rgba(15, 23, 42, 0.45), 0 2px 6px rgba(15, 23, 42, 0.08);
+}
+.floating-panel.is-narrow { left: 8px !important; right: 8px; top: 54px; bottom: 10px; width: auto !important; height: auto !important; z-index: 48 !important; }
+.panel-head {
+  display: flex; align-items: center; gap: 8px; padding: 7px 8px 7px 12px; flex: 0 0 auto;
+  border-bottom: 1px solid var(--border); background: color-mix(in oklab, var(--muted) 45%, transparent);
+  cursor: grab; user-select: none; touch-action: none;
+}
+.panel-head:active { cursor: grabbing; }
+.panel-title { display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 600; color: var(--foreground); min-width: 0; }
+.panel-title > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.panel-head-actions { margin-left: auto; display: flex; align-items: center; gap: 2px; }
+.panel-head-actions > * { cursor: default; }
+.panel-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.panel-resize {
+  position: absolute; right: 0; bottom: 0; width: 16px; height: 16px; cursor: nwse-resize; touch-action: none;
+  background:
+    linear-gradient(135deg, transparent 0 46%, color-mix(in oklab, var(--muted-foreground) 55%, transparent) 46% 54%, transparent 54% 68%,
+      color-mix(in oklab, var(--muted-foreground) 55%, transparent) 68% 76%, transparent 76%);
+  opacity: 0.7;
+}
+.panel-resize:hover { opacity: 1; }
+
+.topbar-icon-badge { position: relative; display: inline-flex; align-items: center; justify-content: center; }
+.topbar-icon-badge i {
+  position: absolute; top: -7px; right: -9px; min-width: 15px; height: 15px; padding: 0 4px;
+  border-radius: 999px; background: var(--brand); color: #fff; font-style: normal; font-size: 9.5px;
+  font-weight: 600; line-height: 15px; text-align: center; letter-spacing: 0;
+}
+.topbar-right .is-active { background: var(--accent); color: var(--foreground); }
+
+/* ── Workspace browser (只读文件气泡) ──────────────────────────────────────── */
+/* VSCode-style file type icons (Material Icon Theme) used by the tree and the Git list. */
+.file-type-icon { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; line-height: 0; }
+.file-type-icon svg { display: block; width: 100%; height: 100%; }
+.wsb-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 268px minmax(0, 1fr); }
+.wsb-side { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--border); }
+.wsb-tools { display: flex; align-items: center; gap: 6px; padding: 8px; border-bottom: 1px solid var(--border); }
+.wsb-tools [data-slot="input-shell"] { flex: 1; min-width: 0; }
+.wsb-tree { flex: 1; min-height: 0; overflow: auto; padding: 4px 4px 10px; }
+.wsb-results { display: flex; flex-direction: column; padding: 2px 0 8px; }
+.wsb-note { margin: 10px 10px 6px; font-size: 11.5px; color: var(--muted-foreground); display: flex; align-items: center; gap: 6px; }
+.tree-row { display: flex; align-items: center; gap: 2px; border-radius: 7px; min-height: 24px; }
+.tree-row:hover { background: color-mix(in oklab, var(--accent) 72%, transparent); }
+.tree-row-flat { width: 100%; border: 0; background: transparent; text-align: left; padding: 3px 8px; display: flex; gap: 6px; align-items: center; cursor: pointer; color: inherit; }
+.tree-row-flat .tree-path { margin-left: auto; font-size: 10.5px; color: var(--muted-foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 55%; }
+.tree-main {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 5px; padding: 3px 4px;
+  border: 0; background: transparent; color: inherit; font: inherit; font-size: 12px; text-align: left; cursor: pointer;
+}
+.tree-chevron { flex: 0 0 auto; color: var(--muted-foreground); transition: transform 0.15s ease; }
+.tree-chevron.is-open { transform: rotate(90deg); }
+.tree-chevron-spacer { width: 12px; flex: 0 0 auto; }
+.tree-icon { flex: 0 0 auto; color: var(--muted-foreground); }
+.tree-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-actions { display: none; align-items: center; gap: 1px; padding-right: 4px; flex: 0 0 auto; }
+.tree-row:hover .tree-actions { display: flex; }
+.tree-children { display: block; }
+.wsb-preview { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.wsb-preview-head {
+  display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-bottom: 1px solid var(--border); flex: 0 0 auto;
+}
+.wsb-preview-path { flex: 1; min-width: 0; font-size: 11.5px; color: var(--muted-foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wsb-preview-actions { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+.wsb-preview-body { flex: 1; min-height: 0; overflow: auto; padding: 10px 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.wsb-placeholder { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 24px; text-align: center; color: var(--muted-foreground); font-size: 12px; }
+.wsb-meta { display: flex; gap: 14px; margin: 4px 0 0; font-size: 11px; color: var(--muted-foreground); }
+.file-image-wrap { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.file-image { max-width: 100%; border: 1px solid var(--border); border-radius: 10px; background:
+  conic-gradient(from 90deg, color-mix(in oklab, var(--muted) 60%, transparent) 25%, transparent 0 50%, color-mix(in oklab, var(--muted) 60%, transparent) 0 75%, transparent 0) 0 0 / 18px 18px; }
+.file-markdown { font-size: 13px; line-height: 1.75; }
+
+/* ── Git panel ─────────────────────────────────────────────────────────────── */
+.git-head-info { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.git-repo { font-size: 11.5px; color: var(--muted-foreground); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-branch-wrap { position: relative; }
+.git-branch-chip {
+  display: flex; align-items: center; gap: 5px; padding: 3px 8px; border-radius: 999px;
+  border: 1px solid var(--border); background: color-mix(in oklab, var(--muted) 55%, transparent);
+  font: inherit; font-size: 11.5px; color: var(--foreground); cursor: pointer;
+}
+.git-branch-chip:hover { border-color: color-mix(in oklab, var(--brand) 45%, var(--border)); }
+.git-ahead { color: #16a34a; font-size: 11px; }
+.git-behind { color: #d97706; font-size: 11px; }
+.git-branch-menu {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 12; min-width: 240px; max-height: 320px; overflow: auto;
+  display: flex; flex-direction: column; gap: 1px; padding: 6px;
+  background: color-mix(in oklab, var(--surface) 92%, transparent); border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: 0 18px 38px -24px rgba(15, 23, 42, 0.45); backdrop-filter: blur(12px) saturate(1.15);
+}
+.git-branch-item {
+  display: flex; align-items: center; gap: 7px; padding: 6px 8px; border: 0; border-radius: 8px;
+  background: transparent; color: inherit; font: inherit; font-size: 12px; text-align: left; cursor: pointer;
+}
+.git-branch-item:hover { background: var(--accent); }
+.git-branch-item span:first-of-type { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px; text-align: center; color: var(--muted-foreground); font-size: 12px; }
+.git-state p { margin: 0; max-width: 420px; line-height: 1.8; }
+.git-banner {
+  display: flex; align-items: center; gap: 8px; padding: 7px 12px; flex: 0 0 auto;
+  background: color-mix(in oklab, #f59e0b 14%, var(--surface)); border-bottom: 1px solid var(--border); font-size: 12px;
+}
+.git-banner svg { color: #d97706; flex: 0 0 auto; }
+.git-tabs { display: flex; align-items: center; gap: 2px; padding: 6px 10px 0; border-bottom: 1px solid var(--border); flex: 0 0 auto; }
+.git-tab {
+  border: 0; background: transparent; color: var(--muted-foreground); font: inherit; font-size: 12.5px;
+  padding: 7px 12px 8px; border-radius: 9px 9px 0 0; cursor: pointer; border-bottom: 2px solid transparent;
+}
+.git-tab:hover { color: var(--foreground); }
+.git-tab.is-active { color: var(--foreground); font-weight: 600; border-bottom-color: var(--brand); }
+.git-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.git-console { flex: 0 0 auto; border-bottom: 1px solid var(--border); background: color-mix(in oklab, var(--muted) 35%, transparent); }
+.git-console-head { display: flex; align-items: center; gap: 8px; padding: 5px 10px; font-size: 11.5px; color: var(--muted-foreground); }
+.git-console-head span { flex: 1; }
+.git-console-output {
+  margin: 0; padding: 6px 12px 10px; max-height: 140px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+  font-family: var(--font-mono); font-size: 11px; line-height: 1.7; color: var(--foreground);
+}
+.git-console-error { margin: 0; padding: 0 12px 8px; font-size: 11.5px; color: var(--destructive); }
+/* Source Control view: toolbar + change groups with checkboxes; the commit area is pinned
+   at the bottom, the diff of the clicked file shows on the right. */
+.git-changes { flex: 1; min-height: 0; display: grid; grid-template-columns: 380px minmax(0, 1fr); }
+.git-scm { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--border); }
+.git-scm-toolbar { display: flex; align-items: center; gap: 2px; padding: 6px 8px; border-bottom: 1px solid var(--border); flex: 0 0 auto; }
+.git-scm-selection { margin-left: 6px; font-size: 11px; color: var(--muted-foreground); }
+.git-scm-list { flex: 1; min-height: 0; overflow: auto; padding-bottom: 8px; }
+.git-scm-group-head { display: flex; align-items: center; gap: 6px; padding: 5px 8px 3px; }
+.git-scm-chevron {
+  display: inline-flex; align-items: center; justify-content: center; border: 0; padding: 2px; border-radius: 4px;
+  background: transparent; color: var(--muted-foreground); cursor: pointer; transition: transform 0.15s ease;
+}
+.git-scm-chevron:hover { background: var(--accent); color: var(--foreground); }
+.git-scm-chevron.is-open { transform: rotate(90deg); }
+.git-scm-group-title { font-size: 12px; font-weight: 600; }
+.git-scm-group-title.conflicted { color: var(--destructive); }
+.git-scm-group-count { color: var(--muted-foreground); font-size: 11px; }
+.git-scm-spacer { flex: 1; }
+.git-scm-browse { display: flex; align-items: center; gap: 4px; padding: 2px 10px 6px 26px; font-size: 11px; color: var(--muted-foreground); }
+.git-scm-commit { flex: 0 0 auto; display: flex; flex-direction: column; gap: 6px; padding: 8px 10px 10px; border-top: 1px solid var(--border); background: var(--surface); }
+.git-scm-commit-tools { display: flex; align-items: center; gap: 3px; }
+.git-scm-commit-tools .git-check { margin-right: 2px; }
+.git-scm-commit-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.git-commit-input {
+  width: 100%; resize: vertical; min-height: 56px; max-height: 160px; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--background); color: var(--foreground);
+  font: inherit; font-size: 12.5px; line-height: 1.6;
+}
+.git-commit-input:focus { outline: none; border-color: color-mix(in oklab, var(--brand) 55%, var(--border)); }
+.git-check { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted-foreground); cursor: pointer; user-select: none; }
+.git-check input { accent-color: var(--brand); }
+.git-group { margin-top: 4px; }
+.git-files { display: flex; flex-direction: column; padding: 0 6px; }
+.git-file { display: flex; align-items: center; gap: 0; border-radius: 7px; }
+.git-file:hover { background: color-mix(in oklab, var(--accent) 72%, transparent); }
+.git-file.is-active { background: color-mix(in oklab, var(--brand) 14%, transparent); }
+.git-file-check { margin: 0 0 0 8px; accent-color: var(--brand); flex: 0 0 auto; cursor: pointer; }
+.git-group-check { margin: 0 2px 0 0; }
+.git-file-main {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; padding: 4px 5px 4px 6px; border: 0;
+  background: transparent; color: inherit; font: inherit; font-size: 12px; text-align: left; cursor: pointer;
+}
+.git-letter {
+  flex: 0 0 auto; width: 15px; height: 15px; border-radius: 4px; font-size: 10px; font-weight: 700;
+  display: inline-flex; align-items: center; justify-content: center; color: #fff;
+}
+.git-letter.add { background: #16a34a; }
+.git-letter.del { background: var(--destructive); }
+.git-letter.edit { background: #d97706; }
+.git-letter.info { background: #2563eb; }
+.git-letter.new { background: color-mix(in oklab, var(--muted-foreground) 75%, transparent); }
+.git-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-file-dir { color: var(--muted-foreground); }
+.git-staged-tag {
+  flex: 0 0 auto; font-size: 9.5px; line-height: 15px; padding: 0 5px; border-radius: 999px;
+  color: #16a34a; border: 1px solid color-mix(in oklab, #16a34a 42%, transparent);
+  background: color-mix(in oklab, #16a34a 10%, transparent);
+}
+.git-conflict-note { color: var(--destructive); }
+.git-file-origin { color: var(--muted-foreground); font-size: 11px; }
+.git-file-actions { display: none; align-items: center; gap: 1px; padding-right: 4px; }
+.git-file:hover .git-file-actions, .git-file.is-active .git-file-actions { display: flex; }
+.git-note { margin: 8px 10px; font-size: 11.5px; color: var(--muted-foreground); display: flex; gap: 6px; align-items: center; }
+.git-clean { margin-top: 12px; }
+.git-diff-pane, .git-show-pane { min-width: 0; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+.git-pane-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--muted-foreground); font-size: 12px; padding: 24px; text-align: center; }
+.git-diff { display: flex; flex-direction: column; min-height: 100%; }
+.git-diff .tool-diff-head { position: sticky; top: 0; z-index: 3; background: var(--surface); }
+.git-diff-scroll { flex: 1; min-height: 0; }
+
+/* Commit graph: ref sidebar, text/hash filter, lane drawing and author/date columns. */
+.git-log { flex: 1; min-height: 0; display: grid; grid-template-columns: 208px minmax(0, 1fr); }
+.git-log.has-detail { grid-template-columns: 208px minmax(0, 1fr) 380px; }
+.git-log-side { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--border); }
+.git-log-side-search { padding: 8px; border-bottom: 1px solid var(--border); }
+.git-ref-list { flex: 1; min-height: 0; overflow: auto; padding: 4px 6px 10px; display: flex; flex-direction: column; gap: 1px; }
+.git-ref-group { margin: 8px 6px 2px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.04em; color: var(--muted-foreground); }
+.git-ref-item {
+  display: flex; align-items: center; gap: 6px; padding: 4px 8px; border: 0; border-radius: 7px; min-width: 0;
+  background: transparent; color: inherit; font: inherit; font-size: 12px; text-align: left; cursor: pointer;
+}
+.git-ref-item:hover { background: color-mix(in oklab, var(--accent) 72%, transparent); }
+.git-ref-item.is-active { background: color-mix(in oklab, var(--brand) 16%, transparent); font-weight: 600; }
+.git-ref-item svg { flex: 0 0 auto; color: var(--muted-foreground); }
+.git-ref-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-ref-badge {
+  flex: 0 0 auto; font-size: 9.5px; font-weight: 600; color: var(--brand); padding: 0 5px; border-radius: 999px;
+  border: 1px solid color-mix(in oklab, var(--brand) 45%, transparent);
+}
+.git-log-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.git-log-toolbar { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.git-log-toolbar [data-slot="input-shell"] { flex: 1; min-width: 0; }
+.git-log-scope { font-size: 11px; color: var(--muted-foreground); white-space: nowrap; }
+.git-log-columns {
+  display: grid; grid-template-columns: var(--graph-width, 36px) minmax(0, 1fr) 110px 132px; gap: 8px; align-items: center;
+  padding: 5px 10px; font-size: 11px; color: var(--muted-foreground);
+  border-bottom: 1px solid var(--border); background: color-mix(in oklab, var(--muted) 30%, transparent);
+}
+.git-log-col-graph { width: 100%; }
+.git-log-rows { flex: 1; min-height: 0; overflow: auto; }
+.git-log-row {
+  display: grid; grid-template-columns: var(--graph-width, 36px) minmax(0, 1fr) 110px 132px; gap: 8px; align-items: center;
+  width: 100%; height: 30px; padding: 0 10px; border: 0;
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 45%, transparent);
+  background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.git-log-row:hover { background: color-mix(in oklab, var(--accent) 62%, transparent); }
+.git-log-row.is-active { background: color-mix(in oklab, var(--brand) 12%, transparent); }
+.git-graph-cell { display: block; flex: 0 0 auto; }
+.git-log-subject { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; font-size: 12.5px; }
+.git-log-subject-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-log-refs { display: flex; align-items: center; gap: 4px; flex: 0 1 auto; min-width: 0; overflow: hidden; }
+.git-ref-chip {
+  display: inline-flex; align-items: center; gap: 3px; height: 16px; padding: 0 6px; border-radius: 999px;
+  font-size: 10px; border: 1px solid var(--border); white-space: nowrap; flex: 0 0 auto;
+}
+.git-ref-chip.local { color: #16a34a; border-color: color-mix(in oklab, #16a34a 42%, transparent); background: color-mix(in oklab, #16a34a 10%, transparent); }
+.git-ref-chip.remote { color: #2563eb; border-color: color-mix(in oklab, #2563eb 40%, transparent); background: color-mix(in oklab, #2563eb 9%, transparent); }
+.git-ref-chip.tag { color: #d97706; border-color: color-mix(in oklab, #d97706 40%, transparent); background: color-mix(in oklab, #d97706 10%, transparent); }
+.git-ref-chip.head { color: var(--brand); border-color: color-mix(in oklab, var(--brand) 45%, transparent); background: color-mix(in oklab, var(--brand) 10%, transparent); font-weight: 600; }
+.git-log-author { font-size: 11.5px; color: var(--muted-foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-log-date { font-size: 11px; color: var(--muted-foreground); white-space: nowrap; }
+.git-log-more { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 10px; font-size: 11px; color: var(--muted-foreground); }
+.git-log-detail { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: auto; border-left: 1px solid var(--border); }
+.git-hash { font-size: 11px; color: var(--muted-foreground); }
+.git-log-meta { font-size: 10.5px; color: var(--muted-foreground); }
+.git-show-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px 6px; flex-wrap: wrap; }
+.git-show-subject { margin: 2px 12px 0; font-size: 13px; font-weight: 600; line-height: 1.5; }
+.git-show-actions { display: flex; align-items: center; gap: 6px; padding: 8px 12px 2px; }
+.git-show-body {
+  margin: 4px 12px 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--background);
+  font-family: var(--font-mono); font-size: 11px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; max-height: 160px; overflow: auto;
+}
+.git-show-files { display: flex; flex-direction: column; padding: 0 8px 12px; }
+.git-branches { flex: 1; min-height: 0; overflow: auto; padding: 10px 12px 16px; display: flex; flex-direction: column; gap: 12px; }
+.git-branch-create { display: flex; align-items: center; gap: 8px; }
+.git-branch-create [data-slot="input-shell"] { flex: 1; min-width: 0; }
+.git-section { display: flex; flex-direction: column; gap: 4px; border: 1px solid var(--border); border-radius: 12px; padding: 8px 10px 10px; }
+.git-section h4 { margin: 2px 0 4px; font-size: 11.5px; font-weight: 600; color: var(--muted-foreground); }
+.git-branch-list { display: flex; flex-direction: column; }
+.git-branch-row { display: flex; align-items: center; gap: 10px; padding: 5px 2px; flex-wrap: wrap; }
+.git-branch-row + .git-branch-row { border-top: 1px solid color-mix(in oklab, var(--border) 55%, transparent); }
+.git-branch-name { display: flex; align-items: center; gap: 6px; font-size: 12.5px; }
+.git-branch-meta { flex: 1; min-width: 120px; font-size: 11px; color: var(--muted-foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-branch-actions { display: flex; align-items: center; gap: 3px; }
+.git-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.git-tag { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); background: color-mix(in oklab, var(--muted) 45%, transparent); }
+.git-stash { flex: 1; min-height: 0; overflow: auto; padding: 10px 12px 16px; display: flex; flex-direction: column; gap: 10px; }
+.git-stash-create { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.git-stash-create [data-slot="input-shell"] { flex: 1; min-width: 200px; }
+.git-stash-list { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+.git-stash-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; }
+.git-stash-row + .git-stash-row { border-top: 1px solid color-mix(in oklab, var(--border) 55%, transparent); }
+.git-stash-icon { color: var(--muted-foreground); flex: 0 0 auto; }
+.git-stash-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.git-stash-message { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-stash-meta { font-size: 10.5px; color: var(--muted-foreground); }
+.git-stash-actions { display: flex; align-items: center; gap: 3px; }
+
+/* ── Integrated terminal panel ─────────────────────────────────────────────── */
+.term-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.term-tabs { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-bottom: 1px solid var(--border); flex: 0 0 auto; background: color-mix(in oklab, var(--muted) 30%, transparent); }
+.term-tab-strip { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; overflow-x: auto; }
+.term-tab { display: flex; align-items: center; border-radius: 8px; border: 1px solid transparent; max-width: 220px; }
+.term-tab.is-active { background: var(--surface); border-color: var(--border); box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06); }
+.term-tab-main {
+  display: flex; align-items: center; gap: 6px; padding: 4px 4px 4px 9px; border: 0; background: transparent;
+  color: var(--muted-foreground); font: inherit; font-size: 12px; cursor: pointer; min-width: 0;
+}
+.term-tab.is-active .term-tab-main { color: var(--foreground); }
+.term-tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.term-tab-state { font-size: 10px; color: var(--destructive); }
+.term-tab.is-dead .term-tab-title { text-decoration: line-through; opacity: 0.75; }
+.term-tab-close {
+  display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; margin-right: 3px;
+  border: 0; border-radius: 6px; background: transparent; color: var(--muted-foreground); cursor: pointer;
+}
+.term-tab-close:hover { background: var(--accent); color: var(--foreground); }
+.term-actions { position: relative; display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+.term-shell-menu {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 12; min-width: 220px; display: flex; flex-direction: column; gap: 1px; padding: 6px;
+  background: color-mix(in oklab, var(--surface) 92%, transparent); border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: 0 18px 38px -24px rgba(15, 23, 42, 0.45); backdrop-filter: blur(12px) saturate(1.15);
+}
+.term-shell-item {
+  display: flex; align-items: center; gap: 8px; padding: 7px 9px; border: 0; border-radius: 8px;
+  background: transparent; color: inherit; font: inherit; font-size: 12.5px; text-align: left; cursor: pointer;
+}
+.term-shell-item:hover { background: var(--accent); }
+.term-shell-item span:first-of-type { flex: 1; }
+.term-shell-default { font-size: 10px; color: var(--muted-foreground); border: 1px solid var(--border); border-radius: 999px; padding: 0 6px; }
+.term-body { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.term-view { flex: 1; min-height: 0; padding: 8px 4px 2px 10px; }
+.term-view.is-hidden { display: none; }
+.term-view .xterm { height: 100%; }
+.term-view .xterm-viewport { background: transparent !important; }
+.term-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 24px; }
+.term-shell-grid { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.term-note { margin: 0; font-size: 11.5px; color: var(--muted-foreground); display: flex; align-items: center; gap: 6px; }
+.term-overlay {
+  position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+  background: color-mix(in oklab, var(--surface) 82%, transparent); backdrop-filter: blur(3px); font-size: 12.5px;
+}
+.term-overlay p { margin: 0; color: var(--muted-foreground); }
+.term-overlay-actions { display: flex; align-items: center; gap: 8px; }
+.term-statusbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 12px;
+  border-top: 1px solid var(--border); font-size: 10.5px; color: var(--muted-foreground); flex: 0 0 auto;
+}
+.term-statusbar span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+@media (max-width: 960px) {
+  .git-changes { grid-template-columns: 320px minmax(0, 1fr); }
+  .git-log { grid-template-columns: 176px minmax(0, 1fr); }
+  .git-log.has-detail { grid-template-columns: 176px minmax(0, 1fr) 300px; }
+  .wsb-body { grid-template-columns: 230px minmax(0, 1fr); }
 }

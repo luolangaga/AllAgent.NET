@@ -21,8 +21,6 @@ public partial class DataStore
             throw new ArgumentException("TODO 最多 100 项；ID 为 1–64 字符，内容为 1–300 字符，状态为 pending、in_progress 或 completed。");
         if (snapshot.Select(t => t.Id).Distinct(StringComparer.Ordinal).Count() != snapshot.Count)
             throw new ArgumentException("TODO ID 不能重复。");
-        if (snapshot.Count(t => t.Status == "in_progress") > 1)
-            throw new ArgumentException("同时只能有一项 TODO 处于进行中。");
         _lock.EnterWriteLock();
         try
         {

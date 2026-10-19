@@ -1,3 +1,5 @@
+using System.Text.Json;
+using AllAgent.NET.Core.Bridge;
 using AllAgent.NET.Core.Services.AI;
 using AllAgent.NET.Core.Tools;
 
@@ -62,11 +64,18 @@ public interface IAccountModelProvider
     IAiProvider ModelProvider { get; }
 }
 
-public sealed class PluginContext(string dataDirectory, IReadOnlyDictionary<Type, object>? services = null)
+public sealed class PluginContext(string dataDirectory, IReadOnlyDictionary<Type, object>? services = null, string? packageId = null, PluginWebEvents? webEvents = null)
 {
+    private readonly PluginWebChannel? _web = webEvents == null ? null : new PluginWebChannel(packageId ?? "plugin", webEvents);
     public string DataDirectory { get; } = dataDirectory;
+    /// <summary>Channel to the plugin's own browser frames: push events, everything else flows
+    /// through the bridge methods registered with <see cref="AddWebBridge"/>.</summary>
+    public PluginWebChannel Web => _web ?? throw new InvalidOperationException("此宿主未提供插件 Web 通道。");
+    /// <summary>Methods exposed to the plugin's own frames as plugin.&lt;packageId&gt;.&lt;name&gt;.</summary>
+    internal List<PluginWebBridgeHandler> WebBridges { get; } = [];
     public T GetService<T>() where T : class => services?.TryGetValue(typeof(T), out var service) == true ? (T)service : throw new InvalidOperationException("此宿主未提供服务：" + typeof(T).Name);
     internal List<IAgentToolSet> Tools { get; } = [];
+    internal List<IAgentToolSet> WorkspaceIndependentTools { get; } = [];
     internal List<IAiProvider> Providers { get; } = [];
     internal List<ModelFooterProvider> FooterProviders { get; } = [];
     public void AddModelFooter(ModelFooterProvider provider) => FooterProviders.Add(provider);
@@ -76,12 +85,25 @@ public sealed class PluginContext(string dataDirectory, IReadOnlyDictionary<Type
     internal List<AgentRequestExtension> RequestExtensions { get; } = [];
     internal List<IAuthenticationProvider> Authentication { get; } = [];
     public void AddTools(IAgentToolSet tools) => Tools.Add(tools);
+    /// <summary>Registers tools that do not capture a workspace store or local paths, so the host
+    /// can safely use them in sessions launched in another workspace (e.g. remote account reads).</summary>
+    public void AddWorkspaceIndependentTools(IAgentToolSet tools) { Tools.Add(tools); WorkspaceIndependentTools.Add(tools); }
     public void AddProvider(IAiProvider provider) => Providers.Add(provider);
     public void AddCommand(PluginCommand command) => Commands.Add(command);
     public void AddHook(AgentHook hook) => Hooks.Add(hook);
     public void AddTurnExtension(AgentTurnExtension extension) => TurnExtensions.Add(extension);
     public void AddRequestExtension(AgentRequestExtension extension) => RequestExtensions.Add(extension);
     public void AddAuthentication(IAuthenticationProvider authentication) => Authentication.Add(authentication);
+    /// <summary>Exposes a backend method to this plugin's browser frames. Only frames of this
+    /// package can reach it; host methods and other plugins stay out of scope.</summary>
+    public void AddWebBridge(string name, Func<JsonElement?, CancellationToken, Task<JsonElement?>> handler) => WebBridges.Add(new(name, handler));
+    public void AddWebBridge<TParams, TResult>(string name, Func<TParams, CancellationToken, Task<TResult>> handler) => AddWebBridge(name, async (payload, ct) =>
+    {
+        TParams? parameters = default;
+        if (payload is { } element && element.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined)) parameters = element.Deserialize<TParams>(JsonOptions.Default);
+        var result = await handler(parameters!, ct);
+        return result is null ? null : JsonSerializer.SerializeToElement(result, JsonOptions.Default);
+    });
 }
 
 /// <summary>Model-scoped plain-text footer contribution. Fetch runs off the render thread; never return secrets.</summary>

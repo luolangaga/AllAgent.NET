@@ -18,7 +18,7 @@ public sealed class AgentTurnContext(Guid sessionId, string workspaceRoot, bool 
     public string UserMessage { get; } = userMessage;
     /// <summary>Session system prompt. Project instructions and the CodeAct contract are assembled separately.</summary>
     public string SystemPrompt { get; set; } = systemPrompt;
-    /// <summary>Turn-scoped policy tail (preferences, plugin policy). Sent separately from the stable system prompt so cache breakpoints stay on reusable content.</summary>
+    /// <summary>Turn-scoped policy tail (preferences, plugin policy). Materialized as a durable snapshot after retained history so cache breakpoints and earlier messages stay reusable.</summary>
     public string VolatileSystemPrompt { get; set; } = "";
     /// <summary>Remove registered names to disable them for this turn. Add tools with PluginContext.AddTools.</summary>
     public HashSet<string> Tools { get; } = new(tools, StringComparer.Ordinal);

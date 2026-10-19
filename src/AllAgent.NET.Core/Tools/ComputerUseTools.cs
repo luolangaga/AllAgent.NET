@@ -14,7 +14,6 @@ public partial class ComputerUseTools(ComputerUseState state) : IAgentToolSet, I
     {
         var current = state.Snapshot();
         if (name == "computer_status") return null;
-        if (!current.Enabled) return ToolResult.Failure("Computer Use is disabled. The user can enable it with /computer on.");
         if (!OperatingSystem.IsWindows()) return ToolResult.Failure("Computer Use requires Windows.");
         if (name == "computer_mode") return null;
         if (current.Mode == ComputerInteractionMode.BackgroundOnly && name == "computer_tray_action" && ToolArguments.Get<string>(arguments, "action", "open") != "open")
@@ -31,15 +30,15 @@ public partial class ComputerUseTools(ComputerUseState state) : IAgentToolSet, I
     }
 
     [AgentTool("computer_status")]
-    [Description("Read Computer Use enable switch, current mode and isolated configuration. The user alone controls on/off; AI chooses mode using computer_mode.")]
+    [Description("Read the current interaction mode and isolated configuration. Computer Use is always available; per-call approvals still apply.")]
     public Task<ToolResult> StatusAsync(CancellationToken ct = default)
     {
         var current = state.Snapshot();
-        return Task.FromResult(ToolResult.Success(new { enabled = current.Enabled, mode = current.Mode.ToString(), isolatedConfigured = state.IsolatedEndpoint != null && state.IsolatedTokenFile != null, workerInstalled = File.Exists(state.WorkerPath) }));
+        return Task.FromResult(ToolResult.Success(new { mode = current.Mode.ToString(), isolatedConfigured = state.IsolatedEndpoint != null && state.IsolatedTokenFile != null, workerInstalled = File.Exists(state.WorkerPath) }));
     }
 
     [AgentTool("computer_mode", Risk = ToolRisk.Execute)]
-    [Description("Choose background, foreground or isolated for the authorized task. Software testing starts in background (UIA). For full keyboard/mouse without interrupting the user choose isolated. Foreground uses the user's input devices. This cannot enable a disabled Computer Use switch. Read the computer-use skill first.")]
+    [Description("Choose background, foreground or isolated for the authorized task. Software testing starts in background (UIA). For full keyboard/mouse without interrupting the user choose isolated. Foreground uses the user's input devices. Mode selection changes how input is delivered, never whether Computer Use is available. Read the computer-use skill first.")]
     public async Task<ToolResult> ModeAsync([Description("background, foreground or isolated")] string mode, [Description("Why this task needs the mode")] string reason, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
@@ -60,7 +59,7 @@ public partial class ComputerUseTools(ComputerUseState state) : IAgentToolSet, I
     }
 
     [AgentTool("computer_windows")]
-    [Description("List Windows application windows with windowId and processId. Computer Use must be enabled by the user. Software testing defaults to background UIA operations.")]
+    [Description("List Windows application windows with windowId and processId. Software testing defaults to background UIA operations.")]
     public Task<ToolResult> WindowsAsync(CancellationToken ct = default) => RunAsync("windows", new { }, ct);
 
     [AgentTool("computer_tray")]

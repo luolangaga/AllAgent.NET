@@ -17,15 +17,21 @@ namespace AllAgent.NET.Core.Bridge;
 
 // DTOs
 public record ConversationDto(Guid Id, string Title, string ModelId, string ProviderId, DateTime CreatedAt, DateTime UpdatedAt);
-public record MessageDto(Guid Id, string Role, string Content, string? ToolCallsJson, string? ToolCallId, string? ToolName, string? ReasoningContent, DateTime CreatedAt, string? HostToolTraceJson, bool IsHostActivity = false, bool IsInterrupted = false, IReadOnlyList<ImageAttachment>? Images = null);
+public record MessageDto(Guid Id, string Role, string Content, string? ToolCallsJson, string? ToolCallId, string? ToolName, string? ReasoningContent, DateTime CreatedAt, string? HostToolTraceJson, bool IsHostActivity = false, bool IsInterrupted = false, IReadOnlyList<ImageAttachment>? Images = null)
+{
+    public static MessageDto From(Message message) =>
+        new(message.Id, message.Role, message.Role == "user" ? message.InputText ?? message.Content : message.Content, message.ToolCallsJson, message.ToolCallId,
+            message.ToolName, message.ReasoningContent, message.CreatedAt, message.HostToolTraceJson, message.IsHostActivity, message.IsInterrupted,
+            message.Images.Count > 0 ? message.Images : null);
+}
 public record TaskParams(string Id);
 public record SkillDto(Guid Id, string Name, string Description, string ParametersJson, string? CommandTemplate, string Type, bool IsEnabled);
 public record ApiConfigDto(Guid Id, string ProviderId, string DisplayName, string BaseUrl, string ApiKey, string DefaultModel, double Temperature, int MaxTokens, bool IsEnabled, string? ExtraHeadersJson, bool ThinkingEnabled, int ThinkingBudget,
     int ContextWindowTokens = 100000, string Protocol = "", string ReasoningProtocol = "auto", string ReasoningEffort = "default",
     List<string>? Models = null, string? ApiKeyEnvironmentVariable = null, string? AuthenticationProviderId = null,
-    int EffectiveContextTokens = 0, string EffectiveProtocol = "");
+    int EffectiveContextTokens = 0, string EffectiveProtocol = "", int EffectiveMaxTokens = 0);
 public record McpServerConfigDto(string Id, string Name, string Command, string Arguments, bool IsEnabled, DateTime CreatedAt, bool IsConnected = false);
-public record SettingsDto(string Theme, string Language, string DefaultModel, bool StreamingEnabled, string DefaultProviderId, bool BrowserUseEnabled = true, string BrowserUseMode = "builtin", string BrowserExecutablePath = "", string BrowserCdpUrl = "");
+public record SettingsDto(string Theme, string Language, string DefaultModel, bool StreamingEnabled, string DefaultProviderId, bool BrowserUseEnabled = true, string BrowserUseMode = "builtin", string BrowserExecutablePath = "", string BrowserCdpUrl = "", string GitCommitConfigId = "");
 public record ToolInfoDto(string Name, string Description, string Risk, string ParametersJson, string Source, string Owner);
 public record ToolsSnapshotDto(IReadOnlyList<ToolInfoDto> Tools, IReadOnlyList<string> Errors);
 
@@ -36,6 +42,7 @@ public record DeleteConversationParams(Guid Id);
 public record GetMessagesParams(Guid ConversationId);
 public record SetTodosParams(Guid ConversationId, List<TodoItem> Todos);
 public record StartStreamParams(Guid ConversationId, string Message, Guid ApiConfigId, bool ThinkingEnabled = false, int ThinkingBudget = 8000, string? Model = null, string? ReasoningEffort = null, List<ImageAttachment>? Images = null, string? Prompt = null);
+public record StartCompactParams(Guid ConversationId, Guid ApiConfigId, string? Focus = null);
 public record CancelStreamParams(string StreamId);
 public record ImportSkillParams(string Json);
 public record ImportSkillZipParams(string Base64Zip);
@@ -47,7 +54,7 @@ public record SaveApiConfigParams(Guid? Id, string ProviderId, string DisplayNam
 public record ReasoningOptionsDto(string Protocol, IReadOnlyList<string> Protocols, IReadOnlyList<string> Efforts, string Effort, int Budget, int MinimumBudget, int MaximumBudget, string Label);
 public record DeleteApiConfigParams(Guid Id);
 public record TestApiConfigParams(Guid Id);
-public record SaveSettingsParams(string Theme, string Language, string DefaultModel, bool StreamingEnabled, string DefaultProviderId, bool BrowserUseEnabled = true, string BrowserUseMode = "builtin", string BrowserExecutablePath = "", string BrowserCdpUrl = "");
+public record SaveSettingsParams(string Theme, string Language, string DefaultModel, bool StreamingEnabled, string DefaultProviderId, bool BrowserUseEnabled = true, string BrowserUseMode = "builtin", string BrowserExecutablePath = "", string BrowserCdpUrl = "", string GitCommitConfigId = "");
 public record SaveMcpServerConfigParams(string? Id, string Name, string Command, string Arguments, bool IsEnabled);
 public record DeleteMcpServerConfigParams(string Id);
 public record ConnectMcpServerParams(string Id);
@@ -99,6 +106,7 @@ public class BridgeHandlerRegistrar
 
         // Chat streaming
         _dispatcher.Register<StartStreamParams, string>("chat.startStream", StartStreamAsync);
+        _dispatcher.Register<StartCompactParams, string>("chat.compact", StartCompactAsync);
         _dispatcher.Register<CancelStreamParams, bool>("chat.cancelStream", CancelStreamAsync);
         _dispatcher.Register<GetMessagesParams, object?>("chat.getStreamState", (p, _) =>
         {
@@ -286,34 +294,59 @@ public class BridgeHandlerRegistrar
         lock (_streamsGate)
         {
             if (_agentService.IsRunning(p.ConversationId)) throw new InvalidOperationException("This conversation already has an active run.");
-            var journal = new BridgeStreamJournal(_store.GetVisibleMessages(p.ConversationId).Where(message => !message.IsInternal).Select(ToDto).ToList(), p.Message);
+            var journal = new BridgeStreamJournal(_store.GetVisibleMessages(p.ConversationId).Where(message => !message.IsInternal).ToList(), p.Message);
             var streamId = _agentService.StartStream(p.ConversationId, expanded.Text, config,
-                async (sid, evt) =>
-                {
-                    var timestamp = DateTime.UtcNow;
-                    var sequence = journal.Append(evt, timestamp);
-                    var json = JsonSerializer.Serialize(new
-                    {
-                        type = "event",
-                        eventName = GetEventName(evt),
-                        streamId = sid,
-                        sequence,
-                        timestamp,
-                        data = GetEventData(evt)
-                    }, JsonOptions.Default);
-                    _eventPusher.Push(json);
-                    if (evt is AgentDone)
-                        lock (_streamsGate)
-                            if (_webStreams.TryGetValue(p.ConversationId, out var current) && ReferenceEquals(current, journal))
-                                _webStreams.Remove(p.ConversationId);
-                    await Task.CompletedTask;
-                }, images: images, inputText: p.Message);
+                StreamForwarder(p.ConversationId, journal), images: images, inputText: p.Message);
 
             journal.StreamId = streamId;
             _webStreams[p.ConversationId] = journal;
             return streamId;
         }
     }
+
+    // Compaction only summarizes existing context, so it runs as an internal turn without the
+    // sandbox probe and without chat-level model overrides; everything else (journal, stream
+    // bookkeeping, event shape) matches a normal web stream.
+    private Task<string> StartCompactAsync(StartCompactParams p, CancellationToken ct)
+    {
+        if (_store.GetConversation(p.ConversationId) == null) throw new ArgumentException("会话不存在。");
+        var config = _store.GetApiConfig(p.ApiConfigId) ?? throw new Exception($"ApiConfig {p.ApiConfigId} not found");
+        if (!config.IsEnabled) throw new InvalidOperationException("所选模型配置已停用。");
+
+        lock (_streamsGate)
+        {
+            if (_agentService.IsRunning(p.ConversationId)) throw new InvalidOperationException("This conversation already has an active run.");
+            var journal = new BridgeStreamJournal(_store.GetVisibleMessages(p.ConversationId).Where(message => !message.IsInternal).ToList(), "/compact");
+            var streamId = _agentService.StartStream(p.ConversationId, p.Focus ?? string.Empty, config,
+                StreamForwarder(p.ConversationId, journal), internalMessage: true, sessionOperation: "compact");
+
+            journal.StreamId = streamId;
+            _webStreams[p.ConversationId] = journal;
+            return Task.FromResult(streamId);
+        }
+    }
+
+    private Func<string, AgentEvent, Task> StreamForwarder(Guid conversationId, BridgeStreamJournal journal) =>
+        async (sid, evt) =>
+        {
+            var timestamp = DateTime.UtcNow;
+            var sequence = journal.Append(evt, timestamp);
+            var json = JsonSerializer.Serialize(new
+            {
+                type = "event",
+                eventName = GetEventName(evt),
+                streamId = sid,
+                sequence,
+                timestamp,
+                data = GetEventData(evt)
+            }, JsonOptions.Default);
+            _eventPusher.Push(json);
+            if (evt is AgentDone)
+                lock (_streamsGate)
+                    if (_webStreams.TryGetValue(conversationId, out var current) && ReferenceEquals(current, journal))
+                        _webStreams.Remove(conversationId);
+            await Task.CompletedTask;
+        };
 
     private async Task<bool> CancelStreamAsync(CancelStreamParams p, CancellationToken ct)
     {
@@ -458,6 +491,7 @@ public class BridgeHandlerRegistrar
         if (!string.IsNullOrEmpty(p.ApiKey) && p.ApiKey != "••••••••") config.ApiKey = p.ApiKey;
         config.DefaultModel = p.DefaultModel;
         config.Temperature = p.Temperature;
+        if (p.MaxTokens < 0) throw new ArgumentException("最大输出 Tokens 需要是 0（自动）或正整数。");
         config.MaxTokens = p.MaxTokens;
         config.IsEnabled = p.IsEnabled;
         config.ExtraHeadersJson = p.ExtraHeadersJson;
@@ -560,7 +594,8 @@ private Task<SettingsDto> GetSettingsAsync(CancellationToken ct)
             _agentService.BrowserUse.Snapshot().Configuration.Enabled,
             _agentService.BrowserUse.Snapshot().Configuration.Mode,
             _agentService.BrowserUse.Snapshot().Configuration.ExecutablePath,
-            _agentService.BrowserUse.Snapshot().Configuration.CdpUrl
+            _agentService.BrowserUse.Snapshot().Configuration.CdpUrl,
+            settings.GetValueOrDefault("gitCommitConfigId", "")
         ));
     }
 
@@ -572,6 +607,7 @@ private Task<SettingsDto> GetSettingsAsync(CancellationToken ct)
         _store.SetSetting("defaultModel", p.DefaultModel);
         _store.SetSetting("streamingEnabled", p.StreamingEnabled.ToString().ToLower());
         _store.SetSetting("defaultProviderId", p.DefaultProviderId);
+        _store.SetSetting("gitCommitConfigId", p.GitCommitConfigId ?? "");
         return Task.FromResult(true);
     }
 
@@ -635,9 +671,7 @@ private Task<SettingsDto> GetSettingsAsync(CancellationToken ct)
     private static ConversationDto ToDto(Conversation c) =>
         new(c.Id, c.Title, c.ModelId, c.ProviderId, c.CreatedAt, c.UpdatedAt);
 
-    private static MessageDto ToDto(Message m) =>
-        new(m.Id, m.Role, m.Role == "user" ? m.InputText ?? m.Content : m.Content, m.ToolCallsJson, m.ToolCallId, m.ToolName, m.ReasoningContent, m.CreatedAt, m.HostToolTraceJson, m.IsHostActivity, m.IsInterrupted,
-            m.Images.Count > 0 ? m.Images : null);
+    private static MessageDto ToDto(Message m) => MessageDto.From(m);
 
     private static SkillDto ToDto(Skill s) =>
         new(s.Id, s.Name, s.Description, s.ParametersJson, s.CommandTemplate, s.Type.ToString(), s.IsEnabled);
@@ -650,7 +684,7 @@ private Task<SettingsDto> GetSettingsAsync(CancellationToken ct)
             c.ThinkingEnabled, c.ThinkingBudget,
             c.ContextWindowTokens, c.Protocol, c.ReasoningProtocol, c.ReasoningEffort,
             c.Models.ToList(), c.ApiKeyEnvironmentVariable, c.AuthenticationProviderId,
-            ModelContext.Capacity(c), ProviderCatalog.ProtocolFor(c));
+            ModelContext.Capacity(c), ProviderCatalog.ProtocolFor(c), ModelCatalog.OutputLimit(c));
 
     private McpServerConfigDto ToDto(McpServerConfig c) =>
         new(c.Id, c.Name, c.Command, c.Arguments, c.IsEnabled, c.CreatedAt, _mcpToolService.IsConnected(c.Id));

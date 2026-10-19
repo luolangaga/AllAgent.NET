@@ -47,7 +47,7 @@ public sealed class ComputerUseNativeInputTests
     }
     private static (AssemblyLoadContext Context, Type Type) Load()
     {
-        var directory = Path.Combine(AppContext.BaseDirectory, "computer");
+        var directory = AppContext.BaseDirectory;
         var context = new AssemblyLoadContext("computer-input-" + Guid.NewGuid(), isCollectible: true);
         context.Resolving += (_, name) => File.Exists(Path.Combine(directory, name.Name + ".dll")) ? context.LoadFromAssemblyPath(Path.Combine(directory, name.Name + ".dll")) : null;
         var assembly = context.LoadFromAssemblyPath(Path.Combine(directory, "AllAgent.NET.ComputerUse.dll"));

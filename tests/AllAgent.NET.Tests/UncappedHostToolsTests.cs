@@ -49,7 +49,7 @@ public sealed class UncappedHostToolsTests
         Assert.Single(JsonSerializer.SerializeToElement(search.Data).GetProperty("matches").EnumerateArray());
         var session = Guid.NewGuid(); var turn = checkpoints.Begin(session, "edit large file");
         var edit = await tools.EditAsync("large.txt", [new("unique old marker", "unique new marker")]); Assert.True(edit.Ok, edit.ToJson());
-        checkpoints.End();
+        checkpoints.End(session);
         Assert.Contains("unique new marker", JsonSerializer.SerializeToElement((await tools.ReadAsync("large.txt", offset: 60001)).Data).GetProperty("content").GetString());
         checkpoints.Restore(session, turn.Id, false); Assert.Equal(content, await File.ReadAllTextAsync(Path.Combine(w.Root, "large.txt")));
         checkpoints.Restore(session, turn.Id, true); Assert.EndsWith("unique new marker\n", await File.ReadAllTextAsync(Path.Combine(w.Root, "large.txt")));
@@ -73,7 +73,7 @@ public sealed class UncappedHostToolsTests
         var tools = new SystemTools(new(w.Root), new(w.Python, w.Pwsh, []), new Dictionary<string, string>(), checkpoints);
         var session = Guid.NewGuid(); var turn = checkpoints.Begin(session, "many files");
         for (var i = 0; i < 130; i++) Assert.True((await tools.WriteAsync($"file-{i}.txt", "new")).Ok);
-        checkpoints.End(); Assert.Equal(130, Assert.Single(checkpoints.List(session)).Files.Count);
+        checkpoints.End(session); Assert.Equal(130, Assert.Single(checkpoints.List(session)).Files.Count);
         checkpoints.Restore(session, turn.Id, false); Assert.Empty(Directory.GetFiles(w.Root, "file-*.txt"));
         checkpoints.Restore(session, turn.Id, true); Assert.Equal(130, Directory.GetFiles(w.Root, "file-*.txt").Length);
     }

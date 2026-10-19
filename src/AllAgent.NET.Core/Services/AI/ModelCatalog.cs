@@ -110,11 +110,14 @@ public static class ModelCatalog
         }
     }
     // Bound automatic generation while respecting model output and context limits.
-    // Zero opts into automatic sizing; positive values remain an explicit user override.
+    // Zero opts into automatic sizing: the catalog value, with 32k only as the fallback for an unknown
+    // model. A positive value stays authoritative below the model's own limit. Every reply is capped at
+    // half the window so a shared-window model keeps room for the prompt.
     public static int OutputLimit(ApiConfig config)
     {
         var limit = Resolve(config)?.OutputTokens;
-        var requested = config.MaxTokens > 0 ? config.MaxTokens : Math.Min(32000, ModelContext.Capacity(config) / 4);
-        return Math.Min(Math.Min(requested, limit ?? 16384), Math.Max(1, ModelContext.Capacity(config) - 1024));
+        var declared = limit is > 0 ? limit : null;
+        var requested = config.MaxTokens > 0 ? Math.Min(config.MaxTokens, declared ?? 256000) : declared ?? 32000;
+        return Math.Min(Math.Min(requested, 256000), Math.Max(1024, ModelContext.Capacity(config) / 2));
     }
 }

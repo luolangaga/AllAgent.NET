@@ -1,0 +1,49 @@
+@import "tailwindcss" source(none);
+@source "../components/ui/b-button.tsx";
+@source "../components/ui/input.tsx";
+@source "../components/ui/badge.tsx";
+@source "../components/ui/b-dialog.tsx";
+@source "../components/ui/b-tabs.tsx";
+@source "../components/ui/b-select.tsx";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--surface);
+  --color-card-foreground: var(--foreground);
+  --color-popover: var(--surface);
+  --color-popover-foreground: var(--foreground);
+  --color-primary: var(--foreground);
+  --color-primary-foreground: var(--background);
+  --color-secondary: var(--muted);
+  --color-secondary-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--foreground);
+  --color-border: var(--border);
+  --color-input: var(--border);
+  --color-ring: var(--ring-color);
+  --color-destructive: var(--destructive);
+  --color-brand: var(--brand);
+  --font-sans: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei", sans-serif;
+}
+
+:root, :host {
+  --background: var(--ag-background, #fff);
+  --foreground: var(--ag-foreground, #20262e);
+  --surface: var(--ag-surface, #fff);
+  --muted: var(--ag-muted, #f5f7fa);
+  --muted-foreground: var(--ag-muted-foreground, #687482);
+  --accent: var(--ag-accent, #f3f5f8);
+  --border: var(--ag-border, #dfe4e9);
+  --ring-color: var(--ag-ring-color, #20262e33);
+  --destructive: var(--ag-destructive, #dc2626);
+  --brand: var(--ag-brand, #0ea5e9);
+}
+:host { display: inline-block; vertical-align: middle; font-family: var(--font-sans); }
+:host([hidden]) { display: none; }
+:host([disabled]) { cursor: default; }
+:host > div { display: contents; }
+button { font-family: inherit; }

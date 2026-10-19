@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ChevronLeft, ChevronRight, Puzzle, Search, Trash2, Upload } from 'lucide-react'
+import { ChevronLeft, ChevronRight, LayoutDashboard, Puzzle, Search, Trash2, Upload } from 'lucide-react'
 import { Alert } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/b-button'
@@ -9,6 +9,7 @@ import { Switch } from '@/components/ui/b-switch'
 import { Confirm } from '@/components/shared'
 import { EmptyState, PageShell } from '@/components/PageShell'
 import { useStore } from '@/lib/store'
+import { useContributionsStore } from '@/stores/contributions'
 import { usePluginsStore } from '@/stores/plugins'
 import { useNoticesStore } from '@/stores/ui'
 import type { PluginPackageInfo, PluginStatusInfo } from '@/types'
@@ -24,14 +25,16 @@ function readBase64(file: File): Promise<string> {
 
 export default function Plugins() {
   const store = useStore(usePluginsStore)
+  const webStore = useStore(useContributionsStore)
   const notices = useStore(useNoticesStore)
   const [query, setQuery] = useState('')
   const [remove, setRemove] = useState<PluginStatusInfo | null>(null)
   const [install, setInstall] = useState<PluginPackageInfo | null>(null)
 
-  useEffect(() => { void store.loadAll() }, [])
+  useEffect(() => { void store.loadAll(); void webStore.loadAll() }, [])
 
   const pages = Math.max(1, Math.ceil(store.totalHits / store.pageSize))
+  const webFor = (packageId: string) => webStore.plugins.find(item => item.packageId.toLowerCase() === packageId.toLowerCase())
 
   async function run(action: () => Promise<unknown>, success?: string) {
     try {
@@ -61,30 +64,52 @@ export default function Plugins() {
         <span>{store.authentication.length ? `认证入口：${store.authentication.map(auth => auth.name).join(' · ')}` : '未发现认证插件'}</span>
       </div>
       {store.plugins.length > 0 ? <Card className="list-card">
-        <div className="divide-list">{store.plugins.map(plugin => <div className="list-row" key={plugin.packageId}>
-          <div className="resource-icon"><Puzzle size={20} /></div>
-          <div className="list-content">
-            <div className="resource-title">
-              <h3>{plugin.name}</h3>
-              <Badge size="sm" variant="dot">{plugin.packageId} · {plugin.version}</Badge>
-              {plugin.enabled ? <Badge color="green" size="sm" variant="dot">已启用</Badge> : <Badge color="gray" size="sm">已停用</Badge>}
-              {plugin.error ? <Badge color="red" size="sm" variant="dot">加载失败</Badge> : null}
+        <div className="divide-list">{store.plugins.map(plugin => {
+          const web = webFor(plugin.packageId)
+          return <div className="list-row" key={plugin.packageId}>
+            <div className="resource-icon"><Puzzle size={20} /></div>
+            <div className="list-content">
+              <div className="resource-title">
+                <h3>{plugin.name}</h3>
+                <Badge size="sm" variant="dot">{plugin.packageId} · {plugin.version}</Badge>
+                {plugin.enabled ? <Badge color="green" size="sm" variant="dot">已启用</Badge> : <Badge color="gray" size="sm">已停用</Badge>}
+                {plugin.error ? <Badge color="red" size="sm" variant="dot">加载失败</Badge> : null}
+              </div>
+              {plugin.error ? <Alert appearance="warning" dismissible={false} message={plugin.error} timeout={0} title="插件错误" /> : null}
+              {plugin.tools?.length ? <p className="list-description list-detail-line">工具：{plugin.tools.join(' · ')}</p> : null}
+              {plugin.commands?.length ? <p className="list-description list-detail-line">命令：{plugin.commands.map(name => `/ext ${name}`).join(' · ')}</p> : null}
+              {web ? <div className="plugin-web-block">
+                <div className="plugin-web-head">
+                  <LayoutDashboard aria-hidden className="tool-icon" size={13} />
+                  <span className="plugin-web-title">Web 界面</span>
+                  <Badge size="sm" variant="dot">{web.contributes?.pages?.length ?? 0} 页面 · {web.contributes?.toolCards?.length ?? 0} 工具卡</Badge>
+                  {web.capabilities.length ? <span className="plugin-web-caps mono" title={web.capabilities.join(' · ')}>{web.capabilities.join(' · ')}</span> : null}
+                </div>
+                {web.error ? <Alert appearance="warning" dismissible={false} message={web.error} timeout={0} title="Web 扩展未生效" /> : null}
+                <div className="plugin-web-actions">
+                  <span className="list-description">插件界面在独立源的沙箱 iframe 中运行，只能访问已声明的宿主能力。</span>
+                  <Switch
+                    aria-label={`${plugin.name} 的 Web 界面`}
+                    checked={web.webEnabled}
+                    disabled={store.busy || webStore.busy || !web.enabled}
+                    onCheckedChange={enabled => void run(() => webStore.setWebEnabled(plugin.packageId, enabled), enabled ? 'Web 界面已启用' : 'Web 界面已关闭')}
+                    size="sm"
+                  />
+                </div>
+              </div> : null}
             </div>
-            {plugin.error ? <Alert appearance="warning" dismissible={false} message={plugin.error} timeout={0} title="插件错误" /> : null}
-            {plugin.tools?.length ? <p className="list-description list-detail-line">工具：{plugin.tools.join(' · ')}</p> : null}
-            {plugin.commands?.length ? <p className="list-description list-detail-line">命令：{plugin.commands.map(name => `/ext ${name}`).join(' · ')}</p> : null}
+            <div className="list-actions">
+              <Switch
+                aria-label={`启用 ${plugin.name}`}
+                checked={plugin.enabled}
+                disabled={store.busy}
+                onCheckedChange={enabled => void run(() => store.setEnabled(plugin.packageId, enabled), enabled ? '插件已启用' : '插件已停用')}
+                size="sm"
+              />
+              <Button iconLabel={`卸载 ${plugin.name}`} onClick={() => setRemove(plugin)} size="icon-sm" variant="ghost"><Trash2 size={15} /></Button>
+            </div>
           </div>
-          <div className="list-actions">
-            <Switch
-              aria-label={`启用 ${plugin.name}`}
-              checked={plugin.enabled}
-              disabled={store.busy}
-              onCheckedChange={enabled => void run(() => store.setEnabled(plugin.packageId, enabled), enabled ? '插件已启用' : '插件已停用')}
-              size="sm"
-            />
-            <Button iconLabel={`卸载 ${plugin.name}`} onClick={() => setRemove(plugin)} size="icon-sm" variant="ghost"><Trash2 size={15} /></Button>
-          </div>
-        </div>)}</div>
+        })}</div>
       </Card> : <EmptyState title="还没有安装插件">
         在下方搜索 NuGet 上的 AllAgent 插件，或者导入本地的 .nupkg 包。宿主自带的内置插件会在下次启动时自动安装。
       </EmptyState>}

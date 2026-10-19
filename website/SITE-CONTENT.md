@@ -13,11 +13,11 @@ AllAgent.NET 是**面向 Windows 本机工作流**的终端 AI Agent：模型侧
 - **命令执行**：`run_shell` 把 `exe + args` 序列化 → Base64，交给固定可信脚本 `run_shell.ps1`，以 `pwsh -NoLogo -NoProfile -NonInteractive -CommandWithArgs` 启动；**禁止命令字符串/模板**，参数不会被 PowerShell 二次解析。
 - **环境**：PowerShell **7.6.x**（已验证的调度器，不回退 5.1）、Python **3.10–3.14** 宿主解释器、ripgrep、`.NET 8`（需支持 `.slnx` 的 SDK）。
 - **沙箱双后端**：优先 **Hyperlight 微虚拟机**（需虚拟化，启动失败自动兜底）；兜底 **Monty**（Rust 实现的 Python 子集，**不需要**虚拟化、Docker 或管理员权限）。worker 只保留 Windows 系统环境变量，**模型服务凭据不进 worker**；每次执行恢复干净快照；Monty 内存上限 **128 MiB**；执行中失败**不自动换后端重放**代码，避免重复副作用。
-- **权限三档**：`full`（默认，宿主工具不逐次审批、允许工作区外路径、**不授予管理员权限**）、`ask`（逐次授权，默认选中"允许这一次"）、`plan`（只读）。
+- **权限四档**：`restricted`（默认，工作区内文件读写与可信 Shell 别名免逐次审批；工作区外路径、未信任程序与 MCP/桌面/插件工具需授权）、`full`（宿主工具不逐次审批、允许工作区外路径、**不授予管理员权限**）、`ask`（逐次授权，默认选中"允许这一次"）、`plan`（只读）。
 - **文件工具**：`file_read` / `file_write` / `file_edit` / `list_directory` / `file_search` / `everything_search`，带页级与字节预算、diff 预览、原子写。
 - **Windows 路径闸门**：拒绝 UNC 工作区、歧义名（`CON/PRN/AUX/NUL/COM1…`、点或空格结尾）、备用数据流（`README.md:secret`）、普通模式下的 reparse point。
 - **截图进对话**：复制 Windows 截图后在输入框按 **Ctrl+V** 提交；支持原生 PNG 与 DIB/DIBV5 剪贴板；也可用 `@截图.png` 引用路径，图片随消息保存进会话。
-- **Computer Use**：FlaUI / UIA3，12 个 `computer_*` 工具；**只由用户**用 `/computer on|off` 开关；AI 只能选择 `background`（UIA 语义操作，不需要焦点）、`foreground`（物理键鼠）、`isolated`（独立 Windows 会话 Worker，loopback + Bearer token）。有动作时在所有显示器显示柔光提示层；只枚举/截图不触发提示。
+- **Computer Use**：FlaUI / UIA3，12 个 `computer_*` 工具；技能按需加载、无总开关（动作仍走宿主审批）；AI 只能选择 `background`（UIA 语义操作，不需要焦点）、`foreground`（物理键鼠）、`isolated`（独立 Windows 会话 Worker，loopback + Bearer token）。有动作时在所有显示器显示柔光提示层；只枚举/截图不触发提示。
 - **Browser Use**：默认开启，由 C# 实现。内置模式用 **WebView2 独立窗口**；外置模式自动启动并连接 Chrome/Edge。支持网页 JS（含 Promise）、页面观察、鼠标输入、标签页与截图；无需安装 Python 浏览器库或下载 Chromium。`/browser` 管理面板，`/browser on|off` 总开关。
 - **子代理**：`explore / general / investigate / modify / review / verify` 六种角色；支持单任务、**并行（最多 8 个任务、6 个并发）**、串行链；子代理向主代理返回结果与阻塞原因，停止会等待实际收尾。
 - **扩展**：内置 Skills、MCP 服务、DLL 插件；内置联网搜索与网页读取**不需要搜索 API Key**。

@@ -10,8 +10,10 @@ public sealed class PowerShellModuleStore(string sharedDirectory, string? worker
 {
     public string Root { get; } = Path.Combine(Path.GetFullPath(sharedDirectory), "powershell", "Modules");
     private string CatalogPath => Path.Combine(Path.GetDirectoryName(Root)!, "capabilities.json");
-    private readonly string _worker = workerPath ?? Path.Combine(AppContext.BaseDirectory, "powershell", "AllAgent.NET.PowerShell.exe");
+    private readonly string _worker = workerPath ?? Path.Combine(AppContext.BaseDirectory, "AllAgent.NET.PowerShell.exe");
     private string _catalog = "[]";
+    /// <summary>The bundled SDK worker this store drives; hosts surface it so a missing component is diagnosable.</summary>
+    public string WorkerPath => _worker;
     public bool HasCommand(string module, string command)
     {
         using var doc = JsonDocument.Parse(_catalog);

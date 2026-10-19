@@ -21,7 +21,7 @@ public sealed class CheckpointTests
         Assert.True((await tools.WriteAsync("proof.txt", "second", true)).Ok);
         Assert.True((await tools.WriteAsync("new.txt", "new file")).Ok);
         before.Content = "modified reference must not affect stored snapshot";
-        checkpoints.End([new Message { Role = "assistant", Content = "finished" }]);
+        checkpoints.End(id, [new Message { Role = "assistant", Content = "finished" }]);
         var restarted = new WorkspaceCheckpoints(new WorkspacePolicy(w.Root), Path.Combine(w.Root, "data"));
         var restored = restarted.Restore(id, turn.Id, redo: false);
         Assert.Equal("previous message", Assert.Single(restored.BeforeMessages).Content);
@@ -37,7 +37,7 @@ public sealed class CheckpointTests
         using var w = new TestWorkspace(); var c = new WorkspaceCheckpoints(new WorkspacePolicy(w.Root), Path.Combine(w.Root, "data"));
         var session = Guid.NewGuid(); var turn = c.Begin(session, "change");
         foreach (var path in new[] { "a.txt", "b.txt" }) { c.BeforeWrite(path); File.WriteAllText(Path.Combine(w.Root, path), "agent"); c.AfterWrite(path); }
-        c.End(); File.WriteAllText(Path.Combine(w.Root, "b.txt"), "user edited afterward");
+        c.End(session); File.WriteAllText(Path.Combine(w.Root, "b.txt"), "user edited afterward");
         Assert.Throws<IOException>(() => c.Restore(session, turn.Id, false));
         Assert.Equal("agent", File.ReadAllText(Path.Combine(w.Root, "a.txt")));
         Assert.Equal("user edited afterward", File.ReadAllText(Path.Combine(w.Root, "b.txt")));
@@ -48,7 +48,7 @@ public sealed class CheckpointTests
         using var w = new TestWorkspace(); var c = new WorkspaceCheckpoints(new WorkspacePolicy(w.Root), Path.Combine(w.Root, "data"));
         var session = Guid.NewGuid(); var turn = c.Begin(session, "interrupted");
         Assert.Throws<UnauthorizedAccessException>(() => c.BeforeWrite("../escape.txt"));
-        c.BeforeWrite("interrupted.txt"); File.WriteAllText(Path.Combine(w.Root, "interrupted.txt"), "write completed before journal was updated"); c.End();
+        c.BeforeWrite("interrupted.txt"); File.WriteAllText(Path.Combine(w.Root, "interrupted.txt"), "write completed before journal was updated"); c.End(session);
         Assert.Throws<IOException>(() => c.Restore(session, turn.Id, false)); Assert.True(File.Exists(Path.Combine(w.Root, "interrupted.txt")));
     }
     [Fact]
@@ -56,7 +56,7 @@ public sealed class CheckpointTests
     {
         using var w = new TestWorkspace(); var c = new WorkspaceCheckpoints(new WorkspacePolicy(w.Root), Path.Combine(w.Root, "data"));
         var session = Guid.NewGuid(); var turn = c.Begin(session, "external"); c.MarkExternalAction();
-        Assert.Throws<InvalidOperationException>(() => c.Restore(session, turn.Id, false)); c.End();
+        Assert.Throws<InvalidOperationException>(() => c.Restore(session, turn.Id, false)); c.End(session);
         Assert.True(Assert.Single(c.List(session)).ExternalActions);
     }
 }

@@ -36,10 +36,10 @@ public sealed class AgentPermissionTests
             Assert.True(request.RequiresExplicitApproval); Assert.False(request.Preapproved); Assert.Equal(ToolRisk.Read, request.Risk);
             approvals++; return ValueTask.FromResult(approvals == 2);
         });
-        await using var runtime = await AgentRuntime.CreateAsync(w.Options with { FullAccess = true, InvocationPolicy = policy.Validate, InvocationAuthorization = policy.AuthorizeAsync });
+        await using var runtime = await AgentRuntime.CreateAsync(w.Options with { Permission = PermissionMode.Full, InvocationPolicy = policy.Validate, InvocationAuthorization = policy.AuthorizeAsync });
         Assert.False((await runtime.Tools.CallAsync("file_read", Args("safe.txt"), default)).Ok);
         Assert.True((await runtime.Tools.CallAsync("file_read", Args("safe.txt"), default)).Ok); Assert.Equal(2, approvals);
-        var terminalApproval = new ToolsApproval(new TerminalUi(true, false)) { FullAccess = true };
+        var terminalApproval = new ToolsApproval(new TerminalUi(true, false)) { Permission = PermissionMode.Full };
         Assert.False(await terminalApproval.ApproveAsync(new("file_read", ToolRisk.Read, Args("safe.txt")) { RequiresExplicitApproval = true }, default));
     }
 

@@ -4,14 +4,15 @@
     <ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
     <EnableDynamicLoading>true</EnableDynamicLoading>
     <PackageId>AllAgent.NET.SamplePlugin</PackageId><Version>1.0.0</Version>
-    <PackageTags>AllAgent.NET;LanAgent;Sample;Tools;Hooks</PackageTags>
-    <Authors>AllAgent.NET</Authors><Description>AllAgent.NET 通用 DLL 插件开发示例：工具、模型、命令和 Hooks。</Description>
+    <PackageTags>AllAgent.NET;LanAgent;Sample;Tools;Hooks;Web</PackageTags>
+    <Authors>AllAgent.NET</Authors><Description>AllAgent.NET 通用 DLL 插件开发示例：工具、模型、命令、Hooks 与 Web 界面扩展。</Description>
     <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/AllAgent.NET.Core/AllAgent.NET.Core.csproj" PrivateAssets="all" />
     <ProjectReference Include="../../src/AllAgent.NET.ToolGenerator/AllAgent.NET.ToolGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" PrivateAssets="all" />
     <None Include="allagent-plugin.json" Pack="true" PackagePath="allagent/" />
+    <None Include="web\**\*" Pack="true" PackagePath="allagent/web/" />
     <None Include="../../docs/plugins.zh-CN.md" Pack="true" PackagePath="/README.md" />
   </ItemGroup>
 </Project>

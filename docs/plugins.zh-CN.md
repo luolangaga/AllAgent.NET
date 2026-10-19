@@ -83,6 +83,8 @@ DLL 位于 NuGet 包的 `lib/net10.0/`，入口清单必须位于 `allagent/alla
 }
 ```
 
+清单还可以带一个可选的 `web` 块，向 Web 工作台贡献页面、工具卡与命令，并在沙箱 iframe 中运行插件自绘界面（见 [插件 Web 前端扩展指南](plugin-web-ui.zh-CN.md)）：
+
 入口是可公开构造的类型，实现 `AllAgent.NET.Core.Extensions.IAllAgent.NETPlugin`。SDK v1 与宿主共享 `AllAgent.NET.Core` 程序集，不能携带另一个 Core 覆盖宿主契约。
 
 ```csharp
@@ -186,6 +188,27 @@ Skills 使用本轮快照，`skill_list`、`skill_read`、`skill_reference` 和�
 `context.AddProvider(IAiProvider)` 注册自定义提供商，实现流式 `StreamChatAsync` 与真实 `ListModelsAsync`。协议 ID 为 `IAiProvider.ProviderId`。在 `/providers add` 或 edit 的协议列表中选择插件 ID，即可使用同一模型选择、CodeAct 循环、会话持久化和思考界面。不要把系统工具重新暴露进模型的 tools 列表。
 
 插件命令通过 `context.AddCommand(...)` 注册，入口为 `/ext 名称 参数...`，自动加入命令提示和搜索面板。返回普通文本，由宿主统一裁剪和安全渲染；不要在插件内部读终端按键、清屏、接管全屏界面或输出 ANSI 转义。命令由用户明确调用，和模型工具是不同入口；需要受控系统操作时应复用宿主工具/任务服务，不能偷偷扩大授权。
+
+## Web 前端扩展
+
+`web` 块让插件把能力延伸到 Web 工作台，无需修改宿主前端：
+
+```json
+"web": {
+  "sdkVersion": 1,
+  "capabilities": ["notifications", "storage"],
+  "contributes": {
+    "pages": [{ "id": "dashboard", "title": "仪表盘", "icon": "gauge", "entry": "web/dashboard.html" }],
+    "toolCards": [{ "tool": "myplugin_sum", "entry": "web/card.html" }],
+    "commands": [{ "id": "open", "title": "打开仪表盘", "page": "dashboard" }]
+  }
+}
+```
+
+- 页面与工具卡在**独立源的沙箱 iframe** 中运行（任意框架、任意样式），通过宿主自带的 `/__sdk/allagent-plugin-sdk.js` 与自己的后端桥方法（`context.AddWebBridge`）通信，推送用 `context.Web.Push`；主题经 `--ag-*` 变量实时同步。
+- 打包时把 `web/**` 放进 `allagent/web/**`：`<None Include="web\**\*" Pack="true" PackagePath="allagent/web/" />`。
+- Web 界面随插件启用自动生效，插件页提供独立的「Web 界面」开关与错误诊断；版本兼容上旧宿主会忽略 `web` 块。
+- 完整清单字段、SDK API、能力清单、安全模型与调试方式见 [插件 Web 前端扩展指南](plugin-web-ui.zh-CN.md)。
 
 ## Hooks 生命周期
 

@@ -1,5 +1,5 @@
 import { memo, useState } from 'react'
-import { Check, Command, Copy, X } from 'lucide-react'
+import { AlertTriangle, Check, Command, Copy, Info, Loader2, X } from 'lucide-react'
 import { Avatar, AvatarFallback } from './ui/avatar'
 import { Badge } from './ui/badge'
 import { Button } from './ui/b-button'
@@ -9,11 +9,31 @@ import { ReasoningBlock } from './ReasoningBlock'
 import { Markdown } from './Markdown'
 import { ToolTrace } from './ToolTrace'
 import { dataUrl } from '@/lib/attachments'
-import type { Message, ToolCall, ReasoningPart, ImageAttachment } from '@/types'
+import type { Message, ToolCall, ReasoningPart, NoticePart, ImageAttachment } from '@/types'
 import { formatClock } from '@/lib/format'
 
 const MAX_CONTENT = 150000
 const MAX_REASONING = 120000
+
+/** One inline run note. Retries settle into「连接已恢复」instead of lingering. */
+function NoticeLine({ part }: { part: NoticePart }) {
+  const retrying = part.kind === 'retry' && part.status === 'pending'
+  const failed = part.status === 'failed'
+  const recovered = part.kind === 'retry' && part.status === 'settled'
+  const text = recovered
+    ? `连接已恢复${part.attempts > 0 ? `（自动重试 ${part.attempts} 次）` : ''}`
+    : part.text
+  return <p
+    aria-live={retrying ? 'polite' : undefined}
+    className={`message-notice is-${part.status} ${part.kind}`}
+    role={retrying ? 'status' : undefined}
+  >
+    <span aria-hidden className="message-notice-icon">
+      {retrying ? <Loader2 className="notice-spin" size={12} /> : failed ? <AlertTriangle size={12} /> : recovered ? <Check size={12} /> : <Info size={12} />}
+    </span>
+    <span>{text}</span>
+  </p>
+}
 
 // The streaming store replaces the active message on every event. Completed
 // bubbles keep their references and skip Markdown parsing on subsequent tokens.
@@ -31,9 +51,10 @@ export const MessageBubble = memo(function MessageBubble({ message, awaiting = f
   const hasReasoning = reasoning.trim().length > 0
   // Reasoner output streams into the panel while the answer is generated, so it opens
   // during generation and stays available afterwards.
-  const showThinking = streaming && !awaiting && !content && regular.length === 0 && message.status !== 'error'
+  const retrying = message.parts?.some(part => part.type === 'notice' && part.status === 'pending') ?? false
+  const showThinking = streaming && !awaiting && !retrying && !content && regular.length === 0 && message.status !== 'error'
   const hasReasoningParts = message.parts?.some(part => part.type === 'reasoning') ?? false
-  const blocks: Array<{ type: 'text'; text: string } | { type: 'tools'; calls: ToolCall[] } | ReasoningPart> = []
+  const blocks: Array<{ type: 'text'; text: string } | { type: 'tools'; calls: ToolCall[] } | ReasoningPart | NoticePart> = []
   const callMap = new Map(regular.map(call => [call.id, call]))
   let remaining = MAX_CONTENT
   for (const part of message.parts ?? []) {
@@ -88,6 +109,7 @@ export const MessageBubble = memo(function MessageBubble({ message, awaiting = f
         {message.parts?.length ? blocks.map((block, index) => block.type === 'text'
           ? <Markdown key={`text-${index}`} className="message-content" content={block.text.slice(0, MAX_CONTENT)} />
           : block.type === 'tools' ? <ToolTrace key={`tools-${index}`} calls={block.calls} />
+          : block.type === 'notice' ? <NoticeLine key={block.id} part={block} />
           : <ReasoningBlock key={`reasoning-${index}`} part={block} />)
           : <>
             {content ? <Markdown className="message-content" content={content} /> : null}
@@ -95,7 +117,6 @@ export const MessageBubble = memo(function MessageBubble({ message, awaiting = f
           </>}
         {message.content.length > MAX_CONTENT ? <p className="message-truncated">消息过长，已渲染前 {MAX_CONTENT.toLocaleString('zh-CN')} 个字符；完整内容请用「导出」查看。</p> : null}
         {memories.length > 0 ? <ToolTrace calls={memories} /> : null}
-        {message.notice ? <Alert appearance="info" dismissible={false} message={message.notice} timeout={0} title="运行提示" /> : null}
         {message.error ? <Alert appearance="destructive" dismissible={false} message={message.error} timeout={0} title="执行中断" /> : null}
         {!content && !message.toolCalls?.length && !hasReasoning && showThinking
           ? <div className="message-loading"><ThinkingIndicator words={['正在思考', '拆解任务', '准备工具']} /></div>

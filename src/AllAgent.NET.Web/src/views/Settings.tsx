@@ -8,6 +8,7 @@ import { Switch } from '@/components/ui/b-switch'
 import { Field, Picker } from '@/components/shared'
 import { PageShell } from '@/components/PageShell'
 import { useStore } from '@/lib/store'
+import { PERMISSION_OPTIONS, permissionLabel } from '@/lib/permissions'
 import { useApiConfigsStore } from '@/stores/apiConfigs'
 import { useSettingsStore } from '@/stores/settings'
 import { useNoticesStore } from '@/stores/ui'
@@ -26,7 +27,7 @@ export default function Settings() {
   async function setPermission(mode: string) {
     try {
       await workspace.setPermission(mode)
-      notices.notify('权限模式已切换', mode === 'plan' ? '只读规划' : mode === 'full' ? '完全访问' : '逐次授权', 'success')
+      notices.notify('权限模式已切换', permissionLabel(mode), 'success')
     } catch (error) {
       notices.report(error)
     }
@@ -55,9 +56,15 @@ export default function Settings() {
     }
   }
 
+  // Empty strings mean "follow", but the select needs a real value to show its label.
   const providerOptions = [
-    { value: '', label: '跟随对话选择' },
+    { value: 'follow', label: '跟随对话选择' },
     ...api.configs.map(config => ({ value: config.id, label: `${config.displayName} · ${config.defaultModel}` })),
+  ]
+  // Git AI drafting: default is whatever model the composer currently has selected.
+  const commitModelOptions = [
+    { value: 'follow', label: '跟随当前选择的模型（推荐）' },
+    ...api.configs.filter(config => config.isEnabled).map(config => ({ value: config.id, label: `${config.displayName} · ${config.defaultModel}` })),
   ]
 
   return <PageShell
@@ -105,9 +112,9 @@ export default function Settings() {
           <label className="field"><span>默认提供商与模型</span>
             <Picker
               label="默认提供商"
-              onChange={value => { settings.defaultProviderId = value }}
+              onChange={value => { settings.defaultProviderId = value === 'follow' ? '' : value }}
               options={providerOptions}
-              value={settings.defaultProviderId}
+              value={settings.defaultProviderId || 'follow'}
             />
           </label>
           <Field label="默认模型名称（可留空，跟随配置）" onChange={value => { settings.defaultModel = value }} placeholder="例如 gpt-5.1" value={settings.defaultModel} />
@@ -117,6 +124,24 @@ export default function Settings() {
           </div>
             <Switch aria-label="流式输出" checked={settings.streamingEnabled} onCheckedChange={value => { settings.streamingEnabled = value }} size="sm" />
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Git 提交信息</CardTitle>
+          <CardDescription>AI 生成提交信息时使用的模型。默认跟随输入框当前选择的模型；保存后立即生效。</CardDescription>
+        </CardHeader>
+        <CardContent className="settings-fields">
+          <label className="field"><span>AI 生成提交信息使用的模型</span>
+            <Picker
+              label="AI 提交信息模型"
+              onChange={value => { settings.gitCommitConfigId = value === 'follow' ? '' : value }}
+              options={commitModelOptions}
+              value={settings.gitCommitConfigId || 'follow'}
+            />
+          </label>
+          <p className="list-description">「跟随当前选择的模型」会使用聊天输入框里正在使用的配置；也可在这里固定一个配置（例如专门用于提交信息的快模型）。</p>
         </CardContent>
       </Card>
 
@@ -204,19 +229,14 @@ export default function Settings() {
       {workspace.available && workspace.controls ? <Card className="settings-wide">
         <CardHeader>
           <CardTitle>权限与执行</CardTitle>
-          <CardDescription>与终端共享同一套权限模式；浏览器内的工具授权请求会直接弹出对话框。有任务运行时可先停止再切换。</CardDescription>
+          <CardDescription>与终端共享同一套权限模式；浏览器内的工具授权请求会直接弹出对话框。权限模式随时可切换，运行中的任务从下一次工具调用起采用新模式；沙箱切换需要任务结束后进行。</CardDescription>
         </CardHeader>
         <CardContent className="settings-fields">
           <label className="field"><span>权限模式</span>
             <Picker
-              disabled={workspace.controls.running}
               label="权限模式"
               onChange={mode => void setPermission(mode)}
-              options={[
-                { value: 'ask', label: '逐次授权 · 写文件与执行前询问' },
-                { value: 'full', label: '完全访问 · 不逐次审核' },
-                { value: 'plan', label: '只读规划 · 不写入不执行' },
-              ]}
+              options={PERMISSION_OPTIONS.map(option => ({ value: option.value, label: `${option.label} · ${option.hint}` }))}
               value={workspace.controls.permissionMode}
             />
           </label>
@@ -235,7 +255,7 @@ export default function Settings() {
           </label>
           <p className="list-description">
             当前：{workspace.controls.permissionLabel} · 沙箱 {workspace.controls.sandboxEffective}
-            {workspace.controls.running ? '（有任务运行中，暂不可切换）' : ''}
+            {workspace.controls.running ? '（有任务运行中，沙箱暂不可切换）' : ''}
           </p>
         </CardContent>
       </Card> : null}

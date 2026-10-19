@@ -13,7 +13,7 @@ internal sealed class PseudoConsole : IDisposable
     public FileStream Output { get; private set; } = null!;
     public int ProcessId { get; private set; }
 
-    public PseudoConsole(string command, short width, short height)
+    public PseudoConsole(string command, short width, short height, string? directory = null)
     {
         IntPtr inputRead = IntPtr.Zero, inputWrite = IntPtr.Zero, outputRead = IntPtr.Zero, outputWrite = IntPtr.Zero;
         IntPtr attributes = IntPtr.Zero;
@@ -32,7 +32,7 @@ internal sealed class PseudoConsole : IDisposable
             // Prevent redirected broker/test stdio handles from overriding the ConPTY console.
             var startup = new StartupInfoEx { StartupInfo = new() { Size = Marshal.SizeOf<StartupInfoEx>(), Flags = 0x00000100,
                 Input = new IntPtr(-1), Output = new IntPtr(-1), Error = new IntPtr(-1) }, Attributes = attributes };
-            Check(CreateProcess(null, new StringBuilder(command), IntPtr.Zero, IntPtr.Zero, false, 0x00080000, IntPtr.Zero, null, ref startup, out var process));
+            Check(CreateProcess(null, new StringBuilder(command), IntPtr.Zero, IntPtr.Zero, false, 0x00080000, IntPtr.Zero, directory, ref startup, out var process));
             _process = process.Process; ProcessId = process.ProcessId; CloseHandle(process.Thread);
         }
         catch { Dispose(); throw; }
@@ -49,6 +49,16 @@ internal sealed class PseudoConsole : IDisposable
     {
         var console = Interlocked.Exchange(ref _console, IntPtr.Zero);
         if (console != IntPtr.Zero) ClosePseudoConsole(console);
+    }
+    /// <summary>Kills the attached process tree; the fallback when a shell ignores its console closing.</summary>
+    public void Kill()
+    {
+        try
+        {
+            using var process = System.Diagnostics.Process.GetProcessById(ProcessId);
+            if (!process.HasExited) process.Kill(entireProcessTree: true);
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { }
     }
     public void Dispose()
     {

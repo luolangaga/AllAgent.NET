@@ -23,12 +23,13 @@ public sealed class AgentRuntime : IAsyncDisposable
         Environment = environment;
         PowerShellModules = new(options.SharedDirectory, environment.PowerShell);
         _jobs = options.BackgroundTasks ?? new();
-        Tools = new ToolRegistry(options.FullAccess ? (request, _) => { if (request.Name is not ("file_write" or "file_edit" or "write" or "edit")) options.Checkpoints?.MarkExternalAction(); return ValueTask.FromResult(true); } : options.Approver, options.AuditPath, options.Hooks, options.InvocationPolicy, options.InvocationAuthorization, options.MaxToolResultCharacters, options.MaxToolStreamCharacters);
-        Tools.Register(new SystemTools(new WorkspacePolicy(options.WorkspaceRoot, options.FullAccess, options.ExternalDirectoryPermissions), environment, options.ShellAllowlist, options.Checkpoints, options.ExternalDirectoryPermissions, _jobs, options.FileReadMaxBytes, options.FileReadMaxLines, PowerShellModules.Root));
+        Tools = new ToolRegistry(BuildApprover(options), options.AuditPath, options.Hooks, options.InvocationPolicy, options.InvocationAuthorization, options.MaxToolResultCharacters, options.MaxToolStreamCharacters);
+        var liveFullAccess = options.PermissionProvider == null ? null : new Func<bool>(() => options.FullAccess);
+        Tools.Register(new SystemTools(new WorkspacePolicy(options.WorkspaceRoot, options.FullAccess, options.ExternalDirectoryPermissions, liveFullAccess), environment, options.ShellAllowlist, options.Checkpoints, options.ExternalDirectoryPermissions, _jobs, options.FileReadMaxBytes, options.FileReadMaxLines, PowerShellModules.Root));
         Tools.Register(new PowerShellModuleTools(PowerShellModules));
-        Tools.Register(new PowerShellInvokeTools(new WorkspacePolicy(options.WorkspaceRoot, options.FullAccess, options.ExternalDirectoryPermissions), environment, PowerShellModules, options.Checkpoints, options.ExternalDirectoryPermissions));
+        Tools.Register(new PowerShellInvokeTools(new WorkspacePolicy(options.WorkspaceRoot, options.FullAccess, options.ExternalDirectoryPermissions, liveFullAccess), environment, PowerShellModules, options.Checkpoints, options.ExternalDirectoryPermissions));
         _sessions = new PowerShellSessions(environment.PowerShell!, PowerShellModules.Root, options.WorkspaceRoot);
-        Tools.Register(new PowerShellScriptTools(new WorkspacePolicy(options.WorkspaceRoot, options.FullAccess, options.ExternalDirectoryPermissions), environment, _sessions, options.Checkpoints, options.ExternalDirectoryPermissions));
+        Tools.Register(new PowerShellScriptTools(new WorkspacePolicy(options.WorkspaceRoot, options.FullAccess, options.ExternalDirectoryPermissions, liveFullAccess), environment, _sessions, options.Checkpoints, options.ExternalDirectoryPermissions));
         if (!options.IsSubAgent) Tools.Register(new AgentInteractionTools(options.QuestionHandler));
         Tools.Register(new ComputerUseTools(options.ComputerUse));
         _browser = new BrowserUseTools(options.BrowserUse);
@@ -36,9 +37,51 @@ public sealed class AgentRuntime : IAsyncDisposable
         if (options.Skills != null) Tools.Register(new SkillTools(options.Skills));
         Tools.Register(new WebTools(_browser));
         _sandbox = new FallbackCodeSandbox(options with { PythonPath = environment.Python });
-        CodeAct = new CodeActProvider(Tools, new PythonCodeValidator(environment.Python!), _sandbox, options.ShellAllowlist, options.FullAccess,
+        CodeAct = new CodeActProvider(Tools, new PythonCodeValidator(environment.Python!), _sandbox, options.ShellAllowlist, options.CurrentPermission,
             System.Text.Json.JsonSerializer.Serialize(new { workspaceRoot = Path.GetFullPath(options.WorkspaceRoot), python = environment.Python, shellRuntime = "Embedded PowerShell SDK; internal worker, not a pwsh CLI. Use powershell_script for PowerShell code in a persistent session; use powershell_invoke for one verified module command; use run_shell for external programs or delivered .ps1 files.", operatingSystem = System.Runtime.InteropServices.RuntimeInformation.OSDescription, fileReadMaxBytes = options.FileReadMaxBytes, fileReadMaxLines = options.FileReadMaxLines, toolResultMaxCharacters = options.MaxToolResultCharacters, guestStdoutMaxCharacters = ToolResult.MaxOutputCharacters, sourceCharacters = options.MaxCodeCharacters }, ToolResult.JsonOptions),
             null, options.MaxCodeCharacters);
+    }
+
+    /// <summary>Full access answers every request itself; restricted mode answers workspace-contained
+    /// operations and delegates the rest to the host approver; ask mode delegates everything. With a live
+    /// permission source the mode is resolved per request, so switching mid-run takes effect on the next
+    /// tool call; without one the runtime keeps the stance it was built with.</summary>
+    private static ToolApprover? BuildApprover(AgentOptions options)
+    {
+        if (options.PermissionProvider == null)
+        {
+            if (options.Permission == PermissionMode.Full)
+                return (request, _) => { MarkExternal(options, request); return ValueTask.FromResult(true); };
+            if (options.Permission != PermissionMode.Restricted) return options.Approver;
+            return async (request, ct) =>
+            {
+                if (RestrictedAllows(request)) { MarkExternal(options, request); return true; }
+                return options.Approver != null && await options.Approver(request, ct);
+            };
+        }
+        return async (request, ct) =>
+        {
+            var permission = options.CurrentPermission;
+            if (permission == PermissionMode.Full) { MarkExternal(options, request); return true; }
+            if (permission == PermissionMode.Restricted && RestrictedAllows(request)) { MarkExternal(options, request); return true; }
+            // A host without an approver keeps today's contract: ask mode runs preapproved calls only,
+            // restricted mode denies anything the workspace shortcut did not already answer.
+            if (options.Approver == null) return permission != PermissionMode.Restricted && request.Preapproved;
+            return await options.Approver(request, ct);
+        };
+    }
+
+    /// <summary>Restricted mode runs file operations whose target the host already authorized for this
+    /// call and trusted shell aliases without asking. External directories, untrusted programs, MCP and
+    /// desktop tools keep the host question; without an approver they are denied.</summary>
+    private static bool RestrictedAllows(ToolApprovalRequest request) =>
+        !request.RequiresExplicitApproval && request.Name != "external_directory" &&
+        (request.WorkspaceScoped || request.Preapproved);
+
+    /// <summary>A checkpointed file write can be reverted; anything else may have effects outside the workspace.</summary>
+    private static void MarkExternal(AgentOptions options, ToolApprovalRequest request)
+    {
+        if (request.Name is not ("file_write" or "file_edit" or "write" or "edit")) options.Checkpoints?.MarkExternalAction();
     }
 
     public static async Task<AgentRuntime> CreateAsync(AgentOptions options, CancellationToken ct = default)

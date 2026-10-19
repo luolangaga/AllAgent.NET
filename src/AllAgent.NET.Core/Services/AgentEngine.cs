@@ -19,6 +19,8 @@ public sealed class AgentEngine
     private readonly AgentOptions options;
     private readonly SemaphoreSlim _runLock = new(1, 1);
     private readonly IAiProvider _provider;
+    private const string PolicyLead = "Current session policy (host-managed, applies until superseded; not a new user request):\n";
+    private const string PolicyCleared = PolicyLead + "No additional session policy; host defaults apply.";
 
     public AgentEngine(DataStore store, IAiProvider provider, CodeActProvider codeAct, AgentOptions options)
     {
@@ -99,7 +101,11 @@ public sealed class AgentEngine
         var turn = new AllAgent.NET.Core.Extensions.AgentTurnContext(id, options.WorkspaceRoot, options.IsSubAgent, text,
             conversation.SystemPrompt ?? "You are a helpful agent.", codeAct.Registry.Definitions.Select(t => t.Name), options.Skills?.ListUnfiltered() ?? []);
         if (options.Extensions != null) turn = await options.Extensions.ConfigureTurnAsync(turn, ct);
-        using var extensionScope = options.Extensions == null ? null : new AllAgent.NET.Core.Extensions.AgentExtensionScope(turn, codeAct.Registry, options.Skills);
+        // Simple mode narrows the surface after the extensions ran, so a plugin cannot widen it back.
+        // The stance is resolved per turn, so switching simple mode mid-run applies from the next turn.
+        var simpleMode = options.SimpleModeActive;
+        if (simpleMode) { turn.Tools.IntersectWith(SimpleModeTools.Names); turn.Skills.Clear(); }
+        using var extensionScope = options.Extensions == null && !simpleMode ? null : new AllAgent.NET.Core.Extensions.AgentExtensionScope(turn, codeAct.Registry, options.Skills);
         if (internalMessage && conversation.Revert != null) throw new InvalidOperationException("会话正在撤回，等待新用户输入后再继续内部通知。");
         // Refresh the sandbox context after skills, MCP and plugins have registered their host tools.
         // A failed microVM must stop the turn before contacting the model.
@@ -117,19 +123,26 @@ public sealed class AgentEngine
             new("system", codeAct.Instructions),
             new("system", turn.SystemPrompt + "\n\n" + (options.InstructionsProvider?.Invoke() ?? ProjectInstructions.Load(options.WorkspaceRoot)))
         };
-        // Volatile policy (preferences, plugin policy) trails the stable system prefix so its
-        // changes never rewrite the reusable instruction blocks that cache breakpoints protect.
-        void RefreshVolatile()
+        // Volatile policy (preferences, plugin policy) is a durable tail snapshot: the current
+        // complete policy is appended after retained history only when it changes, so preference
+        // or plugin updates never rewrite the cached prefix in front of them. The user role keeps
+        // the snapshot at its recorded position for every protocol (Anthropic hoists system blocks).
+        void AppendPolicySnapshot()
         {
-            var volatileText = (turn.VolatileSystemPrompt + "\n\n" + (options.VolatileInstructionsProvider?.Invoke() ?? "")).Trim();
-            if (volatileText.Length > 0)
+            var policy = (turn.VolatileSystemPrompt + "\n\n" + (options.VolatileInstructionsProvider?.Invoke() ?? "")).Trim();
+            var content = policy.Length == 0 ? "" : PolicyLead + policy;
+            var previous = history.LastOrDefault(message => message.ToolName == "policy_context");
+            if (content.Length == 0)
             {
-                if (history.Count > 2 && history[2].IsVolatileContext) history[2] = new("system", volatileText) { IsVolatileContext = true };
-                else history.Insert(2, new("system", volatileText) { IsVolatileContext = true });
+                // An emptied policy supersedes the earlier snapshot instead of staying in force.
+                if (previous == null || previous.Content == PolicyCleared) return;
+                content = PolicyCleared;
             }
-            else if (history.Count > 2 && history[2].IsVolatileContext) history.RemoveAt(2);
+            else if (previous?.Content == content) return;
+            var snapshot = new ChatMessage("user", content, ToolName: "policy_context");
+            Save(id, snapshot, internalInstruction: true);
+            history.Add(snapshot);
         }
-        RefreshVolatile();
         var cacheTtl = store.GetSetting("cache:ttl");
         var cacheRetention = store.GetSetting("cache:retention");
         var stored = store.GetMessages(id).Where(m => !m.IsHostActivity).ToList();
@@ -142,6 +155,7 @@ public sealed class AgentEngine
         var contextKey = ProviderContextKey(config);
         history.AddRange(RepairHistory(CodeActHistory.Normalize(stored.Select(m => new ChatMessage(m.Role, ReplayContent(m), m.ToolCallsJson, m.ToolCallId, m.ToolName, m.ReasoningContent,
             m.ProviderContextKey == contextKey || m.ProviderContextKey == null && options.ConfigurationProvider == null ? m.ProviderStateJson : null) { Images = m.Images }))));
+        AppendPolicySnapshot();
         if (!fromInbox)
         {
             history.Add(new ChatMessage("user", text) { Images = images });
@@ -161,16 +175,16 @@ public sealed class AgentEngine
         var capacity = ModelContext.Capacity(config);
         var contextLimit = Math.Min(options.MaxContextCharacters, checked((capacity - ModelCatalog.OutputLimit(config)) * 4));
         var observedTokens = 0;
-        var emptyResponses = 0;
+        var outputLimitStalls = 0;
         var lastCompaction = -10;
         while (true)
         {
             ct.ThrowIfCancellationRequested();
             AdmitChildResults(); await AdmitSteersAsync();
             history[1] = new("system", turn.SystemPrompt + "\n\n" + (options.InstructionsProvider?.Invoke() ?? ProjectInstructions.Load(options.WorkspaceRoot)));
-            RefreshVolatile();
             // Append changed session data instead of rewriting the prefix of every request.
             // Persist snapshots so the next user turn replays the exact same history.
+            AppendPolicySnapshot();
             var previousTodo = history.LastOrDefault(message => message.Role == "user" && message.ToolName == "todo_context");
             var todoContext = TodoContext(id);
             if (previousTodo?.Content != todoContext && (previousTodo != null || store.GetTodos(id).Count > 0))
@@ -317,14 +331,17 @@ public sealed class AgentEngine
             history.Add(assistant);
             if (truncated)
             {
-                if (content.Length == 0 && calls.Count == 0 && thinking.Length == 0 && ++emptyResponses >= 2)
-                    throw new InvalidOperationException("模型连续触达输出上限但没有返回内容。请提高模型的输出上限后继续。");
-                await writer.WriteAsync(new AgentNotice("模型触达单次输出上限，正在自动继续；被截断的代码不会执行。"), ct);
-                var continuation = new ChatMessage("user", "Your previous response reached its output token limit. Continue the unfinished task from the existing results. Any tool calls in that truncated response were NOT executed. Reissue complete execute_code calls in smaller bounded blocks; do not repeat earlier completed host operations. Keep explanations concise.");
+                // Reasoning can consume the whole budget and a truncated tool call never executes, so a
+                // response without visible text made no progress: stop instead of paying for the same retry.
+                if (content.Length == 0 && ++outputLimitStalls >= 2)
+                    throw new InvalidOperationException($"模型连续触达输出上限（{ModelCatalog.OutputLimit(config)} tokens）且没有产出内容（推理可能占满了输出预算）。已完成操作保留；请提高「最大输出 Tokens」或降低推理强度后继续。");
+                if (content.Length > 0) outputLimitStalls = 0;
+                await writer.WriteAsync(new AgentNotice($"模型触达单次输出上限（{ModelCatalog.OutputLimit(config)} tokens），正在自动继续；被截断的代码不会执行。"), ct);
+                var continuation = new ChatMessage("user", "Your previous response reached its output token limit. Continue the unfinished task from the existing results. Any tool calls in that truncated response were NOT executed. Reissue complete execute_code calls; split a program only because of the output budget, keeping whole phases intact, and continue from existing results; do not repeat earlier completed host operations. Keep explanations concise.");
                 Save(id, continuation, internalInstruction: true); history.Add(continuation);
                 continue;
             }
-            emptyResponses = 0;
+            outputLimitStalls = 0;
             if (validCalls.Length == 0)
             {
                 if (finishReason is not ("stop" or "STOP" or "end_turn"))

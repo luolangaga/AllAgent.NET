@@ -21,11 +21,7 @@ internal static class TodoCommand
             if (!int.TryParse(args.ElementAtOrDefault(1), out var number) || number < 1 || number > todos.Count)
                 throw new ArgumentException("请提供有效的 TODO 序号，使用 /todo 查看。");
             if (action == "remove") todos.RemoveAt(number - 1);
-            else
-            {
-                if (action == "start") todos = todos.Select(t => t.Status == "in_progress" ? t with { Status = "pending" } : t).ToList();
-                todos[number - 1] = todos[number - 1] with { Status = action == "start" ? "in_progress" : action == "done" ? "completed" : "pending" };
-            }
+            else todos[number - 1] = todos[number - 1] with { Status = action == "start" ? "in_progress" : action == "done" ? "completed" : "pending" };
         }
         else if (action != "list") throw new ArgumentException("用法 /todo [list|add 内容|start 序号|done 序号|pending 序号|remove 序号|clear]");
         if (action != "list") store.SetTodos(id, todos);

@@ -65,8 +65,7 @@ public sealed class SubAgentRolePolicy(Func<bool> readOnly, string workspace, Ex
             "skill_read" or "skill_reference" => ToolArguments.Get<string>(arguments, "name", "*"),
             "subagent" => ToolArguments.Get<string>(arguments, "agent", "general"),
             "cancel_agent" => ToolArguments.Get<string>(arguments, "id", "*"),
-            "mcp_resource_read" => ToolArguments.Get<string>(arguments, "uri", "*"),
-            "mcp_resources" => ToolArguments.Get<string>(arguments, "server_id", "*"),
+            "mcp_resources" => ToolArguments.Get<string>(arguments, "server_id", "*") + (ToolArguments.Get<string>(arguments, "uri", "") is { Length: > 0 } uri ? "/" + uri : ""),
             _ => "*"
         };
         var matched = current.Permissions.LastOrDefault(rule => (Match(action, rule.Action) || Match(tool.Name, rule.Action)) && Match(resource, rule.Resource));

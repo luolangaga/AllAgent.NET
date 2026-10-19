@@ -9,6 +9,7 @@
     <Nullable>enable</Nullable>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>AllAgent.NET.Gui</AssemblyName>
+    <ApplicationIcon>..\AllAgent.NET.Terminal\Assets\allagent.ico</ApplicationIcon>
     <RootNamespace>AllAgent.NET.Gui</RootNamespace>
     <RollForward>Major</RollForward>
   </PropertyGroup>

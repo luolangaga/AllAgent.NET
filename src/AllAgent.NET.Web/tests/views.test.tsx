@@ -17,7 +17,11 @@ describe('TODO panel', () => {
     expect(html).toContain('TODO')
     expect(html).toContain('1/3')
     expect(html).toContain('实现')
-    expect(html).not.toContain('todo-done')
+    // The body stays mounted so the height animation can run, but the collapsed
+    // panel is marked closed and its controls are inert.
+    expect(html).toContain('aria-expanded="false"')
+    expect(html).toContain('aria-hidden="true"')
+    expect(html).toContain('inert')
   })
 
   it('expands into the editable checklist with escaped task text', () => {
@@ -28,6 +32,13 @@ describe('TODO panel', () => {
     expect(html).toContain('&lt;script&gt;')
     expect(html).not.toContain('<script>unsafe')
     expect(html).toContain('disabled')
+  })
+
+  it('shows parallel work items as active instead of demoting them', () => {
+    const parallel = [...todos, { id: '4', content: '并行验证', status: 'in_progress' as const }]
+    const html = renderToStaticMarkup(<TodoPanel disabled onChange={async () => {}} report={() => {}} todos={parallel} />)
+    expect(html).toContain('实现')
+    expect(html).toContain('+1')
   })
 })
 

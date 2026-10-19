@@ -1,0 +1,181 @@
+/* Plugin pages pick up the host palette through the --ag-* variables the SDK writes onto the
+   frame root; every rule keeps a light-dark() fallback so the page also renders standalone. */
+:root {
+  color-scheme: light dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 18px 20px 24px;
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1.7;
+  background: var(--ag-background, light-dark(#ffffff, #131316));
+  color: var(--ag-foreground, light-dark(#111113, #f5f5f6));
+}
+
+code {
+  font-family: "Cascadia Code", ui-monospace, monospace;
+  font-size: 11.5px;
+  color: var(--ag-brand, #0ea5e9);
+}
+
+.head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+h1 {
+  font-size: 17px;
+  font-weight: 600;
+  margin: 0 0 4px;
+}
+
+.head p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--ag-muted-foreground, light-dark(#666, #9d9da6));
+}
+
+.ghost {
+  padding: 5px 12px;
+  border-radius: 9px;
+  border: 1px solid var(--ag-border, light-dark(#e5e5e3, #26262c));
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ghost:hover {
+  background: var(--ag-muted, light-dark(#f2f2f1, #1a1a1e));
+}
+
+.grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  margin: 16px 0;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 14px;
+  border: 1px solid var(--ag-border, light-dark(#e5e5e3, #26262c));
+  border-radius: 12px;
+  background: var(--ag-surface, light-dark(#ffffff, #1a1a1e));
+}
+
+.card .label {
+  font-size: 11px;
+  color: var(--ag-muted-foreground, light-dark(#666, #9d9da6));
+}
+
+.card b {
+  font-size: 19px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.card small {
+  font-size: 10.5px;
+  color: var(--ag-muted-foreground, light-dark(#666, #9d9da6));
+}
+
+.panel h2 {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0 0 8px;
+}
+
+.history {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.history li {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 7px 11px;
+  border: 1px solid var(--ag-border, light-dark(#e5e5e3, #26262c));
+  border-radius: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.history time {
+  font-weight: 600;
+}
+
+.history span {
+  font-size: 11px;
+  color: var(--ag-muted-foreground, light-dark(#666, #9d9da6));
+}
+
+.history .empty {
+  border-style: dashed;
+  color: var(--ag-muted-foreground, light-dark(#666, #9d9da6));
+  justify-content: center;
+}
+
+/* Tool-card variant (lighter chrome, the host card frame wraps it). */
+body.tool-body {
+  padding: 10px 12px 12px;
+}
+
+.tc-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.tc-title {
+  font-weight: 600;
+}
+
+.tc-status {
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--ag-muted, light-dark(#f2f2f1, #1a1a1e));
+  color: var(--ag-muted-foreground, light-dark(#666, #9d9da6));
+}
+
+.tc-status[data-state="done"] {
+  color: var(--ag-brand, #0ea5e9);
+}
+
+.tc-status[data-state="error"] {
+  color: var(--ag-destructive, #dc2626);
+}
+
+.tc-block {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--ag-border, light-dark(#e5e5e3, #26262c));
+  border-radius: 9px;
+  background: var(--ag-muted, light-dark(#f8f8f7, #17171b));
+  font-family: "Cascadia Code", ui-monospace, monospace;
+  font-size: 11.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 180px;
+  overflow: auto;
+}

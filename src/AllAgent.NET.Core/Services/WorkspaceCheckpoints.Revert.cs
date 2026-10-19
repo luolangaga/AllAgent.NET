@@ -18,7 +18,7 @@ public sealed partial class WorkspaceCheckpoints
     {
         lock (_gate)
         {
-            if (_active != null) throw new InvalidOperationException("任务运行中不能撤回历史。");
+            if (_active.Count > 0) throw new InvalidOperationException("任务运行中不能撤回历史。");
             EnsureNoRevertJournal();
             var conversation = store.GetConversation(session) ?? throw new ArgumentException("会话不存在。");
             var original = conversation.Revert; ValidateWorkspace(original);
@@ -58,7 +58,7 @@ public sealed partial class WorkspaceCheckpoints
     {
         lock (_gate)
         {
-            if (_active != null) throw new InvalidOperationException("任务运行中不能恢复撤回。");
+            if (_active.Count > 0) throw new InvalidOperationException("任务运行中不能恢复撤回。");
             EnsureNoRevertJournal(); var conversation = store.GetConversation(session) ?? throw new ArgumentException("会话不存在。");
             if (conversation.Revert is not { } before) return;
             ValidateWorkspace(before); ChangeRevert(store, conversation, before, null);
@@ -101,7 +101,7 @@ public sealed partial class WorkspaceCheckpoints
         lock (_gate)
         {
             if (!File.Exists(RevertJournalPath)) return false;
-            if (_active != null) throw new InvalidOperationException("任务运行中不能恢复撤回事务。");
+            if (_active.Count > 0) throw new InvalidOperationException("任务运行中不能恢复撤回事务。");
             var journal = JsonSerializer.Deserialize<RevertJournal>(File.ReadAllText(RevertJournalPath)) ?? throw new IOException("撤回日志无效。");
             ValidateWorkspace(journal.Before); ValidateWorkspace(journal.After);
             foreach (var file in journal.Writes)

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>example_clock · 工具卡</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="/__sdk/allagent-plugin-sdk.js"></script>
+</head>
+<body class="tool-body">
+  <div class="tc-head">
+    <span class="tc-title">示例时钟</span>
+    <span class="tc-status" data-state="running" id="status">等待数据…</span>
+  </div>
+  <pre class="tc-block" id="args"></pre>
+  <pre class="tc-block" id="output"></pre>
+
+  <script>
+    const sdk = AllAgentPlugin.connect()
+    const labels = { running: '执行中', done: '已完成', error: '失败', cancelled: '已停止' }
+    const status = document.getElementById('status')
+
+    sdk.on('tool.update', call => {
+      status.textContent = labels[call.status] ?? String(call.status)
+      status.dataset.state = String(call.status)
+      document.getElementById('args').textContent = call.args || '（无参数）'
+      document.getElementById('output').textContent = call.output || (call.status === 'running' ? '正在执行…' : '（无输出）')
+      sdk.resize()
+    })
+
+    sdk.ready.catch(error => {
+      status.textContent = '未连接宿主'
+      console.error('[示例插件]', error)
+    })
+  </script>
+</body>
+</html>

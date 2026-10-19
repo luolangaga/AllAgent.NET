@@ -3,13 +3,18 @@ namespace AllAgent.NET.Core.Tools;
 public sealed class WorkspacePolicy
 {
     public string Root { get; }
-    public bool FullAccess { get; }
+    private readonly bool _fullAccess;
+    private readonly Func<bool>? _liveFullAccess;
+    /// <summary>Full access drops the workspace boundary. A live source lets a host switch the host
+    /// permission mode while a run is in flight; every path check then resolves the current stance.</summary>
+    public bool FullAccess => _liveFullAccess?.Invoke() ?? _fullAccess;
     private readonly ExternalDirectoryPermissions? _permissions;
     private readonly AsyncLocal<string?> _requestPath = new();
-    public WorkspacePolicy(string root, bool fullAccess = false, ExternalDirectoryPermissions? permissions = null)
+    public WorkspacePolicy(string root, bool fullAccess = false, ExternalDirectoryPermissions? permissions = null, Func<bool>? liveFullAccess = null)
     {
         _permissions = permissions;
-        FullAccess = fullAccess;
+        _fullAccess = fullAccess;
+        _liveFullAccess = liveFullAccess;
         if (!FullAccess && root.StartsWith("\\\\", StringComparison.Ordinal)) throw new UnauthorizedAccessException("UNC workspaces are not allowed.");
         RejectAmbiguousSegments(root);
         Root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));

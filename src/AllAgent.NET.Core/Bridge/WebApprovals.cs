@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using AllAgent.NET.Core.Runtime;
 using AllAgent.NET.Core.Services;
 using AllAgent.NET.Core.Tools;
 
@@ -24,6 +25,9 @@ public sealed class WebApprovals
     private readonly ConcurrentDictionary<string, TaskCompletionSource<string?>> _questions = new();
     /// <summary>Prompts still waiting for an answer, kept so a reloaded page can be handed them again.</summary>
     private readonly ConcurrentDictionary<string, object> _pending = new();
+    /// <summary>Owning conversation per waiting prompt, when the run's scope is known.</summary>
+    private readonly ConcurrentDictionary<string, PendingOwner> _pendingConversations = new();
+    private sealed record PendingOwner(Guid Conversation, bool Question);
 
     /// <summary>Live permission-mode probes so terminal commands like /plan and /permissions stay authoritative.</summary>
     public Func<bool>? PlanMode { get; set; }
@@ -31,6 +35,11 @@ public sealed class WebApprovals
     /// <summary>Answers whether a browser client is actually connected; without one a pending prompt is denied instead of hanging.</summary>
     public Func<bool>? HasClients { get; set; }
     public WorkspaceCheckpoints? Checkpoints { get; set; }
+    /// <summary>Raised whenever a prompt starts or stops waiting, so hosts can rebroadcast run state.</summary>
+    public event Action? Changed;
+    /// <summary>Conversations whose prompts are still unanswered, with whether they wait for an answer rather than an approval.</summary>
+    public IReadOnlyList<(Guid Conversation, bool Question)> PendingConversations() =>
+        _pendingConversations.Values.Distinct().Select(owner => (owner.Conversation, owner.Question)).ToArray();
 
     public WebApprovals(BridgeDispatcher dispatcher, BridgeEventPusher pusher)
     {
@@ -66,10 +75,12 @@ public sealed class WebApprovals
         var requestId = Guid.NewGuid().ToString("N");
         var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         _approvals[requestId] = completion;
+        var conversationId = AgentExecutionScope.ConversationId;
         var payload = new
         {
             type = "agent.approvalRequest",
             requestId,
+            conversationId,
             name = request.Name,
             risk = request.Risk.ToString(),
             args = request.Arguments.ValueKind == JsonValueKind.Undefined ? "{}" : request.Arguments.GetRawText(),
@@ -77,7 +88,8 @@ public sealed class WebApprovals
             requiresExplicitApproval = request.RequiresExplicitApproval,
         };
         _pending[requestId] = payload;
-        Push(payload);
+        if (conversationId is { } owner) _pendingConversations[requestId] = new(owner, false);
+        Push(payload); Changed?.Invoke();
         try
         {
             var approved = await completion.Task.WaitAsync(ct);
@@ -93,7 +105,9 @@ public sealed class WebApprovals
         {
             _approvals.TryRemove(requestId, out _);
             _pending.TryRemove(requestId, out _);
+            _pendingConversations.TryRemove(requestId, out _);
             Push(new { type = "interactions.resolved", id = requestId });
+            Changed?.Invoke();
         }
     }
 
@@ -103,9 +117,11 @@ public sealed class WebApprovals
         var id = Guid.NewGuid().ToString("N");
         var completion = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
         _questions[id] = completion;
-        var payload = new { type = "agent.question", id, question = question.Question, choices = question.Choices, multiple = question.Multiple };
+        var conversationId = AgentExecutionScope.ConversationId;
+        var payload = new { type = "agent.question", id, conversationId, question = question.Question, choices = question.Choices, multiple = question.Multiple };
         _pending[id] = payload;
-        Push(payload);
+        if (conversationId is { } owner) _pendingConversations[id] = new(owner, true);
+        Push(payload); Changed?.Invoke();
         try
         {
             return await completion.Task.WaitAsync(ct);
@@ -118,7 +134,9 @@ public sealed class WebApprovals
         {
             _questions.TryRemove(id, out _);
             _pending.TryRemove(id, out _);
+            _pendingConversations.TryRemove(id, out _);
             Push(new { type = "interactions.resolved", id });
+            Changed?.Invoke();
         }
     }
 

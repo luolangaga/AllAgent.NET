@@ -5,9 +5,9 @@ description: Windows 软件界面测试与电脑操作：自动选择后台 UIA�
 
 Use this skill for Windows application operation or UI testing, including testing software you just built. Work on the user's actual requested application/task.
 
-## Enable switch and automatic mode selection
+## Automatic mode selection
 
-Start with `call_tool("computer_status")`. Only the user can turn Computer Use on/off (`/computer on|off`). Never use files, shell or another tool to bypass a disabled switch. The user does not have to select an interaction mode: you choose it with `computer_mode(mode=..., reason=...)`.
+Start with `call_tool("computer_status")`. Computer Use is always available: there is no enable switch to wait for. Every action still passes the host approval policy, read-only role restrictions and the operating-system checks, so never try to bypass a denial. The user does not have to select an interaction mode: you choose it with `computer_mode(mode=..., reason=...)`.
 
 - Software testing and tasks that should run behind the user's work: start with **background**. Read controls, click buttons, set text, select items, toggle options, expand menus and scroll through UIA semantic operations. These operations do not require global focus.
 - Full mouse/keyboard interaction while the user continues using the computer: choose **isolated** if an independent Windows Worker is configured. Its windows and IDs belong to that environment; enumerate them again after switching. It cannot automatically operate apps already opened on the user's desktop. The target software must be present/running in the independent environment.

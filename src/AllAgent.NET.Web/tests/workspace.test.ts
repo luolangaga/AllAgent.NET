@@ -8,7 +8,7 @@ let current = 'C:\\a'
 const reply = (request: Request, result: unknown, error?: string) => host.__bridgeCallback(JSON.stringify({ id: request.id, result, error }))
 const info = (workspace: string) => ({ workspace, dataDirectory: `${workspace}\\.allagent\\data`, sharedDirectory: 'C:\\shared\\AllAgent.NET' })
 const entry = (workspace: string, isCurrent: boolean) => ({ ...info(workspace), name: workspace.slice(-1), sessionCount: 4, isCurrent })
-const controls = (permissionMode = 'full') => ({ permissionMode, permissionLabel: '完全访问', sandboxMode: 'auto', sandboxEffective: '首次任务时验证', running: false })
+const controls = (permissionMode = 'restricted') => ({ permissionMode, permissionLabel: '限制模式', sandboxMode: 'auto', sandboxEffective: '首次任务时验证', running: false })
 
 beforeEach(() => {
   vi.resetModules()
@@ -37,7 +37,7 @@ describe('workspace control', () => {
     expect(store.dataDirectory).toContain('.allagent')
     expect(store.list.map(item => item.workspace)).toEqual(['C:\\a', 'C:\\b'])
     expect(store.list[0]).toMatchObject({ isCurrent: true, sessionCount: 4 })
-    expect(store.controls?.permissionMode).toBe('full')
+    expect(store.controls?.permissionMode).toBe('restricted')
   })
 
   it('switches workspaces and applies the reply', async () => {
@@ -92,6 +92,26 @@ describe('workspace control', () => {
     await store.load()
     host.__bridgeCallback(JSON.stringify({ type: 'workspace.changed', workspace: 'C:\\b', dataDirectory: 'C:\\b\\.allagent\\data' }))
     expect(store.workspace).toBe('C:\\b')
+  })
+
+  it('refreshes the live control state when a run starts or finishes', async () => {
+    let running = true
+    handle = request => {
+      switch (request.method) {
+        case 'workspace.get': return reply(request, info(current))
+        case 'workspaces.list': return reply(request, [entry(current, true)])
+        case 'session.controls': return reply(request, { ...controls(), running })
+        default: return reply(request, true)
+      }
+    }
+    const { useWorkspaceStore } = await import('../src/stores/workspace')
+    const store = useWorkspaceStore()
+    await store.load()
+    expect(store.controls?.running).toBe(true)
+    // The stale flag was the bug: a finished task never unlocked the sandbox switch.
+    running = false
+    host.__bridgeCallback(JSON.stringify({ type: 'runs.changed', conversations: [] }))
+    await vi.waitFor(() => expect(store.controls?.running).toBe(false))
   })
 })
 
@@ -196,7 +216,7 @@ describe('command catalog store', () => {
     handle = request => request.method === 'commands.list'
       ? reply(request, [
           { text: '/help', description: '打开命令面板' },
-          { text: '/permissions', description: '切换权限模式', usage: '[ask|full|plan]' },
+          { text: '/permissions', description: '切换权限模式', usage: '[restricted|ask|full|plan]' },
           { text: '/session', description: '选择或恢复会话', aliases: '/sessions /resume' },
         ])
       : reply(request, true)

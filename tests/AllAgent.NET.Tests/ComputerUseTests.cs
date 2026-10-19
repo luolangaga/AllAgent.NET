@@ -12,13 +12,17 @@ namespace AllAgent.NET.Tests;
 public sealed class ComputerUseTests
 {
     [Fact]
-    public async Task DisabledOperationsFailBeforeApprovalEvenWithFullAccess()
+    public async Task OperationsRunWithoutASwitchButStillAskForApproval()
     {
+        if (!OperatingSystem.IsWindows()) return;
         var state = new ComputerUseState(); var tools = new ComputerUseTools(state); var approvals = 0;
         var registry = new ToolRegistry((_, _) => { approvals++; return ValueTask.FromResult(true); }); registry.Register(tools);
+        var status = await tools.StatusAsync();
+        Assert.True(status.Ok, status.Error);
+        Assert.False(JsonSerializer.SerializeToElement(status.Data).TryGetProperty("enabled", out _));
         var result = await registry.CallAsync("computer_action", JsonSerializer.SerializeToElement(new { windowId = "x", elementId = "x", action = "invoke" }), default);
-        Assert.False(result.Ok); Assert.Contains("disabled", result.Error); Assert.Equal(0, approvals);
-        Assert.False((await tools.WindowsAsync()).Ok);
+        Assert.True(approvals > 0, "a desktop action must still reach the approver");
+        Assert.False(result.Ok);
     }
 
     [Theory]
@@ -29,41 +33,43 @@ public sealed class ComputerUseTests
     public void BackgroundProhibitsGlobalInput(string name, string action)
     {
         if (!OperatingSystem.IsWindows()) return;
-        var state = new ComputerUseState(); state.Configure(true, ComputerInteractionMode.BackgroundOnly);
+        var state = new ComputerUseState(); state.Configure(ComputerInteractionMode.BackgroundOnly);
         var result = new ComputerUseTools(state).ValidateInvocation(name, JsonSerializer.SerializeToElement(new { action }));
         Assert.NotNull(result); Assert.False(result.Ok); Assert.Contains("Background", result.Error);
     }
 
     [Fact]
-    public void ModeChangesRevokeExistingOperationsAndChildOptionsShareSwitch()
+    public void ModeChangesRevokeExistingOperationsAndChildOptionsShareState()
     {
         var options = new AgentOptions(); var child = options with { IsSubAgent = true };
-        options.ComputerUse.Configure(true, ComputerInteractionMode.BackgroundOnly);
+        options.ComputerUse.Configure(ComputerInteractionMode.BackgroundOnly);
         var old = child.ComputerUse.Snapshot();
-        options.ComputerUse.Configure(false, ComputerInteractionMode.ForegroundAllowed);
-        Assert.True(old.Token.IsCancellationRequested); Assert.False(child.ComputerUse.Snapshot().Enabled);
+        options.ComputerUse.Configure(ComputerInteractionMode.ForegroundAllowed);
+        Assert.True(old.Token.IsCancellationRequested);
+        Assert.Equal(ComputerInteractionMode.ForegroundAllowed, child.ComputerUse.Snapshot().Mode);
     }
 
     [Fact]
     public async Task IsolatedModeNeverFallsBackToLocalDesktop()
     {
-        var state = new ComputerUseState(); state.Configure(true, ComputerInteractionMode.IsolatedSession);
+        var state = new ComputerUseState(); state.Configure(ComputerInteractionMode.IsolatedSession);
         var result = await new ComputerUseTools(state).WindowsAsync();
         Assert.False(result.Ok); Assert.Contains("requires", result.Error, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public void CommandsPersistOnlyEnableAndAiOwnsModeChoice()
+    public void CommandsReportStatusAndAiOwnsModeChoice()
     {
         using var workspace = new TestWorkspace(); using var store = new DataStore(Path.Combine(workspace.Root, "computer-settings"));
         var state = new ComputerUseState(); var manager = new ComputerUseManager(store, state, new TerminalUi(true, false));
-        manager.Load(); Assert.False(state.Snapshot().Enabled);
-        manager.Execute(["on"]);
+        manager.Load(); Assert.Equal(ComputerInteractionMode.BackgroundOnly, state.Snapshot().Mode);
+        // Legacy on/off stay accepted but no longer persist a switch.
+        manager.Execute(["on"]); manager.Execute(["off"]);
+        Assert.Null(store.GetSetting("computer:enabled"));
         Assert.Throws<ArgumentException>(() => manager.Execute(["mode", "foreground"]));
         Assert.True(state.TrySelectMode(ComputerInteractionMode.ForegroundAllowed));
         var restored = new ComputerUseState(); new ComputerUseManager(store, restored, new TerminalUi(true, false)).Load();
-        Assert.True(restored.Snapshot().Enabled); Assert.Equal(ComputerInteractionMode.BackgroundOnly, restored.Snapshot().Mode);
-        manager.Execute(["off"]); Assert.Equal("off", store.GetSetting("computer:enabled"));
+        Assert.Equal(ComputerInteractionMode.BackgroundOnly, restored.Snapshot().Mode);
         Assert.Contains(CommandCatalog.Builtins, c => c.Text == "/computer");
     }
 
@@ -78,7 +84,7 @@ public sealed class ComputerUseTests
         try
         {
             Assert.True(fixture.WaitForInputIdle(10000));
-            var state = new ComputerUseState(); state.Configure(true, ComputerInteractionMode.BackgroundOnly);
+            var state = new ComputerUseState(); state.Configure(ComputerInteractionMode.BackgroundOnly);
             var tools = new ComputerUseTools(state);
             var windows = await tools.WindowsAsync(); Assert.True(windows.Ok, windows.Error);
             var list = JsonSerializer.SerializeToElement(windows.Data, ToolResult.JsonOptions);
@@ -125,28 +131,21 @@ public sealed class ComputerUseTests
     }
 
     [Fact]
-    public async Task AiCanChooseModesButCannotEnableOffSwitchOrFabricateIsolation()
+    public async Task AiCanChooseModesButCannotFabricateIsolation()
     {
         var state = new ComputerUseState(); var tools = new ComputerUseTools(state);
-        Assert.False((await tools.ModeAsync("foreground", "Need physical keyboard")).Ok);
-        Assert.False(state.Snapshot().Enabled);
-        state.Configure(true, ComputerInteractionMode.BackgroundOnly);
-        Assert.True((await tools.ModeAsync("foreground", "User requested current desktop interaction")).Ok);
+        Assert.True((await tools.ModeAsync("foreground", "Need physical keyboard")).Ok);
         Assert.Equal(ComputerInteractionMode.ForegroundAllowed, state.Snapshot().Mode);
         Assert.True((await tools.ModeAsync("background", "Software UI test")).Ok);
         Assert.False((await tools.ModeAsync("isolated", "Uninterrupted keyboard testing")).Ok);
         Assert.Equal(ComputerInteractionMode.BackgroundOnly, state.Snapshot().Mode);
-        state.Configure(false, ComputerInteractionMode.BackgroundOnly);
-        Assert.False((await tools.ModeAsync("foreground", "Retry")).Ok);
-        Assert.False(state.Snapshot().Enabled);
     }
 
     [Fact]
-    public async Task TrayOperationsHonorEnableAndPhysicalInputPolicies()
+    public async Task TrayOperationsHonorPhysicalInputPolicies()
     {
         var state = new ComputerUseState(); var tools = new ComputerUseTools(state);
-        Assert.False((await tools.TrayAsync()).Ok);
-        state.Configure(true, ComputerInteractionMode.BackgroundOnly);
+        state.Configure(ComputerInteractionMode.BackgroundOnly);
         var physical = tools.ValidateInvocation("computer_tray_action", JsonSerializer.SerializeToElement(new { action = "right_click" }));
         Assert.NotNull(physical); Assert.False(physical.Ok);
         var registry = new ToolRegistry(); registry.Register(tools);
@@ -166,7 +165,7 @@ public sealed class ComputerUseTests
         var catalog = new AllAgent.NET.Core.Services.SkillCatalog(store, workspace.Root, Path.Combine(workspace.Root, "skill-data"), workspace.Root);
         catalog.SeedBundled(); var skill = catalog.Get("computer-use");
         Assert.True(skill.ModelInvocable); Assert.Contains("computer_mode", skill.Instructions); Assert.Contains("computer_wait", skill.Instructions);
-        Assert.Contains("type_text", skill.Instructions); Assert.Contains("Only the user", skill.Instructions);
+        Assert.Contains("type_text", skill.Instructions); Assert.Contains("approval", skill.Instructions, StringComparison.OrdinalIgnoreCase);
         File.AppendAllText(skill.Path, "\nUser custom instruction."); catalog.SeedBundled();
         Assert.Contains("User custom instruction.", File.ReadAllText(skill.Path));
     }
@@ -180,7 +179,7 @@ public sealed class ComputerUseTests
         var socket = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0); socket.Start();
         var port = ((System.Net.IPEndPoint)socket.LocalEndpoint).Port; socket.Stop();
         var state = new ComputerUseState { IsolatedEndpoint = new Uri($"http://127.0.0.1:{port}/"), IsolatedTokenFile = secretFile };
-        state.Configure(true, ComputerInteractionMode.IsolatedSession);
+        state.Configure(ComputerInteractionMode.IsolatedSession);
         using var server = Process.Start(BoundedProcess.StartInfo(state.WorkerPath, ["--serve", port.ToString(), secretFile])); Assert.NotNull(server);
         try
         {
@@ -201,7 +200,7 @@ public sealed class ComputerUseTests
     public async Task AskAndReadOnlyPoliciesDenyUiChangesBeforeWorkerRuns()
     {
         if (!OperatingSystem.IsWindows()) return;
-        var state = new ComputerUseState(); state.Configure(true, ComputerInteractionMode.BackgroundOnly);
+        var state = new ComputerUseState(); state.Configure(ComputerInteractionMode.BackgroundOnly);
         var tools = new ComputerUseTools(state);
         var args = JsonSerializer.SerializeToElement(new { windowId = "not-a-window", elementId = "not-an-element", action = "invoke" });
         var ask = new ToolRegistry(); ask.Register(tools);
@@ -214,20 +213,20 @@ public sealed class ComputerUseTests
     }
 
     [Fact]
-    public async Task RealHyperlightCodeActCallsRegisteredWindowsBackendAndHonorsOffSwitch()
+    public async Task RealHyperlightCodeActCallsRegisteredWindowsBackendWithoutASwitch()
     {
         if (!OperatingSystem.IsWindows()) return;
         using var workspace = new TestWorkspace();
-        var state = new ComputerUseState(); state.Configure(true, ComputerInteractionMode.BackgroundOnly);
-        await using var runtime = await AgentRuntime.CreateAsync(workspace.Options with { ComputerUse = state, FullAccess = true });
+        var state = new ComputerUseState(); state.Configure(ComputerInteractionMode.BackgroundOnly);
+        await using var runtime = await AgentRuntime.CreateAsync(workspace.Options with { ComputerUse = state, Permission = PermissionMode.Full });
         var modeResult = await runtime.CodeAct.ExecuteAsync("execute_code", JsonSerializer.SerializeToElement(new { code = "r = call_tool('computer_mode', mode='foreground', reason='Check mode selection without sending input')\nif r['ok']:\n    print('selected-foreground')\nelse:\n    print(r['error'])\ns = call_tool('computer_mode', mode='background', reason='Software UI testing')\nif s['ok']:\n    print('selected-background')\nelse:\n    print(s['error'])" }), runtime.CodeAct.CallToolAsync, default);
         Assert.True(modeResult.Ok, modeResult.ToJson()); Assert.Contains("selected-foreground", JsonSerializer.Serialize(modeResult.Data)); Assert.Contains("selected-background", JsonSerializer.Serialize(modeResult.Data));
         Assert.Equal(ComputerInteractionMode.BackgroundOnly, state.Snapshot().Mode);
         var result = await runtime.CodeAct.ExecuteAsync("execute_code", JsonSerializer.SerializeToElement(new { code = "r = call_tool('computer_windows')\nif r['ok']:\n    print('windows-read', len(r['data']))\nelse:\n    print(r['error'])" }), runtime.CodeAct.CallToolAsync, default);
         Assert.True(result.Ok, result.ToJson());
         Assert.Contains("windows-read", JsonSerializer.Serialize(result.Data, ToolResult.JsonOptions));
-        state.Configure(false, ComputerInteractionMode.BackgroundOnly);
-        result = await runtime.CodeAct.ExecuteAsync("execute_code", JsonSerializer.SerializeToElement(new { code = "r = call_tool('computer_windows')\nprint(r['error'])" }), runtime.CodeAct.CallToolAsync, default);
-        Assert.True(result.Ok, result.ToJson()); Assert.Contains("disabled", JsonSerializer.Serialize(result.Data, ToolResult.JsonOptions));
+        // No enable switch: the backend stays reachable and the prompt only points at the skill.
+        Assert.Contains("computer-use", runtime.CodeAct.Instructions);
+        Assert.DoesNotContain("computer_windows", runtime.CodeAct.Instructions);
     }
 }

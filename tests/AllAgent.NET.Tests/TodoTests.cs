@@ -35,7 +35,6 @@ public sealed class TodoTests : IDisposable
     [InlineData("[{\"id\":\"1\",\"content\":\"a\",\"status\":\"invalid\"}]")]
     [InlineData("[{\"id\":\"1\",\"content\":\"a\"},{\"id\":\"1\",\"content\":\"b\"}]")]
     [InlineData("[{\"id\":\"1\",\"content\":\" \"}]")]
-    [InlineData("[{\"id\":\"1\",\"content\":\"a\",\"status\":\"in_progress\"},{\"id\":\"2\",\"content\":\"b\",\"status\":\"in_progress\"}]")]
     [InlineData("[null]")]
     public void InvalidUpdatesPreservePreviousList(string json)
     {
@@ -43,6 +42,15 @@ public sealed class TodoTests : IDisposable
         store.SetTodos(session.Id, [new("original", "保留")]);
         Assert.Throws<ArgumentException>(() => store.SetTodos(session.Id, JsonSerializer.Deserialize<TodoItem[]>(json, ToolResult.JsonOptions)!));
         Assert.Equal("original", Assert.Single(store.GetTodos(session.Id)).Id);
+    }
+
+    [Fact]
+    public void ParallelItemsMayBeInProgressAtTheSameTime()
+    {
+        using var store = new DataStore(_root); var session = new Conversation(); store.AddConversation(session);
+        var saved = store.SetTodos(session.Id, [new("a", "子代理 A", "in_progress"), new("b", "子代理 B", "in_progress"), new("c", "收尾", "pending")]);
+        Assert.Equal(2, saved.Count(item => item.Status == "in_progress"));
+        Assert.Equal(2, store.GetTodos(session.Id).Count(item => item.Status == "in_progress"));
     }
 
     [Fact]
@@ -78,7 +86,7 @@ public sealed class TodoTests : IDisposable
         TodoCommand.Execute(store, ui, session.Id, ["add", "第二步"]);
         TodoCommand.Execute(store, ui, session.Id, ["start", "1"]);
         TodoCommand.Execute(store, ui, session.Id, ["start", "2"]);
-        Assert.Equal("pending", store.GetTodos(session.Id)[0].Status);
+        Assert.Equal("in_progress", store.GetTodos(session.Id)[0].Status);
         TodoCommand.Execute(store, ui, session.Id, ["done", "2"]);
         var result = JsonSerializer.SerializeToElement(new { data = new { todos = store.GetTodos(session.Id) } }, ToolResult.JsonOptions);
         Assert.Contains("已完成 · 第二步", TerminalUi.ResultSummary(result, false, "todo_write"));

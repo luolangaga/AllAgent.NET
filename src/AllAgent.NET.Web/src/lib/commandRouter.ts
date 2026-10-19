@@ -1,7 +1,10 @@
 import { invoke } from '@/bridge'
+import { PERMISSION_OPTIONS } from '@/lib/permissions'
+import { useApiConfigsStore } from '@/stores/apiConfigs'
 import { useAuthStore } from '@/stores/auth'
 import { useCommandsStore } from '@/stores/commands'
 import { useConversationsStore } from '@/stores/conversations'
+import { usePanelsStore } from '@/stores/panels'
 import { usePluginsStore } from '@/stores/plugins'
 import { useSettingsStore } from '@/stores/settings'
 import { useNoticesStore } from '@/stores/ui'
@@ -13,11 +16,26 @@ export interface CommandHost {
   openPalette: () => void
 }
 
+/** Browser-only bubbles surfaced in the command palette next to the host's catalog. */
+export const WEB_COMMANDS: CommandInfo[] = [
+  { text: '/files', description: '打开工作区文件面板 · 只读预览与引用到对话', aliases: 'Ctrl+Shift+E' },
+  { text: '/git', description: '打开 Git 面板 · 更改、历史、分支与贮藏', aliases: 'Ctrl+Shift+G' },
+  { text: '/terminal', description: '打开集成终端 · ConPTY 多标签', aliases: 'Ctrl+`' },
+]
+
+/**
+ * Composer state a command may need. /compact has to run on the model the composer
+ * currently targets, not just the default provider.
+ */
+export interface CommandContext {
+  apiConfigId?: string | null
+}
+
 // Commands that need terminal-only state or UI (message timeline, checkpoints, diff viewer,
-// PowerShell store, inbox steering…). They stay visible in the palette but are labelled.
+// inbox steering…). They stay visible in the palette but are labelled.
 const TERMINAL_ONLY = new Set([
   '/timeline', '/fork', '/branch', '/history', '/copy', '/undo', '/redo', '/checkpoints', '/diff',
-  '/compact', '/context', '/stats', '/memory', '/init', '/doctor', '/powershell', '/computer',
+  '/context', '/stats', '/memory', '/init', '/doctor', '/computer',
   '/background', '/subagents', '/agents', '/queue', '/steer', '/parent', '/children', '/exit',
   '/quit', '/questions', '/cache',
 ])
@@ -62,7 +80,7 @@ export function matchCommands(commands: CommandInfo[], input: string): CommandIn
 
 /** Runs a slash command entered in the composer or the palette. Returns true when the input
  * was consumed; false lets it fall through as a normal message (user-invocable skills). */
-export async function runCommand(raw: string, host: CommandHost): Promise<boolean> {
+export async function runCommand(raw: string, host: CommandHost, context: CommandContext = {}): Promise<boolean> {
   const notices = useNoticesStore()
   const words = splitWords(raw)
   const name = (words[0] ?? '').toLowerCase()
@@ -99,8 +117,40 @@ export async function runCommand(raw: string, host: CommandHost): Promise<boolea
         host.go('chat')
         notices.notify('TODO 清单', 'TODO 由模型在任务中维护，可在对话页查看进度。')
         return true
+      case '/compact': {
+        // Same model-side compaction as the terminal's /compact: older history is
+        // summarised into a continuation summary, the visible transcript is untouched.
+        const conversations = useConversationsStore()
+        if (!conversations.activeId) throw new Error('当前没有对话，无法整理上下文。')
+        const enabled = useApiConfigsStore().configs.filter(item => item.isEnabled)
+        // The composer's selection wins even before the catalog finished loading.
+        const config = (context.apiConfigId ? { id: context.apiConfigId } : undefined)
+          ?? enabled.find(item => item.id === useSettingsStore().defaultProviderId)
+          ?? enabled[0]
+        if (!config) throw new Error('先连接一个可用的模型配置，再整理上下文。')
+        await conversations.compact(config.id, rest.join(' '))
+        notices.notify('正在整理上下文', '模型会总结较早的历史；完整消息仍保留在对话中。')
+        return true
+      }
       case '/skills': host.go('skills'); return true
       case '/plugins': host.go('plugins'); return true
+      // The three bubbles are browser-only; the terminal's own catalog has no such commands.
+      case '/files': case '/file':
+        usePanelsStore().openPanel('files')
+        return true
+      case '/git':
+        usePanelsStore().openPanel('git')
+        return true
+      case '/terminal': case '/term':
+        usePanelsStore().openPanel('terminal')
+        return true
+      case '/powershell': {
+        // The store, search and install live on the PowerShell page; the page and the terminal's
+        // /powershell panel share one module directory.
+        host.go('powershell')
+        if (words.length > 1) notices.notify('PowerShell 组件', '在组件页搜索或按名称安装模块；安装由宿主完成导入验证。')
+        return true
+      }
       case '/mcp': host.go('mcp'); return true
       case '/tasks': host.go('tasks'); return true
       case '/tools': host.go('tools'); return true
@@ -132,14 +182,21 @@ export async function runCommand(raw: string, host: CommandHost): Promise<boolea
         if (!workspace.available) throw new Error('此宿主不支持权限切换。')
         const mode = rest[0] ?? ''
         if (!mode) { notices.notify('当前权限', workspace.controls?.permissionLabel ?? '未知'); return true }
-        if (!['ask', 'full', 'plan'].includes(mode)) throw new Error('权限模式：ask / full / plan。')
+        if (!PERMISSION_OPTIONS.some(option => option.value === mode)) throw new Error(`权限模式：${PERMISSION_OPTIONS.map(option => option.value).join(' / ')}。`)
         await workspace.setPermission(mode)
         notices.notify('权限已切换', workspace.controls?.permissionLabel ?? mode, 'success')
         return true
       }
       case '/plan': {
         const workspace = useWorkspaceStore()
-        const next = workspace.controls?.permissionMode === 'plan' ? 'ask' : 'plan'
+        const next = workspace.controls?.permissionMode === 'plan' ? 'restricted' : 'plan'
+        await workspace.setPermission(next)
+        notices.notify('权限已切换', workspace.controls?.permissionLabel ?? next, 'success')
+        return true
+      }
+      case '/simple': {
+        const workspace = useWorkspaceStore()
+        const next = workspace.controls?.permissionMode === 'simple' ? 'restricted' : 'simple'
         await workspace.setPermission(next)
         notices.notify('权限已切换', workspace.controls?.permissionLabel ?? next, 'success')
         return true

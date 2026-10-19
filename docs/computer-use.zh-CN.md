@@ -1,28 +1,27 @@
 # Windows Computer Use
 
-使用 FlaUI.UIA3 5.0.0，通过 C# 宿主工具执行；Python CodeAct 只编排 `call_tool`，不直接访问 Windows API。默认关闭，启用后的默认模式为后台。支持 UIA 与窗口截图；目前截图使用 PrintWindow，GPU/透明窗口可能返回不完整画面。尚未接入 Windows Graphics Capture、OCR 或坐标动作。
+使用 FlaUI.UIA3 5.0.0，通过 C# 宿主工具执行；Python CodeAct 只编排 `call_tool`，不直接访问 Windows API。始终可用、无需开关，默认模式为后台。支持 UIA 与窗口截图；目前截图使用 PrintWindow，GPU/透明窗口可能返回不完整画面。尚未接入 Windows Graphics Capture、OCR 或坐标动作。
 
-## 开关和三种模式
+## 按需加载：不占常驻提示词
 
-聊天中输入：
+`computer_*` 这 12 个工具仍然注册在宿主里，但**不进入系统提示词的工具目录**（`CodeActProvider.VisibleTools` 过滤，与 `browser` 同一机制）。模型先 `skill_read(name="computer-use")` 读取内置技能——技能里写明工具契约、模式选择规则和验证步骤——再用 `call_tool("computer_windows", ...)` 调用。提示词里只保留一段约 400 字符的指引（`CodeActInstructions.DesktopAutomation`）。这样每次请求不再携带 12 份 schema 和约 1,900 字符的操作指南。
+
+## 三种模式（无需开关）
+
+Computer Use 始终可用，没有需要用户先打开的总开关：入口是内置 `computer-use` 技能，具体动作仍受宿主审批、只读角色限制和系统检查约束。
 
 ```text
-/computer on
 /computer status
-/computer off
+/computer isolated http://127.0.0.1:18765/ C:\Agent\computer-token.txt
 ```
-
-独立命令（无需配置模型或启动 Hyperlight）：
 
 ```powershell
-allagent computer on
 allagent computer status --json
-allagent computer off
 ```
 
-用户只控制总开关；AI 使用 `computer_mode(mode="background|foreground|isolated", reason="任务需要…")` 自主选择操作模式。每次启动默认后台，不恢复上次的前台模式。`computer_status` 会告诉 AI 开关、模式和独立环境配置状态。旧的 `/computer mode` 命令会提示由 AI 选择，不再要求用户手动切模式。
+AI 使用 `computer_mode(mode="background|foreground|isolated", reason="任务需要…")` 自主选择操作模式。每次启动默认后台，不恢复上次的前台模式。`computer_status` 返回当前模式和独立环境配置状态。旧的 `/computer mode` 命令会提示由 AI 选择，不再要求用户手动切模式。
 
-总开关保存到所选 `--data-dir` 下的 DataStore 设置。已有聊天进程运行时，用该聊天中的 `/computer` 修改共享开关；独立命令不热更新另一个已运行进程。父/子 Agent 共用开关和串行操作锁；模式切换等待当前操作结束，并撤销使用旧模式排队的请求。关闭可取消正在执行的本机 Worker。总开关关闭后，AI 无法通过模式选择工具将它重新开启。
+父/子 Agent 共用同一份状态和串行操作锁；模式切换等待当前操作结束，并撤销使用旧模式排队的请求，同时隐藏桌面提示层。旧脚本里的 `/computer on|off` 仍被接受，但不再改变任何状态。
 
 | 模式 | 可用操作 | 使用场景 |
 |---|---|---|
@@ -92,11 +91,10 @@ if r["ok"]:
    ssh -N -L 18765:127.0.0.1:18765 your-user@your-vm
    ```
 
-4. 将同一 token 安全保存到本机文件，配置并启用：
+4. 将同一 token 安全保存到本机文件并配置端点：
 
    ```text
    /computer isolated http://127.0.0.1:18765/ C:\Agent\computer-token.txt
-   /computer on
    ```
 
 AI 再根据任务调用 `computer_mode(mode="isolated", reason="需要完整后台键鼠")`。配置存在不代表环境可用，首个观察请求仍会检查连接、认证与实际会话。Worker 拒绝与调用者相同机器、相同 Windows Session 的请求；没有配置、连接失败、非交互会话或身份验证失败都会报错。没有 VM/独立 Session 的机器不能直接获得完整后台键鼠能力。

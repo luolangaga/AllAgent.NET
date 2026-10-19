@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>示例仪表盘</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="/__sdk/allagent-plugin-sdk.js"></script>
+</head>
+<body>
+  <header class="head">
+    <div>
+      <h1>示例仪表盘</h1>
+      <p>数据来自插件后端桥方法 <code>plugin.allagent.net.sampleplugin.history</code>；主题与上下文由宿主同步。</p>
+    </div>
+    <button class="ghost" id="notify" type="button">发送通知（host 能力）</button>
+  </header>
+
+  <section class="grid">
+    <article class="card"><span class="label">UTC 当前时间</span><b id="clock">—</b><small>随插件后端的 tick 事件刷新</small></article>
+    <article class="card"><span class="label">累计调用</span><b id="total">—</b><small>example_clock 的调用次数</small></article>
+    <article class="card"><span class="label">最近调用</span><b id="last">—</b><small>最近一次工具调用时间</small></article>
+  </section>
+
+  <section class="panel">
+    <h2>调用历史</h2>
+    <ul class="history" id="history"><li class="empty">正在读取…</li></ul>
+  </section>
+
+  <script>
+    const sdk = AllAgentPlugin.connect()
+    const pad = value => String(value).padStart(2, '0')
+
+    function formatUtc(iso) {
+      const date = new Date(iso)
+      if (Number.isNaN(date.getTime())) return String(iso)
+      return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())} UTC`
+    }
+
+    async function refresh() {
+      const result = await sdk.invoke('history', { limit: 12 })
+      const items = result.items ?? []
+      document.getElementById('total').textContent = String(result.total ?? items.length)
+      document.getElementById('last').textContent = items.length ? formatUtc(items[0].utc) : '尚无调用'
+      const list = document.getElementById('history')
+      list.replaceChildren()
+      if (!items.length) {
+        const empty = document.createElement('li')
+        empty.className = 'empty'
+        empty.textContent = '还没有调用：让 Agent 使用一次 example_clock 工具，然后回到这里。'
+        list.appendChild(empty)
+        return
+      }
+      for (const item of items) {
+        const row = document.createElement('li')
+        const when = document.createElement('time')
+        when.textContent = formatUtc(item.utc)
+        const recorded = document.createElement('span')
+        recorded.textContent = '记录于 ' + formatUtc(item.recordedAt ?? item.utc)
+        row.append(when, recorded)
+        list.appendChild(row)
+      }
+    }
+
+    sdk.on('tick', data => {
+      document.getElementById('clock').textContent = formatUtc(data.utc)
+      refresh().catch(() => {})
+    })
+
+    document.getElementById('notify').addEventListener('click', async () => {
+      try {
+        await sdk.invoke('host.notify', { title: '示例插件', message: 'notifications 能力已生效。', appearance: 'success' })
+      } catch (error) {
+        window.alert('通知失败：' + error.message)
+      }
+    })
+
+    sdk.ready
+      .then(() => { sdk.autoResize(); return refresh() })
+      .catch(error => {
+        document.getElementById('clock').textContent = '未连接宿主'
+        console.error('[示例插件]', error)
+      })
+  </script>
+</body>
+</html>

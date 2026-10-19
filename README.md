@@ -1,10 +1,22 @@
+<div align="center">
+
 # AllAgent.NET
 
-面向 Windows 本机开发工作流的终端 AI Agent：用自然语言描述任务，它读写工作区文件、调用本机开发工具、运行验证，并把模型生成的计算代码放进隔离沙箱执行。
+[![Release](https://img.shields.io/github/v/release/luolangaga/AllAgent.NET?style=for-the-badge&labelColor=1f2937&color=3b82f6&logo=github&logoColor=white)](https://github.com/luolangaga/AllAgent.NET/releases/latest)
+[![NuGet](https://img.shields.io/nuget/v/AllAgent.NET.Terminal?style=for-the-badge&labelColor=1f2937&color=8b5cf6&logo=nuget&logoColor=white)](https://www.nuget.org/packages/AllAgent.NET.Terminal)
+[![Platform](https://img.shields.io/badge/Windows-x64-0078d6?style=for-the-badge&labelColor=1f2937&logo=windows&logoColor=white)](#环境要求)
+[![.NET](https://img.shields.io/badge/.NET-10-512bd4?style=for-the-badge&labelColor=1f2937&logo=dotnet&logoColor=white)](#从源码构建)
+[![License](https://img.shields.io/badge/License-GPL--3.0--only-0078d6?style=for-the-badge&labelColor=1f2937)](LICENSE)
 
-Windows x64 · .NET 10 · GPL-3.0-only · NuGet 包 `AllAgent.NET.Terminal`，安装后的命令是 `allagent`
+**在 Windows 上，用一句自然语言驱动你的开发工作流。**
 
-[核心能力](#核心能力一览) · [Windows 上的优势](#为什么适合在-windows-上工作) · [快速开始](#快速开始) · [日常使用](#日常使用) · [安全与隔离](#安全与隔离) · [数据与迁移](#数据与迁移) · [开发与构建](#开发与构建) · [排错](#常见问题与排错) · [许可证](#贡献与许可)
+面向 Windows 本机开发的终端 AI Agent：它读写工作区文件、调用本机开发工具、运行验证，并把模型生成的计算代码放进隔离沙箱执行。
+
+[快速开始](#快速开始) · [核心能力](#核心能力一览) · [安全与隔离](#安全与隔离) · [开发与构建](#开发与构建) · [文档](#更多文档) · [许可证](#许可证)
+
+</div>
+
+---
 
 ## 核心能力一览
 
@@ -13,9 +25,11 @@ Windows x64 · .NET 10 · GPL-3.0-only · NuGet 包 `AllAgent.NET.Terminal`，�
 - **本机工具**：`run_shell` 通过随包的 PowerShell SDK worker 调度受信程序；`powershell_script` 在具名持久会话中执行 PowerShell 代码并返回结构化对象。见 [宿主工具](docs/host-tools.zh-CN.md) 与 [PowerShell 持久会话](docs/powershell-session.zh-CN.md)。
 - **文件与搜索**：`file_read` / `file_write` / `file_edit` / `list_directory`；按名称查找用内置 Everything 便携索引（`everything_search`），按内容搜索用 ripgrep（`file_search`）。见 [文件搜索](docs/file-search.zh-CN.md)。
 - **会话与子代理**：历史分支、时间线、检查点与撤回；子代理提供调查、修改、审查、验证等角色，支持单任务、并行和串行链派发。见 [子代理配置](docs/subagent-configuration.zh-CN.md)。
-- **浏览器与桌面操作**：Browser Use 由 C# 实现，走内置 WebView2 或外置 Chrome/Edge，`web_search` 借它打开搜索页取结果、`web_fetch` 读取网页正文；Computer Use 用 FlaUI 操作 Windows 界面，默认关闭。
+- **浏览器与桌面操作**：Browser Use 由 C# 实现，走内置 WebView2 或外置 Chrome/Edge，`web_search` 借它打开搜索页取结果、`web_fetch` 读取网页正文；Computer Use 用 FlaUI 操作 Windows 界面，无需开关，技能按需加载。
 - **三种界面**：终端（Spectre.Console）、`/web-ui` 浏览器工作台、`allagent gui` 原生窗口（WPF + WebView2），共享同一份工作区、会话与权限。
-- **多模型**：OpenAI Chat / Responses、Anthropic、Gemini、Ollama，以及兼容 OpenAI 协议的服务；也可用 `/login` 登录受支持的账号或插件。
+- **Web 工作台三件套**：顶栏浮窗提供工作区文件预览、完整的 Git 管理（源代码管理布局、AI 生成提交信息、彩色提交图、分支/贮藏/推送拉取）和集成终端（ConPTY + xterm.js，多标签且刷新不中断）。见 [Web 工作台：文件、Git 与终端](docs/webui-files-git-terminal.zh-CN.md)。
+- **插件 Web 扩展**：插件通过 `allagent-plugin.json` 的 `web` 块向工作台贡献页面、自定义工具卡与命令面板入口；插件界面在独立源的沙箱 iframe 中自绘（任意框架），经 SDK 双向通信并实时同步主题与上下文。见 [插件 Web 前端扩展](docs/plugin-web-ui.zh-CN.md)。
+- **多模型**：OpenAI Chat / Responses、Anthropic、Gemini、Ollama，以及兼容 OpenAI 协议的服务；也可用 `login` 登录受支持的账号或插件。
 
 ## 为什么适合在 Windows 上工作
 
@@ -48,7 +62,7 @@ Windows x64 · .NET 10 · GPL-3.0-only · NuGet 包 `AllAgent.NET.Terminal`，�
 
 ## 快速开始
 
-### 1. 环境要求
+### 环境要求
 
 | 项目 | 要求 |
 |---|---|
@@ -61,7 +75,11 @@ Windows x64 · .NET 10 · GPL-3.0-only · NuGet 包 `AllAgent.NET.Terminal`，�
 | Node.js / npm | 只有构建 React 前端时需要，终端 Agent 执行不依赖 Node.js |
 | 图形界面 | 原生窗口需要 Microsoft Edge WebView2 Runtime |
 
-### 2. 安装
+### 安装
+
+**Windows 安装包（推荐）**：从 [Releases](https://github.com/luolangaga/AllAgent.NET/releases) 下载 `AllAgent.NET-<版本>-win-x64-setup.exe`。安装时可以选择创建「终端」和「桌面端」两个桌面快捷方式，并自动补齐 WebView2 运行时、Python 3.13 与 ripgrep；自包含发布，无需预装 .NET 运行时。详见 [Windows 安装包](docs/windows-installer.zh-CN.md)。
+
+**通过 .NET Tool 安装**：
 
 ```powershell
 dotnet tool install --global AllAgent.NET.Terminal
@@ -76,9 +94,9 @@ dotnet tool update --global AllAgent.NET.Terminal
 dotnet tool uninstall --global AllAgent.NET.Terminal
 ```
 
-从源码打包并用本地 NuGet 源安装的流程见 [.NET Tool 打包与安装](docs/nuget-tool.zh-CN.md)。
+从源码打包并用本地 NuGet 源安装的流程见 [.NET Tool 打包与安装](docs/nuget-tool.zh-CN.md)，本地构建 exe 安装包的流程见 [Windows 安装包](docs/windows-installer.zh-CN.md)。
 
-### 3. 首次运行与初始化
+### 首次运行与初始化
 
 ```powershell
 allagent chat --workspace C:\Projects\MyProject
@@ -86,9 +104,9 @@ allagent chat --workspace C:\Projects\MyProject
 
 第一次进入聊天会初始化环境：内嵌 PowerShell SDK worker 实际启动自检，检查 ripgrep 与宿主 Python 版本，缺失时给出 winget 命令并在安装后提示重启。模型与扩展管理不需要启动沙箱，首次执行任务时才校验执行环境。离线或只改配置时可用 `--no-initialize` 跳过初始化。
 
-### 4. 配置模型
+### 配置模型
 
-进入聊天后按 **F2** 选择提供商与模型，或用 `/login` 登录受支持账号；`/providers edit 配置名` 编辑地址、Key、协议与参数，`/model` 随时切换。终端会记住上次的选择。
+进入聊天后按 **F2** 选择提供商与模型，或用 `login` 登录受支持账号；`/providers edit 配置名` 编辑地址、Key、协议与参数，`/model` 随时切换。终端会记住上次的选择。
 
 也可以临时用环境变量配置，不把 API Key 写进项目：
 
@@ -100,7 +118,7 @@ $env:ALLAGENT_API_KEY = '<你的 API Key>'
 allagent chat --workspace C:\Projects\MyProject
 ```
 
-### 5. 图形界面与 Web 工作台
+### 图形界面与 Web 工作台
 
 | 入口 | 行为 |
 |---|---|
@@ -114,7 +132,7 @@ allagent gui --gui-url http://127.0.0.1:5173/
 allagent web-ui
 ```
 
-窗口是随包分发的 WPF + WebView2 外壳（`gui/`），同一数据目录只允许一个窗口。
+窗口是随包分发的 WPF + WebView2 外壳（`AllAgent.NET.Gui.exe`），同一数据目录只允许一个窗口。工作台页面包括对话、模型与 API、技能、工具、PowerShell、插件、MCP 服务、任务与设置；「PowerShell」页与终端的 `/powershell` 面板共享同一份模块目录，可以在浏览器里搜索 PowerShell Gallery、安装模块并查看导入验证后的导出命令。
 
 ## 日常使用
 
@@ -139,11 +157,11 @@ allagent web-ui
 | 命令 | 用途 |
 |---|---|
 | `/model`、`/models`、`/providers` | 切换模型、查看可用模型、管理提供商配置 |
-| `/permissions ask\|full\|plan`、`/plan` | 切换权限模式 |
+| `/permissions restricted\|ask\|full\|plan`、`/plan` | 切换权限模式 |
 | `/sandbox status\|auto\|hyperlight\|monty` | 查看或切换沙箱 |
 | `/questions default\|minimal\|balanced\|proactive\|status` | 调整 Agent 主动提问的倾向（0–3） |
 | `/new`、`/session`、`/branch`、`/fork`、`/timeline` | 新建、恢复、复制与定位历史 |
-| `/compact`、`/context`、`/stats`、`/cache` | 归档旧上下文、查看占用与累计 Token 用量、缓存策略 |
+| `/compact`、`/context`、`/stats`、`/cache` | 总结较早上下文（完整历史保留）、查看占用与累计 Token 用量、缓存策略 |
 | `/diff`、`/undo`、`/redo`、`/checkpoints` | 查看文件修改、撤回与重做 |
 | `/background`、`/tasks`、`/steer`、`/queue` | 后台任务、结果与授权、步骤边界指导、排队输入 |
 | `/agents`、`/subagents`、`/parent`、`/children` | 子代理配置与父子会话切换 |
@@ -154,20 +172,34 @@ allagent web-ui
 
 ### 权限模式
 
-- **full（默认）**：宿主工具通常不再逐次审批，允许工作区外路径；沙箱隔离仍然生效，且不授予管理员权限。也可显式写 `--full-access` 或 `/permissions full`。
-- **ask**：`--ask` 或 `/permissions ask` 打开逐次审批。审批卡片默认选中「允许这一次」，`Enter` 确认、`Y` 允许、`N` 或 `Esc` 拒绝、`A` 记住该目录。
+- **restricted（默认）**：限制模式。工作区内的文件读写和可信 Shell 别名（`git`、`rg`、`dotnet`、`node`、`npm` 等，可用 `--allow-shell` 扩展）直接执行；工作区外的路径、未信任的程序以及 MCP / 桌面 / 插件工具仍逐次授权。也可显式写 `--restricted` 或 `/permissions restricted`。
+- **full**：完全访问。宿主工具通常不再逐次审批，允许工作区外路径；沙箱隔离仍然生效，且不授予管理员权限。`--full-access` 或 `/permissions full`。
+- **ask**：`--ask` 或 `/permissions ask` 打开逐次审批，工作区内的写入也要询问。审批卡片默认选中「允许这一次」，`Enter` 确认、`Y` 允许、`N` 或 `Esc` 拒绝、`A` 记住该目录。
 - **plan**：`/permissions plan` 或 `/plan` 进入只读规划，文件读取可用，写入、Shell 和 MCP 操作停用。
+- **simple**：`/permissions simple` 或 `/simple` 进入简单模式，只保留 `powershell_script`、`file_read`、`file_edit` 三个宿主工具；技能、MCP、子代理、插件、浏览器与桌面工具停用，新建文件、建目录和执行都交给 PowerShell。Web 工作台输入框的权限菜单同样可选。
 - 单次代码执行超时默认 600 秒（`--ask` 下 60 秒），用 `--code-timeout` 调整。
 
 ### 会话、分支与子代理
 
-任务运行中可用 `/steer` 在模型步骤边界补充指导，用 `/queue add 任务` 显式排队下一条任务。会话支持历史分支（`/branch`、`/fork`）、时间线（`/timeline`）和检查点（`/checkpoints`）；`/compact` 让模型总结并归档旧上下文。
+任务运行中可用 `/steer` 在模型步骤边界补充指导，用 `/queue add 任务` 显式排队下一条任务。会话支持历史分支（`/branch`、`/fork`）、时间线（`/timeline`）和检查点（`/checkpoints`）；`/compact` 让模型总结较早的上下文并保留完整历史（终端、GUI 与 `/web-ui` 都可用）。
 
 子代理由 `/agents` 配置模型、权限、预算与失败策略，`/subagents` 设置默认模型（默认跟随当前模型）。子代理不会直接向用户提问，而是把结果和阻塞原因返回主代理；停止会等待实际收尾。`/parent`、`/children` 在父子会话之间切换。
 
 ### 多开终端
 
 每个 `allagent` 实例拥有独立的输入框、当前会话、模型选择和窗口尺寸，同一工作区共享 `.allagent/data/` 内的项目历史，保存走跨进程事务。后台任务只归当前实例所有，关闭窗口会结束该实例，遗留任务在下次启动时标记为中断（可用 `--resume ID` 恢复历史）；所有终端关闭后不驻留后台。
+
+### 多会话后台运行
+
+一个会话正在执行时，切走不会再中断它：`/new`、`/session <ID>`、`/parent`、`/children`、F3 或直接切到另一个会话都可以随时进行，正在跑的会话继续在后台执行，多个主会话可以同时跑。
+
+- **标记**：终端侧栏（右下角「后台会话」）常驻列出其他正在运行的会话；最近会话列表、F3 选择器与 Web 侧栏会标出「运行中 / 需要授权 / 需要回答」；Web/图形界面右下角有浮层，可直接跳转或停止某个后台会话。
+- **回到实时视图**：切回正在跑的会话会重放该轮已产生的输出并继续实时渲染，不会丢失或重复内容。
+- **输入即指导**：给正在运行的会话发文本会作为指导注入当前任务（等同 `/steer`），不会另起一轮；要另起任务先停止它（Esc）。
+- **需要你时挂起**：后台会话遇到授权或提问会挂起等待并在列表打标记，切回该会话立刻弹出对话框继续；不会代替你批准或拒绝。
+- **完成提示**：后台会话结束时状态行/侧栏提示一次（Web 端为提示条），不自动跳转。
+- **跨工作区**：`/workspace` 切换后，旧工作区的会话继续执行；侧栏会显示其他工作区的运行中数量，切回去用 `/session <ID>` 回到实时视图。
+- **运行中可用**：`/new`、`/session [ID]`、`/sessions`、`/resume`、`/parent`、`/children`、`/todo`、`/status`、`/copy`、`/export`、`/tasks`、`/queue`、`/steer`、`/help`、`/thinking`、`/details`、`/web-ui status`；权限、沙箱与撤回类命令（`/undo`、`/redo`、`/rewind`）需要先停止全部会话。
 
 ## 安全与隔离
 
@@ -252,7 +284,7 @@ dotnet test tests/AllAgent.NET.Tests
 dotnet publish src/AllAgent.NET.Terminal -c Release -r win-x64 --self-contained true -o artifacts/allagent-win-x64
 ```
 
-发布后请保留整个输出目录，尤其是 `sandbox/`、`powershell/`、`gui/`、`web/` 和 `builtin-plugins/`；缺少 `powershell/` 时需重新安装或修复工具包。`AllAgent.NET.Core` 可嵌入其他 .NET 应用，扩展工具用 `[AgentTool]` 和 `[Description]` 注册，生成器产出 `IAgentToolSet`。
+发布后请保留整个输出目录：终端宿主与各 worker（`AllAgent.NET.Gui.exe`、`AllAgent.NET.Browser.exe`、`AllAgent.NET.ComputerUse.exe`、`AllAgent.NET.Sandbox.exe`、`AllAgent.NET.PowerShell.exe`）同目录共享一份运行时，另有 `Modules/`、`web/`、`everything/` 与 `builtin-plugins/`；缺少 `AllAgent.NET.PowerShell.exe` 或 `Modules/` 时需重新安装或修复工具包。`AllAgent.NET.Core` 可嵌入其他 .NET 应用，扩展工具用 `[AgentTool]` 和 `[Description]` 注册，生成器产出 `IAgentToolSet`。
 
 ### 解决方案结构
 
@@ -262,8 +294,8 @@ dotnet publish src/AllAgent.NET.Terminal -c Release -r win-x64 --self-contained 
 | `src/AllAgent.NET.Terminal` | Spectre.Console 终端宿主（`chat`、`web-ui`、`-guimode`） |
 | `src/AllAgent.NET.Gui` | WPF + WebView2 原生窗口外壳，不依赖 Core |
 | `src/AllAgent.NET.Web` | React 19 + Iconiq UI + Vite 5 + TypeScript 聊天界面 |
-| `src/AllAgent.NET.Sandbox` | Hyperlight 隔离执行 worker，随包在 `sandbox/` |
-| `src/AllAgent.NET.PowerShell` | 嵌入的 PowerShell SDK worker，随包在 `powershell/` |
+| `src/AllAgent.NET.Sandbox` | Hyperlight 隔离执行 worker，随包与宿主同目录 |
+| `src/AllAgent.NET.PowerShell` | 嵌入的 PowerShell SDK worker，随包与宿主同目录（模块在 `Modules/`） |
 | `src/AllAgent.NET.Browser` | C# 浏览器运行时（WebView2 与外置浏览器） |
 | `src/AllAgent.NET.ComputerUse` | 基于 FlaUI 的桌面操作 worker |
 | `src/AllAgent.NET.ToolGenerator` | Roslyn 增量生成器：JSON Schema 与类型化分发 |
@@ -294,11 +326,33 @@ dotnet publish src/AllAgent.NET.Terminal -c Release -r win-x64 --self-contained 
 - [账号登录与模型连接](docs/login.zh-CN.md)
 - [子代理独立配置](docs/subagent-configuration.zh-CN.md) · [自定义代理角色示例](docs/agent-roles.example.json)
 - [终端交互与任务控制](docs/terminal-followup.zh-CN.md) · [TODO 执行清单](docs/todo.zh-CN.md)
+- [多会话后台运行与跨工作区](docs/multi-session-runs.zh-CN.md)
+- [Web 工作台：文件浏览、Git 管理与集成终端](docs/webui-files-git-terminal.zh-CN.md)
 - [.NET Tool 打包与安装](docs/nuget-tool.zh-CN.md)
-- [插件开发指南](docs/plugins.zh-CN.md) · [插件开发入门](docs/plugin-development-beginner.zh-CN.md) · [执行积极度插件](plugins/AllAgent.NET.Diligence/README.md)
+- [插件开发指南](docs/plugins.zh-CN.md) · [插件开发入门](docs/plugin-development-beginner.zh-CN.md) · [插件 Web 前端扩展](docs/plugin-web-ui.zh-CN.md) · [执行积极度插件](plugins/AllAgent.NET.Diligence/README.md)
 
-## 贡献与许可
+## 许可证
+
+本项目采用 **GPL-3.0-only** 开源协议。
+
+- 源代码可自由使用、修改和分发
+- 衍生作品必须以相同协议开源
+- 详见 [LICENSE](LICENSE)；第三方代码的声明与许可证见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)
+
+---
+
+<div align="center">
 
 欢迎通过 [Issues](https://github.com/luolangaga/AllAgent.NET/issues) 报告问题或提出建议。提交改动时请说明复现步骤、行为变化与验证方式；环境或沙箱问题请附上 `doctor` 输出，并移除密钥和个人数据。
 
-AllAgent.NET 使用 [GPL-3.0-only](LICENSE) 协议。第三方代码的声明与许可证见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
+**如果觉得有用，给个 Star 吧！**
+
+<sub>Windows x64 · .NET 10 · GPL-3.0-only</sub>
+
+</div>
+
+
+
+
+
+

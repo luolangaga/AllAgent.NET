@@ -6,13 +6,21 @@ using AllAgent.NET.Core.Tools;
 
 namespace AllAgent.NET.Core.Extensions;
 
-public sealed record InstalledPlugin(string PackageId, string Version, string Directory, bool Enabled = true);
-public sealed record PluginStatus(string Id, string Name, string PackageId, string Version, bool Enabled, string? Error, IReadOnlyList<string>? Tools = null, IReadOnlyList<string>? Commands = null);
+public sealed record InstalledPlugin(string PackageId, string Version, string Directory, bool Enabled = true, bool WebEnabled = true);
+public sealed record PluginStatus(string Id, string Name, string PackageId, string Version, bool Enabled, string? Error, IReadOnlyList<string>? Tools = null, IReadOnlyList<string>? Commands = null, PluginWebStatus? Web = null);
 
 public sealed class PluginHost : IAsyncDisposable
 {
     private sealed record Loaded(IAllAgentPlugin Plugin, PluginContext Context, PluginLoadContext Loader, InstalledPlugin Package);
+    private sealed record WebLoaded(PluginWebManifest Manifest, PluginWebContributions Contributions, IReadOnlyList<PluginWebBridgeHandler> Bridges, string? Error);
     private readonly List<Loaded> _loaded = [];
+    private readonly Dictionary<string, WebLoaded> _web = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Fan-out for plugin backend → browser frames events; the web UI host rebroadcasts them.</summary>
+    public PluginWebEvents WebEvents { get; } = new();
+    /// <summary>Raised after any change to the plugin set or their web enablement, so hosts can
+    /// re-sync bridge bindings and tell connected pages to reload contributions.</summary>
+    public event Action? Changed;
+    private void RaiseChanged() => Changed?.Invoke();
     private readonly Dictionary<string, string> _errors = new(StringComparer.OrdinalIgnoreCase);
     private readonly string _root;
     private readonly object _sync = new();
@@ -50,9 +58,10 @@ public sealed class PluginHost : IAsyncDisposable
             }
         }
     }
-    public IReadOnlyList<PluginStatus> Status => Installed.Select(p => { lock (_sync) { var loaded = _loaded.FirstOrDefault(l => l.Package.PackageId.Equals(p.PackageId, StringComparison.OrdinalIgnoreCase)); return new PluginStatus(loaded?.Plugin.Id ?? p.PackageId, loaded?.Plugin.Name ?? p.PackageId, p.PackageId, p.Version, p.Enabled, _errors.GetValueOrDefault(p.PackageId),
+    public IReadOnlyList<PluginStatus> Status => Installed.Select(p => { lock (_sync) { var loaded = _loaded.FirstOrDefault(l => l.Package.PackageId.Equals(p.PackageId, StringComparison.OrdinalIgnoreCase)); _web.TryGetValue(p.PackageId, out var web); return new PluginStatus(loaded?.Plugin.Id ?? p.PackageId, loaded?.Plugin.Name ?? p.PackageId, p.PackageId, p.Version, p.Enabled, _errors.GetValueOrDefault(p.PackageId),
         loaded == null ? [] : loaded.Context.Tools.SelectMany(t => t.Definitions).Select(d => d.Name).ToArray(),
-        loaded == null ? [] : loaded.Context.Commands.Select(c => c.Name).ToArray()); } }).ToArray();
+        loaded == null ? [] : loaded.Context.Commands.Select(c => c.Name).ToArray(),
+        web == null ? null : new PluginWebStatus(p.WebEnabled, web.Contributions.Pages?.Count ?? 0, web.Contributions.Panels?.Count ?? 0, web.Contributions.ToolCards?.Count ?? 0, web.Manifest.Capabilities ?? [], web.Error)); } }).ToArray();
     /// <summary>Every loaded plugin tool with the package it belongs to, for source attribution in tool catalogs.</summary>
     public IReadOnlyList<(string PackageId, AgentToolDescriptor Tool)> PluginTools
     {
@@ -67,11 +76,134 @@ public sealed class PluginHost : IAsyncDisposable
     { lock (_sync) { if (!HookStatus.Any(h => h.Name == name)) throw new ArgumentException("Hook 不存在。"); if (enabled) _disabledHooks.Remove(name); else _disabledHooks.Add(name); File.WriteAllText(Path.Combine(_root, "disabled-hooks.json"), JsonSerializer.Serialize(_disabledHooks)); } }
     private IReadOnlyList<AgentHook> HookSnapshot() { lock (_sync) return _loaded.SelectMany(l => l.Context.Hooks).Where(h => !_disabledHooks.Contains(h.Name)).ToArray(); }
     public IAgentToolSet ToolSet() { lock (_sync) return new PluginToolSet(_loaded.SelectMany(l => l.Context.Tools).ToArray()); }
+    public IAgentToolSet WorkspaceIndependentToolSet() { lock (_sync) return new PluginToolSet(_loaded.SelectMany(l => l.Context.WorkspaceIndependentTools).ToArray()); }
+
+    // ── Web extensions ────────────────────────────────────────────────────────
+
+    /// <summary>Bridge methods contributed by plugins, namespaced plugin.&lt;packageId&gt;.&lt;name&gt;.
+    /// Only enabled, web-enabled plugins with a valid web manifest are exposed.</summary>
+    public IReadOnlyDictionary<string, Func<JsonElement, CancellationToken, Task<object?>>> WebBridgeHandlers
+    {
+        get
+        {
+            lock (_sync)
+            {
+                var active = Installed.ToDictionary(p => p.PackageId, p => p.Enabled && p.WebEnabled, StringComparer.OrdinalIgnoreCase);
+                var handlers = new Dictionary<string, Func<JsonElement, CancellationToken, Task<object?>>>(StringComparer.Ordinal);
+                foreach (var (packageId, web) in _web)
+                {
+                    if (web.Error != null || !active.GetValueOrDefault(packageId)) continue;
+                    foreach (var bridge in web.Bridges)
+                    {
+                        var handler = bridge.Handler;
+                        handlers["plugin." + packageId.ToLowerInvariant() + "." + bridge.Name] = async (parameters, ct) =>
+                        {
+                            var result = await handler(parameters.ValueKind == JsonValueKind.Undefined ? null : parameters, ct);
+                            return result.HasValue ? (object)result.Value : null;
+                        };
+                    }
+                }
+                return handlers;
+            }
+        }
+    }
+
+    /// <summary>Contribution snapshot for the browser: one entry per installed package that ships a
+    /// web block, whether or not it is currently loaded, so the plugins page can show and toggle it.</summary>
+    public PluginWebSnapshot WebSnapshot(string? assetBaseUrl)
+    {
+        var items = new List<PluginWebInfo>();
+        foreach (var package in Installed)
+        {
+            WebLoaded? web; string? loadError;
+            lock (_sync)
+            {
+                _web.TryGetValue(package.PackageId, out web);
+                loadError = _errors.GetValueOrDefault(package.PackageId);
+                if (web == null && !package.Enabled) web = TryReadWebManifest(package);
+            }
+            if (web == null) continue;
+            var loaded = Status.FirstOrDefault(status => status.PackageId.Equals(package.PackageId, StringComparison.OrdinalIgnoreCase));
+            items.Add(new PluginWebInfo(
+                package.PackageId,
+                loaded?.Id ?? package.PackageId,
+                loaded?.Name ?? package.PackageId,
+                package.Version,
+                package.Enabled,
+                package.WebEnabled,
+                package.Enabled && package.WebEnabled && web.Error == null,
+                web.Manifest.Capabilities ?? [],
+                web.Contributions,
+                ResolveDevUrl(web.Manifest.DevUrl),
+                web.Error ?? loadError));
+        }
+        return new PluginWebSnapshot(1, assetBaseUrl, items);
+    }
+
+    /// <summary>Soft kill switch for one plugin's web UI; persisted in installed.json. Raise-through:
+    /// any change re-pushes contributions to connected pages.</summary>
+    public void SetWebEnabled(string packageId, bool enabled)
+    {
+        var package = Installed.Single(p => p.PackageId.Equals(packageId, StringComparison.OrdinalIgnoreCase));
+        Save(package with { WebEnabled = enabled });
+    }
+
+    /// <summary>Install directory of an active web plugin, or null when its assets must not be served.</summary>
+    public string? WebAssetRoot(string packageId)
+    {
+        lock (_sync)
+        {
+            var package = Installed.FirstOrDefault(p => p.PackageId.Equals(packageId, StringComparison.OrdinalIgnoreCase));
+            if (package == null || !package.Enabled || !package.WebEnabled) return null;
+            if (!_web.TryGetValue(package.PackageId, out var web) || web.Error != null) return null;
+            var directory = Path.GetFullPath(Path.Combine(_root, package.Directory));
+            return directory.StartsWith(_root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ? directory : null;
+        }
+    }
+
+    private WebLoaded? TryReadWebManifest(InstalledPlugin package)
+    {
+        try
+        {
+            var directory = Path.GetFullPath(Path.Combine(_root, package.Directory));
+            if (!directory.StartsWith(_root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) return null;
+            var manifestPath = Path.Combine(directory, "allagent-plugin.json");
+            if (!File.Exists(manifestPath)) return null;
+            var manifest = JsonSerializer.Deserialize<PluginManifest>(File.ReadAllText(manifestPath), new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            return manifest?.Web == null ? null : new WebLoaded(manifest.Web, PluginWebContributions.Empty, [], null);
+        }
+        catch { return null; }
+    }
+
+    /// <summary>Validates the declared web block; failures disable only the web part of the plugin.</summary>
+    private static WebLoaded? ValidateWeb(string directory, PluginWebManifest? manifest, PluginContext context)
+    {
+        if (manifest == null) return null;
+        if (manifest.SdkVersion > 1) return new(manifest, PluginWebContributions.Empty, [], "插件 Web 扩展需要的宿主版本更高（web.sdkVersion=" + manifest.SdkVersion + "）。");
+        try
+        {
+            var webRoot = Path.GetFullPath(Path.Combine(directory, "web"));
+            if (manifest.Entry != null) PluginWebValidation.ResolveEntry(manifest.Entry, directory, webRoot, "默认页");
+            var contributions = PluginWebValidation.Normalize(manifest.Contributes, directory, webRoot);
+            var bridges = context.WebBridges;
+            PluginWebValidation.ValidateIds(bridges.Select(bridge => bridge.Name), "Web 桥方法");
+            return new(manifest with { DevUrl = ResolveDevUrl(manifest.DevUrl) }, contributions, bridges, null);
+        }
+        catch (Exception ex) { return new(manifest, PluginWebContributions.Empty, [], ex.GetBaseException().Message); }
+    }
+
+    /// <summary>Dev-server override for local plugin development. Honored only when the host runs
+    /// with ALLAGENT_PLUGIN_DEV=1 and the URL is loopback HTTP.</summary>
+    private static string? ResolveDevUrl(string? value)
+        => Environment.GetEnvironmentVariable("ALLAGENT_PLUGIN_DEV") == "1" && value != null && PluginWebValidation.IsLoopbackHttp(value.Trim())
+            ? value.Trim().TrimEnd('/') : null;
+
     public void Save(InstalledPlugin package)
     {
         var items = Installed.Where(p => !p.PackageId.Equals(package.PackageId, StringComparison.OrdinalIgnoreCase)).Append(package).ToArray();
         var temp = ManifestPath + ".tmp"; File.WriteAllText(temp, JsonSerializer.Serialize(items, new JsonSerializerOptions { WriteIndented = true })); File.Move(temp, ManifestPath, true);
         lock (_sync) _installedSnapshot = null;
+        RaiseChanged();
     }
     public async Task LoadEnabledAsync(CancellationToken ct = default)
     {
@@ -83,6 +215,7 @@ public sealed class PluginHost : IAsyncDisposable
             catch (Exception ex) { _errors[package.PackageId] = ex.GetBaseException().Message; }
         }
         await Task.CompletedTask;
+        RaiseChanged();
     }
     /// <summary>Install plugins shipped next to the host once; an existing installation of the same package is kept.</summary>
     public void InstallBuiltins(string builtinRoot)
@@ -125,7 +258,8 @@ public sealed class PluginHost : IAsyncDisposable
         {
             var type = loader.LoadEntry(path).GetType(manifest.EntryType, true)!;
             plugin = Activator.CreateInstance(type) as IAllAgentPlugin ?? throw new InvalidDataException("入口类型必须实现 IAllAgentPlugin。");
-            var context = new PluginContext(Path.Combine(directory, "data"), _services); Directory.CreateDirectory(context.DataDirectory); plugin.Register(context);
+            var context = new PluginContext(Path.Combine(directory, "data"), _services, package.PackageId, WebEvents); Directory.CreateDirectory(context.DataDirectory); plugin.Register(context);
+            var web = ValidateWeb(directory, manifest.Web, context);
             lock (_sync)
             {
                 if (_loaded.Any(l => l.Plugin.Id == plugin.Id)) throw new InvalidOperationException("插件 ID 冲突。");
@@ -142,6 +276,7 @@ public sealed class PluginHost : IAsyncDisposable
                 ValidateIds(_loaded.SelectMany(l => l.Context.TurnExtensions).Select(c => c.Name).Concat(context.TurnExtensions.Select(c => c.Name)));
                 ValidateIds(_loaded.SelectMany(l => l.Context.RequestExtensions).Select(c => c.Name).Concat(context.RequestExtensions.Select(c => c.Name)));
                 _loaded.Add(new(plugin, context, loader, package));
+                if (web != null) _web[package.PackageId] = web;
             }
         }
         catch { if (plugin != null) plugin.DisposeAsync().AsTask().GetAwaiter().GetResult(); loader.Unload(); throw; }
@@ -153,7 +288,7 @@ public sealed class PluginHost : IAsyncDisposable
         var package = Installed.Single(p => p.PackageId.Equals(packageId, StringComparison.OrdinalIgnoreCase));
         // Host changes are invoked only when no agent is executing; no stale tool invocation can race unload.
         List<Loaded> removed;
-        lock (_sync) { removed = _loaded.Where(l => l.Package.PackageId == package.PackageId).ToList(); _loaded.RemoveAll(l => l.Package.PackageId == package.PackageId); }
+        lock (_sync) { removed = _loaded.Where(l => l.Package.PackageId == package.PackageId).ToList(); _loaded.RemoveAll(l => l.Package.PackageId == package.PackageId); _web.Remove(package.PackageId); }
         foreach (var loaded in removed) { try { await loaded.Plugin.DisposeAsync(); } finally { loaded.Loader.Unload(); } }
         Save(package with { Enabled = enabled }); if (enabled) await LoadEnabledAsync();
     }
@@ -163,12 +298,13 @@ public sealed class PluginHost : IAsyncDisposable
         // Keep files recoverable; removing the manifest entry makes the package unavailable to the host.
         File.WriteAllText(ManifestPath + ".tmp", JsonSerializer.Serialize(Installed.Where(p => !p.PackageId.Equals(packageId, StringComparison.OrdinalIgnoreCase)))); File.Move(ManifestPath + ".tmp", ManifestPath, true);
         lock (_sync) _installedSnapshot = null;
+        RaiseChanged();
     }
     public async ValueTask DisposeAsync()
-    { foreach (var loaded in _loaded) { try { await loaded.Plugin.DisposeAsync(); } finally { loaded.Loader.Unload(); } } _loaded.Clear(); }
+    { foreach (var loaded in _loaded) { try { await loaded.Plugin.DisposeAsync(); } finally { loaded.Loader.Unload(); } } _loaded.Clear(); lock (_sync) _web.Clear(); }
 }
 
-public sealed record PluginManifest(string Assembly, string EntryType, int SdkVersion = 1);
+public sealed record PluginManifest(string Assembly, string EntryType, int SdkVersion = 1, PluginWebManifest? Web = null);
 
 internal sealed class PluginLoadContext(string path) : AssemblyLoadContext(isCollectible: true)
 {

@@ -1,4 +1,5 @@
 using AllAgent.NET.Core.Models;
+using AllAgent.NET.Core.Runtime;
 using AllAgent.NET.Core.Tools;
 
 namespace AllAgent.NET.Terminal;
@@ -19,16 +20,16 @@ internal static class WorkspaceNavigation
         return ["/workspace", path];
     }
 
-    public static string Resolve(string path, string current, bool fullAccess)
+    public static string Resolve(string path, string current, PermissionMode permission)
     {
         if (string.IsNullOrWhiteSpace(path)) throw new ArgumentException("用法：/workspace 文件夹路径。");
         if (path == "~" || path.StartsWith("~/") || path.StartsWith("~\\"))
             path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), path.Length == 1 ? "" : path[2..]);
         var target = Path.GetFullPath(path, current);
-        return new WorkspacePolicy(target, fullAccess: fullAccess).Root;
+        return new WorkspacePolicy(target, fullAccess: permission == PermissionMode.Full).Root;
     }
 
-    public static string[] Arguments(string[] original, TerminalArguments parsed, string target, bool fullAccess, Guid? resume = null)
+    public static string[] Arguments(string[] original, TerminalArguments parsed, string target, PermissionMode permission, Guid? resume = null)
     {
         var result = new List<string>();
         for (var i = 0; i < original.Length; i++)
@@ -36,14 +37,14 @@ internal static class WorkspaceNavigation
             var token = original[i];
             if (token == "--") { result.AddRange(original[i..]); break; }
             if (token is "--workspace" or "--resume" or "--config") { i++; continue; }
-            if (token is "--ask" or "--full-access") continue;
+            if (token is "--ask" or "--full-access" or "--restricted") continue;
             if (token == "--data-dir") { result.Add(token); result.Add(parsed.DataDirectory); i++; continue; }
             result.Add(token);
             if (token == "--allow-shell" || token.StartsWith("--") && parsed.Values.ContainsKey(token[2..]))
                 result.Add(original[++i]);
         }
         // Put options before '--', when present, so they remain options on the next parse.
-        var options = new List<string> { "--workspace", target, fullAccess ? "--full-access" : "--ask" };
+        var options = new List<string> { "--workspace", target, permission switch { PermissionMode.Full => "--full-access", PermissionMode.Ask => "--ask", _ => "--restricted" } };
         if (resume != null) { options.Add("--resume"); options.Add(resume.Value.ToString()); }
         var separator = result.IndexOf("--");
         result.InsertRange(separator < 0 ? result.Count : separator, options);
@@ -52,12 +53,14 @@ internal static class WorkspaceNavigation
 }
 
 /// <summary>Unwinds all workspace-owned resources before the same terminal enters a new workspace.</summary>
-internal sealed class WorkspaceChange(string[] arguments, string[] previousArguments, ApiConfig? config, bool planMode, bool webUiWasRunning = false, int webUiPort = 0) : Exception
+internal sealed class WorkspaceChange(string[] arguments, string[] previousArguments, ApiConfig? config, bool planMode, bool simpleMode = false, bool webUiWasRunning = false, int webUiPort = 0) : Exception
 {
     public string[] Arguments { get; } = arguments;
     public string[] PreviousArguments { get; } = previousArguments;
     public ApiConfig? Config { get; } = config == null ? null : ManagementUi.Clone(config);
     public bool PlanMode { get; } = planMode;
+    /// <summary>Simple mode survives the switch so the new workspace keeps the same tool surface.</summary>
+    public bool SimpleMode { get; } = simpleMode;
     /// <summary>The browser workspace was running; the new workspace restarts it on the same port so open tabs reconnect.</summary>
     public bool WebUiWasRunning { get; } = webUiWasRunning;
     public int WebUiPort { get; } = webUiPort;

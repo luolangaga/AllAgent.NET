@@ -9,13 +9,13 @@ namespace AllAgent.NET.Tests;
 public sealed class FullAccessRuntimeTests
 {
     [Fact]
-    public void FullAccessIsDefault() => Assert.True(new AgentOptions().FullAccess);
+    public void DefaultPermissionKeepsToolingInsideTheWorkspace() => Assert.Equal(PermissionMode.Restricted, new AgentOptions().Permission);
 
     [Fact]
     public async Task ExplicitHyperlightModeCannotExecuteWithMissingWorker()
     {
         using var workspace = new TestWorkspace();
-        await using var runtime = await AgentRuntime.CreateAsync(workspace.Options with { FullAccess = true, SandboxMode = SandboxMode.Hyperlight, SandboxWorkerPath = "missing-worker.exe" });
+        await using var runtime = await AgentRuntime.CreateAsync(workspace.Options with { Permission = PermissionMode.Full, SandboxMode = SandboxMode.Hyperlight, SandboxWorkerPath = "missing-worker.exe" });
         await Assert.ThrowsAsync<InvalidOperationException>(() => Execute(runtime, "import os"));
         Assert.False((await runtime.ProbeSandboxAsync()).Ok);
     }
@@ -27,7 +27,7 @@ public sealed class FullAccessRuntimeTests
         var approvals = 0;
         await using var runtime = await AgentRuntime.CreateAsync(workspace.Options with
         {
-            FullAccess = true,
+            Permission = PermissionMode.Full,
             Approver = (_, _) => { approvals++; return ValueTask.FromResult(false); }
         });
         await runtime.CodeAct.PrepareAsync();
@@ -43,7 +43,7 @@ public sealed class FullAccessRuntimeTests
     public async Task FailedPythonRetainsOutputAndReportsFailure()
     {
         using var workspace = new TestWorkspace();
-        await using var runtime = await AgentRuntime.CreateAsync(workspace.Options with { FullAccess = true });
+        await using var runtime = await AgentRuntime.CreateAsync(workspace.Options with { Permission = PermissionMode.Full });
         var result = await Execute(runtime, "print('partial result')\nprint(1 / 0)");
         Assert.False(result.Ok);
         var data = JsonSerializer.SerializeToElement(result.Data);
@@ -56,7 +56,7 @@ public sealed class FullAccessRuntimeTests
     public async Task HandledToolFailureIsVisibleWithoutPrintingIt()
     {
         using var workspace = new TestWorkspace();
-        await using var runtime = await AgentRuntime.CreateAsync(workspace.Options with { FullAccess = true });
+        await using var runtime = await AgentRuntime.CreateAsync(workspace.Options with { Permission = PermissionMode.Full });
         var result = await runtime.CodeAct.ExecuteAsync("execute_code",
             JsonSerializer.SerializeToElement(new { code = "r = call_tool('file_read', path='missing.txt')\nprint('program finished')" }),
             (_, _, _) => new(ToolResult.Failure("missing file")), default);
@@ -73,7 +73,7 @@ public sealed class FullAccessRuntimeTests
         using var workspace = new TestWorkspace();
         await File.WriteAllTextAsync(Path.Combine(workspace.Root, "a.txt"), "alpha");
         await File.WriteAllTextAsync(Path.Combine(workspace.Root, "b.txt"), "beta");
-        await using var runtime = await AgentRuntime.CreateAsync(workspace.Options with { FullAccess = true });
+        await using var runtime = await AgentRuntime.CreateAsync(workspace.Options with { Permission = PermissionMode.Full });
         var result = await Execute(runtime, "r = call_tool('parallel', calls=[{'name':'file_read','arguments':{'path':'a.txt'}}, {'name':'file_read','arguments':{'path':'b.txt'}}])\nassert r['ok'], r['error']\nfor item in r['data']['results']:\n    print(item['data']['content'])");
         Assert.True(result.Ok, result.ToJson());
         var data = JsonSerializer.SerializeToElement(result.Data);

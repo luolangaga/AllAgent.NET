@@ -9,11 +9,18 @@ public partial class SystemTools(WorkspacePolicy workspace, RuntimeEnvironment e
 {
     public ToolApprovalPolicy GetApprovalPolicy(string name, JsonElement arguments)
     {
-        if (name != "run_shell") return new();
-        var exe = ToolArguments.Get<string>(arguments, "exe");
-        return ShellExecutablePolicy.TryResolveForExecution(shellAllowlist, exe, out var resolved, out var preapproved)
-            ? new(!preapproved, resolved)
-            : new();
+        if (name == "run_shell")
+        {
+            var exe = ToolArguments.Get<string>(arguments, "exe");
+            return ShellExecutablePolicy.TryResolveForExecution(shellAllowlist, exe, out var resolved, out var preapproved)
+                ? new(!preapproved, resolved)
+                : new();
+        }
+        // File mutations reach approval only after RequestAccessAsync authorized the target: inside the
+        // workspace, or outside it through the external-directory question that already ran. Restricted
+        // mode runs them without a second prompt; ask mode still asks per write.
+        if (name is "file_write" or "file_edit") return new(WorkspaceScoped: true);
+        return new();
     }
 
     public async ValueTask<ToolAccessGrant?> RequestAccessAsync(string name, JsonElement arguments, ToolApprover? approver, CancellationToken ct)

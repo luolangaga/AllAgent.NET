@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>GitHub 工作台</title><link rel="stylesheet" href="style.css"></head>
+<body>
+  <header class="topbar"><div><span class="eyebrow">CONNECTED WORK</span><h1>GitHub <span>工作台</span></h1></div><div class="account"><span id="account">正在连接宿主…</span><button data-iconiq id="account-button">登录 GitHub</button></div></header>
+  <div id="error" class="notice error" role="alert" hidden></div>
+  <div id="activity" class="notice" role="status" hidden></div>
+  <section id="login-panel" class="login" hidden>
+    <div><h2>把仓库协作接入你的工作区</h2><p>查看 Issue、Pull Request 和通知，然后将任务交给 Agent。</p><p class="muted">Token 仅发送给本机插件后端，由 Windows 凭据库加密保存。私有仓库需要 repo，通知需要 classic Token 的 notifications 权限。</p></div>
+    <form id="login-form"><label for="token">Personal Access Token</label><input id="token" type="password" autocomplete="off" placeholder="github_pat_… 或 ghp_…" required><div class="row"><button data-iconiq type="submit" class="primary" id="login-submit">连接 GitHub</button><button data-iconiq type="button" id="create-token">创建 Token ↗</button><button data-iconiq type="button" id="browser-login">浏览器授权</button></div><p class="muted">浏览器授权需要宿主配置自己的 ALLAGENT_GITHUB_CLIENT_ID，并启用 OAuth App 的 Device Flow。</p><p id="device-code" role="status"></p></form>
+  </section>
+  <main id="workbench" hidden>
+    <nav class="tabs" aria-label="GitHub 内容"><button data-kind="issues" class="selected" aria-current="page">◉ Issues</button><button data-kind="pulls">⑂ Pull requests</button><button data-kind="notifications">◷ 消息通知</button><button data-kind="repositories">▤ 仓库</button></nav>
+    <form id="search-form" class="filters"><label class="repo-field">仓库<input id="repository" list="repos" placeholder="全部相关仓库 / owner/repo" autocomplete="off"><datalist id="repos"></datalist></label><label class="query-field">筛选条件<input id="query" placeholder="is:open · 支持 GitHub 搜索语法" autocomplete="off"></label><button data-iconiq type="submit">搜索</button><button data-iconiq type="button" id="refresh" aria-label="刷新列表">↻ 刷新</button></form>
+    <div id="quick-filters" class="quick"><button data-query="is:open">全部进行中</button><button data-query="is:open assignee:@me">指派给我</button><button data-query="is:open author:@me">我创建的</button><button data-query="is:open review-requested:@me" id="review-filter" hidden>待我审查</button></div>
+    <div class="workspace"><section class="inbox" aria-label="GitHub 列表"><div class="section-head"><strong id="list-title">Issues</strong><span id="count" class="muted"></span></div><div id="list" aria-live="polite"></div><div class="pagination"><button data-iconiq id="previous">← 上一页</button><span id="page">1</span><button data-iconiq id="next">下一页 →</button></div></section><article id="detail" class="detail"><div class="empty"><span class="empty-symbol">⑂</span><h2>从一个问题开始</h2><p>选择 Issue 或 PR，查看上下文与变更，再交给 Agent 处理。</p></div></article></div>
+  </main>
+  <dialog id="task-dialog" aria-labelledby="task-title"><form id="task-form"><div class="dialog-head"><div><span class="eyebrow">AGENT WORKFLOW</span><h2 id="task-title">交给 Agent</h2></div><button data-iconiq type="button" id="close-dialog" aria-label="关闭任务弹窗">×</button></div><p id="task-source" class="muted"></p><div class="mode-picker"><label><input type="radio" name="mode" value="existing" checked> 使用已有工作区</label><label><input type="radio" name="mode" value="clone"> 克隆到空工作区</label></div><label id="workspace-label" for="workspace-choice">选择工作区</label><select id="workspace-choice"></select><label for="workspace-path">工作区绝对路径</label><input id="workspace-path" placeholder="C:\Projects\repository" required><p id="workspace-hint" class="muted">校验 origin；保留现有分支及未提交修改。</p><label for="instructions">补充要求 <span class="muted">可选</span></label><textarea id="instructions" rows="3" maxlength="8000" placeholder="例如：重点检查并发问题；使用现有测试框架"></textarea><p class="muted">结果保存在独立 Agent 会话中。发布评论、提交 Review、推送及合并均需另行指示。</p><div id="task-error" class="notice error" role="alert" hidden></div><div class="dialog-footer"><button data-iconiq type="button" id="cancel-dialog">取消</button><button data-iconiq type="submit" class="primary" id="start-task">启动 Agent 流程 →</button></div></form></dialog>
+  <script src="/__sdk/allagent-plugin-sdk.js"></script><script type="module" src="ui.js"></script>
+</body></html>
+
+

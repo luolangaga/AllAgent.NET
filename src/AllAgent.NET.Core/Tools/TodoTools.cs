@@ -20,7 +20,7 @@ public partial class TodoTools(DataStore store) : IAgentToolSet
 
     // Updating the agent's own progress metadata needs no filesystem approval.
     [AgentTool("todo_write")]
-    [Description("Replace the current conversation's TODO checklist (at most 100 items). Use stable unique IDs, retain unfinished items, and update progress as work happens. At most one in_progress item. Empty todos clears the list. This records progress, it does not execute tasks.")]
+    [Description("Replace the current conversation's TODO checklist (at most 100 items). Use stable unique IDs, retain unfinished items, and update progress as work happens. Several items may be in_progress at once when work genuinely runs in parallel. Empty todos clears the list. This records progress, it does not execute tasks.")]
     public Task<ToolResult> WriteAsync([Description("Complete replacement checklist; statuses: pending, in_progress, completed")] TodoEntry[] todos, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();

@@ -64,7 +64,7 @@ public sealed class BrowserUseState
     private readonly object _sync = new();
     private BrowserUseConfiguration _configuration = new();
     private CancellationTokenSource _revision = new();
-    public string WorkerPath { get; set; } = Path.Combine(AppContext.BaseDirectory, "browser", "AllAgent.NET.Browser.exe");
+    public string WorkerPath { get; set; } = Path.Combine(AppContext.BaseDirectory, "AllAgent.NET.Browser.exe");
     public string Root { get; set; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "AllAgent.NET", "browser-use");
     public (BrowserUseConfiguration Configuration, CancellationToken Token) Snapshot()
     { lock (_sync) return (_configuration, _revision.Token); }

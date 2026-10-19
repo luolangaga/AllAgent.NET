@@ -124,7 +124,7 @@ public sealed class FileEditTests
         var session = Guid.NewGuid(); var turn = checkpoints.Begin(session, "edit");
         var tools = new SystemTools(new(w.Root), new(w.Python, w.Pwsh, []), new Dictionary<string, string>(), checkpoints);
         var result = await tools.EditAsync("file.txt", [new("one", "1"), new("two", "2")]);
-        Assert.True(result.Ok, result.ToJson()); checkpoints.End();
+        Assert.True(result.Ok, result.ToJson()); checkpoints.End(session);
         var changed = await File.ReadAllBytesAsync(target);
         checkpoints.Restore(session, turn.Id, false); Assert.Equal(original, await File.ReadAllBytesAsync(target));
         checkpoints.Restore(session, turn.Id, true); Assert.Equal(changed, await File.ReadAllBytesAsync(target));

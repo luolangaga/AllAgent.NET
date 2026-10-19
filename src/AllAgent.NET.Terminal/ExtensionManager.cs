@@ -23,10 +23,11 @@ internal sealed class ExtensionManager(PluginHost host, BackgroundTasks tasks, s
         ManagementUi.Output(ui, host.Status, () =>
         {
             var table = new Table().Title(".NET 插件").AddColumn("包 / 版本").AddColumn("插件").AddColumn("状态");
-            foreach (var plugin in host.Status) table.AddRow(Markup.Escape(plugin.PackageId + " · " + plugin.Version), Markup.Escape(plugin.Name), Markup.Escape(plugin.Error ?? (plugin.Enabled ? "启用" : "禁用")));
-            TerminalOutput.Write(table); TerminalOutput.Write(new Text("/plugins search 关键词 · install 包ID 版本 · import 文件.nupkg · enable/disable/remove 包ID\n中文开发文档：docs/plugins.zh-CN.md\n"));
+            foreach (var plugin in host.Status) table.AddRow(Markup.Escape(plugin.PackageId + " · " + plugin.Version), Markup.Escape(plugin.Name), Markup.Escape((plugin.Error ?? (plugin.Enabled ? "启用" : "禁用")) + WebLabel(plugin)));
+            TerminalOutput.Write(table); TerminalOutput.Write(new Text("/plugins search 关键词 · install 包ID 版本 · import 文件.nupkg · enable/disable/remove 包ID\n带 web 块的插件会向 Web 工作台贡献页面、面板与自定义工具卡。\n中文开发文档：docs/plugins.zh-CN.md\n"));
         });
     }
+    private static string WebLabel(PluginStatus plugin) => plugin.Web is not { } web ? "" : web.Error != null ? " · Web 异常" : $" · Web {web.Pages + web.Panels} 界面/{web.ToolCards} 工具卡";
     public async Task PluginsAsync(IReadOnlyList<string> words, CancellationToken ct)
     {
         var action = words.FirstOrDefault() ?? (ui.Interactive && !ui.Json ? "panel" : "list");
