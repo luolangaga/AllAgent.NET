@@ -29,6 +29,7 @@ import { bridgeEvents, onReconnect, reconnect } from './bridge'
 import { useApiConfigsStore } from './stores/apiConfigs'
 import { useApprovalsStore } from './stores/approvals'
 import { useAgentsStore } from './stores/agents'
+import { useAuthStore } from './stores/auth'
 import { useContributionsStore } from './stores/contributions'
 import { useConversationsStore } from './stores/conversations'
 import { useGitStore } from './stores/git'
@@ -88,6 +89,7 @@ export default function App() {
   const skills = useStore(useSkillsStore)
   const mcp = useStore(useMcpServersStore)
   const api = useStore(useApiConfigsStore)
+  const auth = useStore(useAuthStore)
   const tasks = useStore(useTasksStore)
   const agents = useStore(useAgentsStore)
   const plugins = useStore(usePluginsStore)
@@ -197,7 +199,7 @@ export default function App() {
     async function reloadAll() {
       browser.reset()
       await Promise.allSettled([
-        conv.refreshAfterBackendChange(), api.loadAll(), skills.loadAll(), mcp.loadAll(),
+        conv.refreshAfterBackendChange(), api.loadAll(), auth.loadAll(), skills.loadAll(), mcp.loadAll(),
         tasks.loadAll(), settings.load(), agents.loadAll(), plugins.loadAll(), contributions.loadAll(),
         workspace.load(), approvals.refresh(), git.load(), terminal.sync(),
       ])

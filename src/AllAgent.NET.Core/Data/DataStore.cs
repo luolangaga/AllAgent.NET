@@ -26,8 +26,9 @@ public partial class DataStore : IDisposable
     private readonly string? _sharedBakPath;
     private readonly string? _sharedTmpPath;
     private StoreData? _sharedData;
-    private byte[]? _sharedHash;
-    private readonly ReaderWriterLockSlim _lock = new();
+    private readonly SharedConfigState? _sharedConfig;
+    private readonly ReaderWriterLockSlim _lock;
+    private readonly bool _ownsLock;
     private StoreData _data;
     private bool _disposed;
     private readonly bool _readOnly;
@@ -72,11 +73,26 @@ public partial class DataStore : IDisposable
             }
         }
 
+        // Every workspace in this process reads and writes one shared configuration object,
+        // so switching workspaces cannot show an older snapshot or drop another workspace's
+        // provider/login changes on its next save.
+        _sharedConfig = _sharedFilePath == null ? null : AcquireSharedConfig(_sharedFilePath);
+        _lock = _sharedConfig?.Lock ?? new ReaderWriterLockSlim();
+        _ownsLock = _sharedConfig == null;
+
         Log($"[DataStore] Starting up. File={_filePath} Shared={_sharedFilePath ?? "<none>"}");
-        using var startup = new StorageTransaction(_filePath);
-        Load();
-        InitializeConversationFiles();
-        LoadSharedConfig();
+        try
+        {
+            using var startup = new StorageTransaction(_filePath);
+            Load();
+            InitializeConversationFiles();
+            LoadSharedConfig();
+        }
+        catch
+        {
+            if (_sharedConfig != null) ReleaseSharedConfig(_sharedConfig); else if (_ownsLock) _lock.Dispose();
+            throw;
+        }
         Log($"[DataStore] Loaded. Conversations={_data.Conversations.Count}, Skills={Config.Skills.Count}, ApiConfigs={Config.ApiConfigs.Count}, Settings={Config.AppSettings.Count}");
     }
 
@@ -85,29 +101,44 @@ public partial class DataStore : IDisposable
 
     private void LoadSharedConfig()
     {
-        if (_sharedFilePath == null) return;
-        if (TryLoadFile(_sharedFilePath, out var shared) && shared is not null)
+        if (_sharedConfig == null || _sharedFilePath == null) return;
+        _lock.EnterWriteLock();
+        try
         {
-            _sharedData = shared;
-            try { _sharedHash = SHA256.HashData(File.ReadAllBytes(_sharedFilePath)); } catch { _sharedHash = null; }
+            // Another workspace already opened this manifest in this process: adopt the live
+            // object instead of reading the file again, which would fork the configuration.
+            if (_sharedConfig.Data is { } live)
+            {
+                _sharedData = live;
+                AdoptShared();
+                return;
+            }
+            if (TryLoadFile(_sharedFilePath, out var shared) && shared is not null)
+            {
+                _sharedConfig.Data = shared;
+                try { _sharedConfig.Hash = SHA256.HashData(File.ReadAllBytes(_sharedFilePath)); } catch { _sharedConfig.Hash = null; }
+                _sharedData = shared;
+                AdoptShared();
+                Log($"[DataStore] Shared config loaded from {_sharedFilePath}. ApiConfigs={shared.ApiConfigs.Count}, Skills={shared.Skills.Count}, Settings={shared.AppSettings.Count}");
+                return;
+            }
+            // No shared manifest yet: seed it from this workspace so nothing is lost, then
+            // stop carrying configuration inside the workspace manifest.
+            _sharedConfig.Data = new StoreData
+            {
+                Version = StoreData.CurrentVersion,
+                Skills = _data.Skills,
+                ApiConfigs = _data.ApiConfigs,
+                McpServerConfigs = _data.McpServerConfigs,
+                TokenUsageStats = _data.TokenUsageStats,
+                AppSettings = _data.AppSettings,
+            };
+            _sharedData = _sharedConfig.Data;
             AdoptShared();
-            Log($"[DataStore] Shared config loaded from {_sharedFilePath}. ApiConfigs={shared.ApiConfigs.Count}, Skills={shared.Skills.Count}, Settings={shared.AppSettings.Count}");
-            return;
+            Log($"[DataStore] Seeded shared config at {_sharedFilePath}. ApiConfigs={_sharedData.ApiConfigs.Count}");
+            SaveShared();
         }
-        // No shared manifest yet: seed it from this workspace so nothing is lost, then
-        // stop carrying configuration inside the workspace manifest.
-        _sharedData = new StoreData
-        {
-            Version = StoreData.CurrentVersion,
-            Skills = _data.Skills,
-            ApiConfigs = _data.ApiConfigs,
-            McpServerConfigs = _data.McpServerConfigs,
-            TokenUsageStats = _data.TokenUsageStats,
-            AppSettings = _data.AppSettings,
-        };
-        AdoptShared();
-        Log($"[DataStore] Seeded shared config at {_sharedFilePath}. ApiConfigs={_sharedData.ApiConfigs.Count}");
-        SaveShared();
+        finally { _lock.ExitWriteLock(); }
     }
 
     /// <summary>Share the configuration collections so every existing accessor keeps working.</summary>
@@ -121,43 +152,94 @@ public partial class DataStore : IDisposable
         _data.AppSettings = _sharedData.AppSettings;
     }
 
+    private static void CopyInto<T>(List<T> target, IEnumerable<T> source)
+    {
+        target.Clear();
+        target.AddRange(source);
+    }
+
     /// <summary>Writes the shared configuration manifest, skipping unchanged content.</summary>
     private void SaveShared()
     {
-        if (_readOnly || _sharedData == null || _sharedFilePath == null || _sharedBakPath == null || _sharedTmpPath == null) return;
-        var snapshot = new StoreData
-        {
-            Version = StoreData.CurrentVersion,
-            Skills = _sharedData.Skills,
-            ApiConfigs = _sharedData.ApiConfigs,
-            McpServerConfigs = _sharedData.McpServerConfigs,
-            TokenUsageStats = _sharedData.TokenUsageStats,
-            AppSettings = _sharedData.AppSettings,
-        };
-        var json = JsonSerializer.SerializeToUtf8Bytes(snapshot, JsonOptions);
-        var hash = SHA256.HashData(json);
-        if (_sharedHash != null && hash.AsSpan().SequenceEqual(_sharedHash)) return;
-        WriteToFileAtomic(json, _sharedTmpPath);
+        if (_readOnly || _sharedData == null || _sharedConfig == null || _sharedFilePath == null || _sharedBakPath == null || _sharedTmpPath == null) return;
+        // Configuration accessors already hold the shared write lock; keep the constructor's
+        // seed path safe as well without trying to re-enter a non-recursive lock.
+        var entered = false;
+        if (!_lock.IsWriteLockHeld) { _lock.EnterWriteLock(); entered = true; }
         try
         {
-            if (File.Exists(_sharedFilePath)) File.Replace(_sharedTmpPath, _sharedFilePath, _sharedBakPath);
-            else
+            var snapshot = new StoreData
             {
-                File.Move(_sharedTmpPath, _sharedFilePath);
+                Version = StoreData.CurrentVersion,
+                Skills = _sharedData.Skills,
+                ApiConfigs = _sharedData.ApiConfigs,
+                McpServerConfigs = _sharedData.McpServerConfigs,
+                TokenUsageStats = _sharedData.TokenUsageStats,
+                AppSettings = _sharedData.AppSettings,
+            };
+            var json = JsonSerializer.SerializeToUtf8Bytes(snapshot, JsonOptions);
+            var hash = SHA256.HashData(json);
+            if (_sharedConfig.Hash != null && hash.AsSpan().SequenceEqual(_sharedConfig.Hash)) return;
+            WriteToFileAtomic(json, _sharedTmpPath);
+            try
+            {
+                if (File.Exists(_sharedFilePath)) File.Replace(_sharedTmpPath, _sharedFilePath, _sharedBakPath);
+                else
+                {
+                    File.Move(_sharedTmpPath, _sharedFilePath);
+                    try { File.WriteAllBytes(_sharedBakPath, json); } catch { /* ignore */ }
+                }
+            }
+            catch (IOException)
+            {
+                File.Move(_sharedTmpPath, _sharedFilePath, overwrite: true);
                 try { File.WriteAllBytes(_sharedBakPath, json); } catch { /* ignore */ }
             }
+            using var verification = new FileStream(_sharedFilePath, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, FileOptions.SequentialScan);
+            if (verification.Length != json.Length || !SHA256.HashData(verification).AsSpan().SequenceEqual(hash))
+                throw new InvalidOperationException("共享配置写入后校验失败：" + _sharedFilePath);
+            _sharedConfig.Hash = hash;
+            PersistenceWrites++;
+            Log($"[DataStore] Shared config saved. ApiConfigs={snapshot.ApiConfigs.Count}, Settings={snapshot.AppSettings.Count}, FileSize={json.Length}");
         }
-        catch (IOException)
+        finally { if (entered) _lock.ExitWriteLock(); }
+    }
+
+    /// <summary>One shared configuration manifest per path for the whole process.</summary>
+    private sealed class SharedConfigState(string path)
+    {
+        public string Path { get; } = path;
+        public ReaderWriterLockSlim Lock { get; } = new(LockRecursionPolicy.NoRecursion);
+        public StoreData? Data { get; set; }
+        public byte[]? Hash { get; set; }
+        public int References { get; set; }
+    }
+
+    private static readonly Dictionary<string, SharedConfigState> SharedConfigStates = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly object SharedConfigStatesGate = new();
+
+    private static SharedConfigState AcquireSharedConfig(string path)
+    {
+        lock (SharedConfigStatesGate)
         {
-            File.Move(_sharedTmpPath, _sharedFilePath, overwrite: true);
-            try { File.WriteAllBytes(_sharedBakPath, json); } catch { /* ignore */ }
+            if (!SharedConfigStates.TryGetValue(path, out var state))
+            {
+                state = new SharedConfigState(path);
+                SharedConfigStates[path] = state;
+            }
+            state.References++;
+            return state;
         }
-        using var verification = new FileStream(_sharedFilePath, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, FileOptions.SequentialScan);
-        if (verification.Length != json.Length || !SHA256.HashData(verification).AsSpan().SequenceEqual(hash))
-            throw new InvalidOperationException("共享配置写入后校验失败：" + _sharedFilePath);
-        _sharedHash = hash;
-        PersistenceWrites++;
-        Log($"[DataStore] Shared config saved. ApiConfigs={snapshot.ApiConfigs.Count}, Settings={snapshot.AppSettings.Count}, FileSize={json.Length}");
+    }
+
+    private static void ReleaseSharedConfig(SharedConfigState state)
+    {
+        lock (SharedConfigStatesGate)
+        {
+            if (--state.References > 0) return;
+            SharedConfigStates.Remove(state.Path);
+            state.Lock.Dispose();
+        }
     }
 
     // ── Logging ────────────────────────────────────────────────────────────
@@ -707,12 +789,13 @@ public partial class DataStore : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        _lock.Dispose();
+        if (_ownsLock) _lock.Dispose();
 
         try { using var transaction = new StorageTransaction(_filePath); if (!_readOnly && File.Exists(_tmpPath)) File.Delete(_tmpPath); }
         catch { /* ignore */ }
         try { if (!_readOnly && _sharedTmpPath != null && File.Exists(_sharedTmpPath)) File.Delete(_sharedTmpPath); }
         catch { /* ignore */ }
+        if (_sharedConfig != null) ReleaseSharedConfig(_sharedConfig);
     }
 
     // ── Internal data model ────────────────────────────────────────────────

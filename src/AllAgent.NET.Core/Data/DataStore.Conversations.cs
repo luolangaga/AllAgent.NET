@@ -20,9 +20,14 @@ public partial class DataStore
                 string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(c.WorkspaceRoot)), root, StringComparison.OrdinalIgnoreCase)).ToList();
             var ids = _data.Conversations.Select(c => c.Id).ToHashSet();
             _data.PendingInputs = source._data.PendingInputs.Where(item => ids.Contains(item.ConversationId)).ToList();
-            Config.ApiConfigs = source._data.ApiConfigs; Config.Skills = source._data.Skills;
-            Config.McpServerConfigs = source._data.McpServerConfigs; Config.AppSettings = source._data.AppSettings;
-            Config.TokenUsageStats = source._data.TokenUsageStats;
+            // Shared collections are referenced by every workspace store in this process;
+            // replace their contents instead of swapping the reference other stores hold.
+            CopyInto(Config.ApiConfigs, source._data.ApiConfigs);
+            CopyInto(Config.Skills, source._data.Skills);
+            CopyInto(Config.McpServerConfigs, source._data.McpServerConfigs);
+            CopyInto(Config.TokenUsageStats, source._data.TokenUsageStats);
+            Config.AppSettings.Clear();
+            foreach (var (key, value) in source._data.AppSettings) Config.AppSettings[key] = value;
             SaveAndVerify();
         }
         finally { _lock.ExitWriteLock(); }

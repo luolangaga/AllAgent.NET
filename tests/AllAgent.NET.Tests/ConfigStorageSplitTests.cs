@@ -103,6 +103,36 @@ public sealed class ConfigStorageSplitTests
     }
 
     [Fact]
+    public void live_workspaces_share_configuration_without_reloading()
+    {
+        using var first = new TestWorkspace();
+        using var second = new TestWorkspace();
+        var shared = Path.Combine(first.Root, "shared");
+        var firstStore = new DataStore(Path.Combine(first.Root, "data"), false, shared);
+        var secondStore = new DataStore(Path.Combine(second.Root, "data"), false, shared);
+
+        // The second workspace was already open before the login happened.
+        firstStore.AddApiConfig(Provider("commandcode-login"));
+        Assert.Equal("commandcode-login", Assert.Single(secondStore.ApiConfigs).DisplayName);
+
+        // A write from the other workspace must merge into the same live configuration
+        // instead of saving its stale snapshot over the login.
+        secondStore.SetSetting("theme", "dark");
+        secondStore.AddApiConfig(Provider("second-provider"));
+        Assert.Equal(2, firstStore.ApiConfigs.Count);
+        Assert.Equal("dark", firstStore.GetSetting("theme"));
+
+        // Disposing one workspace must not dispose the configuration lock the others use.
+        firstStore.Dispose();
+        secondStore.AddApiConfig(Provider("after-dispose"));
+        Assert.Equal(3, secondStore.ApiConfigs.Count);
+        secondStore.Dispose();
+
+        using var reopened = new DataStore(Path.Combine(second.Root, "data"), false, shared);
+        Assert.Equal(3, reopened.ApiConfigs.Count);
+    }
+
+    [Fact]
     public void legacy_small_output_limits_follow_the_model_catalog_once()
     {
         using var workspace = new TestWorkspace();
