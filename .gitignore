@@ -23,5 +23,9 @@ AllAgent.NET/
 **/.allagent/
 **/.allagent-legacy/
 SatelliteInterference.spec
+# stray cmd/PowerShell redirection artifacts
+$null
+**/$null
+nul ; *
 **/TestResults/
 **/*.dmp
