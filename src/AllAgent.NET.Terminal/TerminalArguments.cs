@@ -23,7 +23,10 @@ internal sealed class TerminalArguments
         valued.Add("subagent-provider");
         valued.Add("background-concurrency");
         valued.Add("gui-url");
-        var flagged = new HashSet<string> { "help", "json", "verbose", "install", "inline", "trust-plugin", "full-access", "restricted", "ask", "no-initialize", "guimode", "gui", "gui-devtools" };
+        valued.Add("host");
+        valued.Add("port");
+        valued.Add("password");
+        var flagged = new HashSet<string> { "help", "json", "verbose", "install", "inline", "trust-plugin", "full-access", "restricted", "ask", "no-initialize", "guimode", "gui", "gui-devtools", "lan", "no-lan", "clear-password" };
         var index = 0;
         // Options may be spelled with a single dash when the name is registered (-guimode);
         // every other bare token stays the command word or a positional.

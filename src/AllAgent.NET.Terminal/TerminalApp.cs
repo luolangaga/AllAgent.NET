@@ -1,3 +1,4 @@
+using AllAgent.NET.Core.Bridge;
 using AllAgent.NET.Core.Data;
 using AllAgent.NET.Core.Localization;
 using AllAgent.NET.Core.Models;
@@ -7,6 +8,7 @@ using AllAgent.NET.Core.Services.AI;
 using AllAgent.NET.Core.Tools;
 using AllAgent.NET.Core.Extensions;
 using System.Runtime.CompilerServices;
+using System.Text;
 using L = AllAgent.NET.Core.Localization.HostText;
 using Spectre.Console;
 
@@ -201,10 +203,25 @@ internal static class TerminalApp
                 case "web-ui":
                 {
                     if (!WebUiSession.AssetsAvailable) throw new InvalidOperationException(L.Pick("Web UI 资产缺失：", "Web UI assets are missing: ") + WebUiSession.DefaultWebRoot + L.Pick("。请重新构建后再试。", ". Rebuild and try again."));
-                    webUi = StartWebUi();
+                    bool? lan = args.Flags.Contains("no-lan") ? false : args.Flags.Contains("lan") ? true : args.Get("host") is { } listenHost
+                        ? listenHost switch
+                        {
+                            "0.0.0.0" or "*" or "+" or "lan" => true,
+                            "127.0.0.1" or "localhost" or "::1" => false,
+                            _ => throw new ArgumentException(L.Pick("--host 只支持 0.0.0.0（局域网）或 127.0.0.1（仅本机）。", "--host accepts 0.0.0.0 (LAN) or 127.0.0.1 (this machine only).")),
+                        }
+                        : null;
+                    int? port = null;
+                    if (args.Get("port") is { } portText)
+                    {
+                        if (!int.TryParse(portText, out var parsed) || parsed is < 1 or > 65535) throw new ArgumentException(L.Pick("--port 必须是 1–65535 之间的整数。", "--port must be an integer between 1 and 65535."));
+                        port = parsed;
+                    }
+                    webUi = StartWebUi(network: new WebUiNetworkOptions(lan, port, args.Get("password"), args.Flags.Contains("clear-password")));
                     await using var session = webUi;
-                    WebUiSession.OpenBrowser(session.Url);
-                    TerminalOutput.Write(new Panel(new Text(L.Pick($"Web 工作台已启动：{session.Url}\n工作区：{options.WorkspaceRoot}\n浏览器打开后即可对话；按 Ctrl+C 停止服务。", $"Web workspace started: {session.Url}\nWorkspace: {options.WorkspaceRoot}\nChat in the browser; press Ctrl+C to stop the service."))).Header("Web UI"));
+                    var info = session.NetworkInfo();
+                    WebUiSession.OpenBrowser(info.LocalUrl);
+                    ShowWebUi(session, info, true, session.Lan, L.Pick("Web 工作台已启动", "Web workspace started"));
                     await CancelableAsync(async ct =>
                     {
                         try { await Task.Delay(Timeout.InfiniteTimeSpan, ct); }
@@ -469,7 +486,7 @@ internal static class TerminalApp
                     config = SubAgentModelSelection.Resolve(config ?? store.ApiConfigs.First(c => c.Id == saved), store.ApiConfigs, target.ModelId, saved.ToString());
                 ui.Header(options.WorkspaceRoot, config?.DefaultModel ?? target.ModelId, target.Id);
             }
-            WebUiSession StartWebUi(int port = 0) => WebUiSession.Start(
+            WebUiSession StartWebUi(int port = 0, WebUiNetworkOptions? network = null) => WebUiSession.Start(
                 new WebUiTerminalHost(store, mcp, tasks, checkpoints, catalog, options.WorkspaceRoot, dataDir),
                 () => options,
                 new AiProviderFactory(plugins.Providers),
@@ -483,7 +500,8 @@ internal static class TerminalApp
                     () => new SessionControlState(approval.PlanMode ? "plan" : approval.SimpleMode ? "simple" : approval.ModeKey, approval.ModeLabel, SavedSandboxMode(store).ToString().ToLowerInvariant(), CurrentRuntime()?.SandboxName ?? L.Pick("首次任务时验证", "Verified on the first task"), false),
                     SetPermissionModeAsync,
                     SetSandboxModeAsync),
-                port);
+                port,
+                network);
             async Task SetPermissionModeAsync(string mode)
             {
                 if (mode is not ("restricted" or "ask" or "full" or "plan" or "simple")) throw new ArgumentException(L.Pick("权限模式：restricted / ask / full / plan / simple。", "Permission mode: restricted / ask / full / plan / simple."));
@@ -527,6 +545,79 @@ internal static class TerminalApp
                 webUi?.PushSettingsChanged();
                 ManagementUi.Success(ui, L.Pick("界面语言已切换：", "Interface language switched: ") + LanguageLabel(value));
             }
+            WebUiNetworkOptions? ParseWebUiNetwork(string[] values)
+            {
+                bool? lan = null; int? port = null; string? password = null; var clear = false; var changed = false;
+                string Next(ref int index)
+                {
+                    if (++index >= values.Length) throw new ArgumentException(L.Pick("缺少参数值。", "Missing option value."));
+                    return values[index];
+                }
+                for (var index = 0; index < values.Length; index++)
+                {
+                    var token = values[index];
+                    if (token is "qr" or "--qr") continue;
+                    var equals = token.IndexOf('=');
+                    var name = equals > 0 ? token[..equals] : token;
+                    var inline = equals > 0 ? token[(equals + 1)..] : null;
+                    switch (name)
+                    {
+                        case "--lan":
+                            lan = true; changed = true; break;
+                        case "--local": case "--loopback": case "--no-lan":
+                            lan = false; changed = true; break;
+                        case "--host":
+                            var host = inline ?? Next(ref index);
+                            lan = host switch
+                            {
+                                "0.0.0.0" or "*" or "+" or "lan" => true,
+                                "127.0.0.1" or "localhost" or "::1" or "[::1]" => false,
+                                _ => throw new ArgumentException(L.Pick("只支持 --host 0.0.0.0（局域网）或 --host 127.0.0.1（仅本机）。", "Use --host 0.0.0.0 for the LAN or --host 127.0.0.1 for this machine only.")),
+                            };
+                            changed = true; break;
+                        case "--port":
+                            var text = inline ?? Next(ref index);
+                            if (!int.TryParse(text, out var parsed) || parsed is < 1 or > 65535)
+                                throw new ArgumentException(L.Pick("端口必须是 1–65535 之间的整数。", "The port must be an integer between 1 and 65535."));
+                            port = parsed; changed = true; break;
+                        case "--password":
+                            password = inline ?? Next(ref index);
+                            if (password.Length == 0) throw new ArgumentException(L.Pick("密码不能为空。", "The password cannot be empty."));
+                            changed = true; break;
+                        case "--clear-password":
+                            clear = true; changed = true; break;
+                        default:
+                            throw new ArgumentException(L.Pick(
+                                "用法：/web-ui [--lan|--no-lan|--host 0.0.0.0] [--port 端口] [--password 密码] [qr]；/web-ui status；/web-ui stop",
+                                "Usage: /web-ui [--lan|--no-lan|--host 0.0.0.0] [--port port] [--password password] [qr]; /web-ui status; /web-ui stop"));
+                    }
+                }
+                return changed ? new WebUiNetworkOptions(lan, port, password, clear) : null;
+            }
+            void ShowWebUi(WebUiSession session, WebUiNetworkInfo info, bool opened, bool showQr, string header)
+            {
+                var text = new StringBuilder();
+                text.AppendLine((opened ? L.Pick("已在默认浏览器打开：", "Opened in the default browser: ") : L.Pick("本机访问：", "Local access: ")) + info.LocalUrl);
+                if (session.Lan)
+                {
+                    text.AppendLine(L.Pick("局域网监听：0.0.0.0 · 其他设备地址：", "LAN listener: 0.0.0.0 · addresses for other devices:"));
+                    foreach (var url in info.Urls) text.Append("  ").AppendLine(url);
+                    text.AppendLine(session.PasswordConfigured
+                        ? L.Pick("访问密码：已设置（其他设备可输入密码，或扫描二维码直接进入）。", "Access password: set (other devices can enter it or scan the QR code).")
+                        : L.Pick("访问密码：未设置 ⚠ 建议设置：在 Web 设置页中设置，或执行 /web-ui --password 你的密码。其他设备目前只能通过二维码进入。", "Access password: not set ⚠ Set one in the Web settings page or run /web-ui --password your-password. Other devices can currently enter only through the QR code."));
+                    text.AppendLine(L.Pick("本机始终免密；请确保其他设备与电脑在同一局域网。首次开启时 Windows 防火墙可能询问是否允许，请选择允许「专用网络」。", "This machine never needs the password; keep other devices on the same LAN. Windows Firewall may ask for permission the first time; allow private networks."));
+                }
+                else
+                {
+                    text.AppendLine(L.Pick("监听：仅本机 127.0.0.1 · 本机访问无需密码。", "Listening: loopback 127.0.0.1 · this machine needs no password."));
+                    text.AppendLine(L.Pick("需要手机或平板操作时，用 /web-ui --lan 开启局域网访问。", "Use /web-ui --lan when a phone or tablet should connect."));
+                }
+                text.AppendLine(L.Pick("工作区：", "Workspace: ") + options.WorkspaceRoot);
+                text.AppendLine(L.Pick("二维码：/web-ui qr · 状态：/web-ui status · 停止：/web-ui stop", "QR: /web-ui qr · Status: /web-ui status · Stop: /web-ui stop"));
+                TerminalOutput.Write(new Panel(new Text(text.ToString())).Header(header));
+                if (showQr && session.Lan) TerminalOutput.Write(new Text("\n" + WebUiQr.Text(info.AccessUrl ?? info.Url) + "\n"));
+                else if (showQr) TerminalOutput.Write(new Text("\n" + L.Pick("当前仅本机监听，二维码不会被其他设备打开；请先使用 /web-ui --lan。", "The listener is loopback-only, so other devices cannot open the QR code; use /web-ui --lan first.") + "\n"));
+            }
             async Task WebUiAsync(string[] rest, bool openBrowser = true, int port = 0)
             {
                 var subcommand = rest.FirstOrDefault();
@@ -546,13 +637,25 @@ internal static class TerminalApp
                     return;
                 }
                 if (!WebUiSession.AssetsAvailable) throw new InvalidOperationException("Web UI 资产缺失：" + WebUiSession.DefaultWebRoot + "。请重新构建后再试。");
-                if (webUi == null) webUi = StartWebUi(port);
-                var opened = openBrowser && WebUiSession.OpenBrowser(webUi.Url);
-                TerminalOutput.Write(new Panel(new Text(
-                    (opened ? L.Pick("已在默认浏览器打开：", "Opened in the default browser: ") : openBrowser ? L.Pick("请手动在浏览器中访问：", "Open this URL in a browser: ") : L.Pick("浏览器标签会自动重连：", "The browser tab will reconnect automatically: ")) + webUi.Url +
-                    L.Pick("\n工作区：", "\nWorkspace: ") + options.WorkspaceRoot +
-                    L.Pick("\n界面与终端共享同一工作区、模型配置与权限模式；浏览器内的授权请求会直接弹出对话框。", "\nThe Web UI shares the terminal's workspace, model configuration and permission mode; approval requests open as dialogs in the browser.") +
-                    L.Pick("\n状态：/web-ui status · 停止：/web-ui stop", "\nStatus: /web-ui status · Stop: /web-ui stop"))).Header(openBrowser ? L.Pick("Web 工作台已启动", "Web workspace started") : L.Pick("Web 工作台已重启", "Web workspace restarted")));
+                var showQr = rest.Any(token => token is "qr" or "--qr");
+                var network = ParseWebUiNetwork(rest);
+                var changed = false;
+                var opened = false;
+                WebUiNetworkInfo info;
+                if (webUi == null)
+                {
+                    webUi = StartWebUi(port, network);
+                    info = webUi.NetworkInfo();
+                    opened = openBrowser && WebUiSession.OpenBrowser(info.LocalUrl);
+                }
+                else
+                {
+                    info = network == null
+                        ? webUi.NetworkInfo()
+                        : await webUi.UpdateNetworkAsync(new WebUiNetworkParams(network.Lan ?? webUi.Lan, network.Port ?? webUi.Port, network.Password, network.ClearPassword));
+                    changed = network != null;
+                }
+                ShowWebUi(webUi, info, opened, showQr || webUi.Lan, changed ? L.Pick("Web 工作台设置已更新", "Web workspace settings updated") : opened ? L.Pick("Web 工作台已启动", "Web workspace started") : L.Pick("Web 工作台正在运行", "Web workspace running"));
             }
             try
             {
@@ -651,7 +754,9 @@ internal static class TerminalApp
                         case "/context": SessionOperations.Context(conversation, options.MaxContextCharacters); break;
                         case "/thinking": ui.ShowThinking = !ui.ShowThinking; break;
                         case "/details": ui.Verbose = !ui.Verbose; break;
-                        case "/web-ui" when words.ElementAtOrDefault(1) is null or "status" or "stop": await WebUiAsync(words.Skip(1).ToArray()); break;
+                        case "/web-ui" when words.ElementAtOrDefault(1) is null or "status" or "stop" or "qr"
+                            || words.ElementAtOrDefault(1)?.StartsWith("--", StringComparison.Ordinal) == true:
+                            await WebUiAsync(words.Skip(1).ToArray()); break;
                         default: throw new ArgumentException(L.Pick("此命令需要在当前任务停止后执行。运行中可用 /new、/session [ID]、/children、/todo、/status、/copy、/export、/tasks、/help、/thinking、/details、/queue、/steer 和 /web-ui status；Esc 停止任务。", "This command needs the current task stopped. While running use /new, /session [ID], /children, /todo, /status, /copy, /export, /tasks, /help, /thinking, /details, /queue, /steer and /web-ui status; Esc stops the task."));
                     }
                 };
@@ -1236,6 +1341,9 @@ internal static class TerminalApp
         allagent browser tutorial            详细连接教程
         allagent browser mode builtin|chromium
         allagent web-ui                       浏览器工作台：/web-ui 启动、/web-ui status、/web-ui stop
+        allagent web-ui --lan [--port 8765] [--password 密码]
+                                              监听 0.0.0.0，生成二维码供其他设备访问；本机始终免密
+        allagent web-ui --no-lan              关闭局域网监听，仅本机 127.0.0.1 访问（--local 同义）
         allagent -guimode                     原生窗口工作台：静默后台启动，关窗即退出
         allagent gui [--gui-url URL]          前台运行同一个窗口（Ctrl+C 退出；--gui-url 指向 Vite 开发服务器）
         allagent gui --gui-devtools           窗口内启用开发者工具
@@ -1285,6 +1393,9 @@ internal static class TerminalApp
         allagent browser tutorial            Detailed connection tutorial
         allagent browser mode builtin|chromium
         allagent web-ui                       Browser workspace: /web-ui start, /web-ui status, /web-ui stop
+        allagent web-ui --lan [--port 8765] [--password password]
+                                              Listen on 0.0.0.0 and show a QR code for other devices; this machine stays password-free
+        allagent web-ui --no-lan              Disable LAN listening and use 127.0.0.1 only (same as --local)
         allagent -guimode                     Native window workspace: silent background launch, closes with the window
         allagent gui [--gui-url URL]          Run the same window in the foreground (Ctrl+C exits; --gui-url points at Vite)
         allagent gui --gui-devtools           Enable developer tools in the window

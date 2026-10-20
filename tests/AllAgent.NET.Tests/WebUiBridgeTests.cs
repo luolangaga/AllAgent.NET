@@ -3,7 +3,9 @@ using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Net.Http;
+using System.Net.Sockets;
 using System.Net.WebSockets;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -372,6 +374,227 @@ public sealed class WebUiBridgeTests : IAsyncLifetime
         await service.CancelStreamAsync(stream);
         Assert.Equal(false, runningAtError);
         Assert.Equal(false, runningAtDone);
+    }
+
+    [Fact]
+    public void PairingQrRendersForTheTerminalAndSettingsPage()
+    {
+        var text = WebUiQr.Text("http://192.168.1.5:8765/?access=token");
+        Assert.Contains("█", text);
+        Assert.True(text.Split('\n').Length > 10);
+        Assert.StartsWith("data:image/png;base64,", WebUiQr.PngDataUrl("http://192.168.1.5:8765/?access=token"));
+    }
+
+    [Fact]
+    public async Task LanListenerRequiresTheQrTokenAndKeepsPasswordOptional()
+    {
+        var access = new WebUiAccessControl(new WebUiNetworkSettings());
+        await using var server = WebUiServer.Start(new BridgeDispatcher(), new BridgeEventPusher(), WebRoot,
+            new WebUiServerOptions(Lan: true, Port: 0, Access: access, LocalAccessFree: false));
+        using var http = new HttpClient();
+
+        // Static assets load so the gate can explain how to enter; the bridge stays closed.
+        Assert.Contains("AllAgent workspace", await http.GetStringAsync(server.LocalUrl));
+        using (var status = JsonDocument.Parse(await http.GetStringAsync(server.LocalUrl + "__auth/status")))
+        {
+            Assert.True(status.RootElement.GetProperty("required").GetBoolean());
+            Assert.False(status.RootElement.GetProperty("authenticated").GetBoolean());
+            Assert.False(status.RootElement.GetProperty("passwordConfigured").GetBoolean());
+        }
+
+        // No password is created by default: login redirects to the QR pairing route.
+        using (var login = await http.PostAsync(server.LocalUrl + "__auth/login",
+            new StringContent("{\"password\":\"anything\"}", Encoding.UTF8, "application/json")))
+            Assert.Equal(HttpStatusCode.Conflict, login.StatusCode);
+
+        using (var rejected = new ClientWebSocket())
+            await Assert.ThrowsAsync<WebSocketException>(() => rejected.ConnectAsync(new Uri(server.LocalUrl.Replace("http://", "ws://") + "bridge"), CancellationToken.None));
+        Assert.Contains("access=", server.AccessUrl(server.Url));
+
+        using var socket = new ClientWebSocket();
+        await socket.ConnectAsync(new Uri(server.LocalUrl.Replace("http://", "ws://") + "bridge?access=" + access.AccessToken), CancellationToken.None);
+        for (var attempt = 0; attempt < 100 && server.ConnectedClients == 0; attempt++) await Task.Delay(10);
+        Assert.Equal(1, server.ConnectedClients);
+    }
+
+    [Fact]
+    public async Task PasswordLoginIssuesTheTokenForRemoteDevices()
+    {
+        var access = new WebUiAccessControl(new WebUiNetworkSettings());
+        access.SetPassword("s3cret");
+        await using var server = WebUiServer.Start(new BridgeDispatcher(), new BridgeEventPusher(), WebRoot,
+            new WebUiServerOptions(Lan: true, Port: 0, Access: access, LocalAccessFree: false));
+        using var http = new HttpClient();
+        using (var status = JsonDocument.Parse(await http.GetStringAsync(server.LocalUrl + "__auth/status")))
+        {
+            Assert.True(status.RootElement.GetProperty("required").GetBoolean());
+            Assert.True(status.RootElement.GetProperty("passwordConfigured").GetBoolean());
+        }
+        using (var wrong = await http.PostAsync(server.LocalUrl + "__auth/login",
+            new StringContent("{\"password\":\"wrong\"}", Encoding.UTF8, "application/json")))
+            Assert.Equal(HttpStatusCode.Unauthorized, wrong.StatusCode);
+
+        using var response = await http.PostAsync(server.LocalUrl + "__auth/login",
+            new StringContent("{\"password\":\"s3cret\"}", Encoding.UTF8, "application/json"));
+        response.EnsureSuccessStatusCode();
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(access.AccessToken, body.RootElement.GetProperty("token").GetString());
+
+        using var socket = new ClientWebSocket();
+        await socket.ConnectAsync(new Uri(server.LocalUrl.Replace("http://", "ws://") + "bridge?access=" + access.AccessToken), CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task LanHostHeaderForThisMachineIsAccepted()
+    {
+        var address = WebUiAddress.LanAddresses().FirstOrDefault();
+        if (address is null) return; // a CI host without a LAN interface still passes the rest of the suite
+        var access = new WebUiAccessControl(new WebUiNetworkSettings());
+        await using var server = WebUiServer.Start(new BridgeDispatcher(), new BridgeEventPusher(), WebRoot,
+            new WebUiServerOptions(Lan: true, Port: 0, Access: access, LocalAccessFree: false));
+        Assert.True(WebUiAddress.IsLocalHost($"{address}:{server.Port}", lan: true));
+        using var http = new HttpClient();
+        using var request = new HttpRequestMessage(HttpMethod.Get, server.LocalUrl);
+        request.Headers.Host = $"{address}:{server.Port}";
+        using var response = await http.SendAsync(request);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task LanWebSocketHandshakeAcceptsTheMachinesOwnAddress()
+    {
+        var address = WebUiAddress.LanAddresses().FirstOrDefault();
+        if (address is null) return;
+        var access = new WebUiAccessControl(new WebUiNetworkSettings());
+        await using var server = WebUiServer.Start(new BridgeDispatcher(), new BridgeEventPusher(), WebRoot,
+            new WebUiServerOptions(Lan: true, Port: 0, Access: access));
+        using var tcp = new TcpClient();
+        await tcp.ConnectAsync(IPAddress.Loopback, server.Port);
+        using var stream = tcp.GetStream();
+        var key = Convert.ToBase64String(RandomNumberGenerator.GetBytes(16));
+        var request = $"GET /bridge?access={access.AccessToken} HTTP/1.1\r\n"
+            + $"Host: {address}:{server.Port}\r\n"
+            + $"Origin: http://{address}:{server.Port}\r\n"
+            + "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+            + $"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n";
+        await stream.WriteAsync(Encoding.ASCII.GetBytes(request));
+        var buffer = new byte[512];
+        var read = await stream.ReadAsync(buffer);
+        var response = Encoding.ASCII.GetString(buffer, 0, read);
+        Assert.StartsWith("HTTP/1.1 101", response);
+    }
+
+    [Fact]
+    public async Task ThisMachineSkipsTheLanGate()
+    {
+        var access = new WebUiAccessControl(new WebUiNetworkSettings());
+        access.SetPassword("s3cret");
+        await using var server = WebUiServer.Start(new BridgeDispatcher(), new BridgeEventPusher(), WebRoot,
+            new WebUiServerOptions(Lan: true, Port: 0, Access: access));
+        using var http = new HttpClient();
+        using (var status = JsonDocument.Parse(await http.GetStringAsync(server.LocalUrl + "__auth/status")))
+        {
+            Assert.False(status.RootElement.GetProperty("required").GetBoolean());
+            Assert.True(status.RootElement.GetProperty("authenticated").GetBoolean());
+        }
+        using var socket = new ClientWebSocket();
+        await socket.ConnectAsync(new Uri(server.LocalUrl.Replace("http://", "ws://") + "bridge"), CancellationToken.None);
+        for (var attempt = 0; attempt < 100 && server.ConnectedClients == 0; attempt++) await Task.Delay(10);
+        Assert.Equal(1, server.ConnectedClients);
+    }
+
+    [Fact]
+    public async Task RejectsForeignHostHeadersToBlockDnsRebinding()
+    {
+        await using var server = WebUiServer.Start(new BridgeDispatcher(), new BridgeEventPusher(), WebRoot);
+        using var http = new HttpClient();
+        using var request = new HttpRequestMessage(HttpMethod.Get, server.LocalUrl);
+        request.Headers.Host = "evil.example";
+        using var response = await http.SendAsync(request);
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task BrowserReadsAndUpdatesNetworkAccessSettings()
+    {
+        var data = Path.Combine(_root, "data");
+        var shared = Path.Combine(_root, "shared");
+        using var store = new DataStore(data);
+        await using var mcp = new McpToolService(store, new SkillExecutor());
+        await using var tasks = new BackgroundTasks(data);
+        await using var plugins = new PluginHost(shared);
+        var checkpoints = new WorkspaceCheckpoints(new WorkspacePolicy(_root), data);
+        var catalog = new SkillCatalog(store, _root, shared);
+        var host = new WebUiTerminalHost(store, mcp, tasks, checkpoints, catalog, _root, data);
+        var session = WebUiSession.Start(host, () => new AgentOptions { WorkspaceRoot = _root, SharedDirectory = shared }, new AiProviderFactory(), plugins, shared, 1);
+        try
+        {
+            using var socket = new ClientWebSocket();
+            await socket.ConnectAsync(new Uri(session.Url.Replace("http://", "ws://") + "bridge"), CancellationToken.None);
+            async Task<JsonElement> Request(string id, string method, object? parameters = null)
+            {
+                using var response = JsonDocument.Parse(await SendAsync(socket, JsonSerializer.Serialize(new { id, method, @params = parameters })));
+                return response.RootElement.TryGetProperty("data", out var payload) ? payload.Clone() : default;
+            }
+
+            var info = await Request("get", "webui.network.get");
+            Assert.False(info.GetProperty("lan").GetBoolean());
+            Assert.False(info.GetProperty("authenticationRequired").GetBoolean());
+            Assert.False(info.GetProperty("passwordConfigured").GetBoolean());
+            Assert.False(string.IsNullOrEmpty(info.GetProperty("qrDataUrl").GetString()));
+
+            // A password saved while loopback-only changes nothing for this machine, but it is
+            // ready for the next LAN start; clearing it is symmetric.
+            var saved = await Request("save", "webui.network.save", new { lan = false, port = session.Port, password = "secret", clearPassword = false });
+            Assert.True(saved.GetProperty("passwordConfigured").GetBoolean());
+            Assert.False(saved.GetProperty("authenticationRequired").GetBoolean());
+            var cleared = await Request("clear", "webui.network.save", new { lan = false, port = session.Port, password = (string?)null, clearPassword = true });
+            Assert.False(cleared.GetProperty("passwordConfigured").GetBoolean());
+        }
+        finally { await session.DisposeAsync(); }
+    }
+
+    [Fact]
+    public async Task EnablingLanRestartsTheListenerAndPersistsTheChoice()
+    {
+        var data = Path.Combine(_root, "data");
+        var shared = Path.Combine(_root, "shared");
+        using var store = new DataStore(data);
+        await using var mcp = new McpToolService(store, new SkillExecutor());
+        await using var tasks = new BackgroundTasks(data);
+        await using var plugins = new PluginHost(shared);
+        var checkpoints = new WorkspaceCheckpoints(new WorkspacePolicy(_root), data);
+        var catalog = new SkillCatalog(store, _root, shared);
+        var host = new WebUiTerminalHost(store, mcp, tasks, checkpoints, catalog, _root, data);
+        var session = WebUiSession.Start(host, () => new AgentOptions { WorkspaceRoot = _root, SharedDirectory = shared }, new AiProviderFactory(), plugins, shared, 1);
+        try
+        {
+            var info = await session.UpdateNetworkAsync(new WebUiNetworkParams(true, 0, null, false));
+            Assert.True(info.Lan);
+            Assert.True(info.AuthenticationRequired);
+            Assert.False(info.PasswordConfigured);
+            Assert.False(string.IsNullOrEmpty(info.QrDataUrl));
+            Assert.Contains("access=", info.AccessUrl);
+
+            // The settings call schedules the listener restart; wait for the new port to take over.
+            for (var attempt = 0; attempt < 100 && session.Port != info.Port; attempt++) await Task.Delay(50);
+            Assert.Equal(info.Port, session.Port);
+            Assert.True(session.Lan);
+
+            // This machine still opens the workspace without the token.
+            using var http = new HttpClient();
+            using var status = JsonDocument.Parse(await http.GetStringAsync(session.LocalUrl + "__auth/status"));
+            Assert.False(status.RootElement.GetProperty("required").GetBoolean());
+            Assert.True(status.RootElement.GetProperty("authenticated").GetBoolean());
+            using var socket = new ClientWebSocket();
+            await socket.ConnectAsync(new Uri(session.LocalUrl.Replace("http://", "ws://") + "bridge"), CancellationToken.None);
+            Assert.Equal(1, session.ConnectedClients);
+
+            var persisted = WebUiNetworkSettings.Load(shared);
+            Assert.True(persisted.Lan);
+            Assert.Equal(session.Port, persisted.Port);
+        }
+        finally { await session.DisposeAsync(); }
     }
 
     private static async Task<string> SendAsync(ClientWebSocket socket, string json)

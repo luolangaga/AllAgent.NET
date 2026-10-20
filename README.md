@@ -264,7 +264,11 @@ allagent chat --workspace C:\Projects\MyProject
 allagent -guimode
 allagent gui --gui-url http://127.0.0.1:5173/
 allagent web-ui
+allagent web-ui --lan --port 8765 --password your-password
+allagent web-ui --no-lan
 ```
+
+Use `--lan` (or `/web-ui --lan` in chat) when a phone or tablet should connect: the host listens on `0.0.0.0`, prints a QR code in the terminal, and other devices can enter by scanning it. This machine never needs a password; other devices use the per-run QR token, and a configured access password also works (external pages always show the password field). The token expires when the service restarts. `--no-lan` (or `--local`) turns LAN listening off and remembers the choice so the next start stays on loopback; the Web settings page exposes the same switch, port, password, and QR code. Windows Firewall may ask for permission the first time; allow private networks.
 
 The window is a bundled WPF + WebView2 shell (`AllAgent.NET.Gui.exe`), with one window per data directory. Its pages cover chat, models and APIs, skills, tools, PowerShell, plugins, MCP servers, tasks, and settings. The PowerShell page shares its module directory with the terminal's `/powershell` panel.
 

@@ -3,17 +3,31 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
     <EnableDynamicLoading>true</EnableDynamicLoading>
-    <PackageId>AllAgent.NET.CodeGraph</PackageId><Version>1.0.0</Version>
+    <PackageId>AllAgent.NET.CodeGraph</PackageId><Version>1.1.0</Version>
     <PackageTags>AllAgent.NET;LanAgent;CodeGraph;CodeSearch;CodeIntelligence</PackageTags>
     <Description>CodeGraph code knowledge graph integration for AllAgent.NET: architecture, call-flow and impact questions from a pre-built index.</Description>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <NoWarn>$(NoWarn);NU5100</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/AllAgent.NET.Core/AllAgent.NET.Core.csproj" PrivateAssets="all" />
     <ProjectReference Include="../../src/AllAgent.NET.ToolGenerator/AllAgent.NET.ToolGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" PrivateAssets="all" />
+    <PackageReference Include="TreeSitter.DotNet" Version="1.3.0" GeneratePathProperty="true" PrivateAssets="all" />
     <EmbeddedResource Include="Skills/code-graph/SKILL.md" LogicalName="AllAgent.NET.CodeGraph.Skills.code-graph.SKILL.md" />
     <None Update="allagent-plugin.json" Pack="true" PackagePath="allagent/" />
     <None Update="web/**/*" Pack="true" PackagePath="allagent/" />
     <None Update="README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+  <!-- Ship only the Windows x64 grammars the plugin uses (~9.7 MB), not the package's
+       full 51 MB multi-RID payload. The managed binding is already copied by the
+       PackageReference; these entries place the native subset beside the plugin. -->
+  <ItemGroup Condition="'$(PkgTreeSitter_DotNet)' != ''">
+    <None Include="$(PkgTreeSitter_DotNet)/lib/netstandard2.0/TreeSitter.dll" Pack="true" PackagePath="allagent/" Visible="false" />
+    <None Include="$(PkgTreeSitter_DotNet)/runtimes/win-x64/native/tree-sitter.dll" Link="native/win-x64/tree-sitter.dll" CopyToOutputDirectory="PreserveNewest" Pack="true" PackagePath="allagent/native/win-x64/" Visible="false" />
+    <None Include="$(PkgTreeSitter_DotNet)/runtimes/win-x64/native/tree-sitter-c-sharp.dll" Link="native/win-x64/tree-sitter-c-sharp.dll" CopyToOutputDirectory="PreserveNewest" Pack="true" PackagePath="allagent/native/win-x64/" Visible="false" />
+    <None Include="$(PkgTreeSitter_DotNet)/runtimes/win-x64/native/tree-sitter-typescript.dll" Link="native/win-x64/tree-sitter-typescript.dll" CopyToOutputDirectory="PreserveNewest" Pack="true" PackagePath="allagent/native/win-x64/" Visible="false" />
+    <None Include="$(PkgTreeSitter_DotNet)/runtimes/win-x64/native/tree-sitter-tsx.dll" Link="native/win-x64/tree-sitter-tsx.dll" CopyToOutputDirectory="PreserveNewest" Pack="true" PackagePath="allagent/native/win-x64/" Visible="false" />
+    <None Include="$(PkgTreeSitter_DotNet)/runtimes/win-x64/native/tree-sitter-javascript.dll" Link="native/win-x64/tree-sitter-javascript.dll" CopyToOutputDirectory="PreserveNewest" Pack="true" PackagePath="allagent/native/win-x64/" Visible="false" />
+    <None Include="$(PkgTreeSitter_DotNet)/runtimes/win-x64/native/tree-sitter-python.dll" Link="native/win-x64/tree-sitter-python.dll" CopyToOutputDirectory="PreserveNewest" Pack="true" PackagePath="allagent/native/win-x64/" Visible="false" />
   </ItemGroup>
 </Project>

@@ -9,8 +9,8 @@ using Xunit;
 
 namespace AllAgent.NET.Tests;
 
-/// <summary>CodeGraph integration: skill seeding, prompt guidance, surface gating, CLI status/explore
-/// and the shared declarative card contract.</summary>
+/// <summary>CodeGraph integration: skill seeding, prompt guidance, surface gating, the
+/// in-process tree-sitter index, and the shared declarative card contract.</summary>
 public sealed class CodeGraphPluginTests
 {
     private const string Skill = """
@@ -42,11 +42,13 @@ public sealed class CodeGraphPluginTests
 
         var extension = Assert.Single(context.TurnExtensions);
         var indexed = new AgentTurnContext(Guid.NewGuid(), workspace.Root, false, "question", "system", [], catalog.List());
-        Directory.CreateDirectory(Path.Combine(workspace.Root, ".codegraph"));
-        File.WriteAllText(Path.Combine(workspace.Root, ".codegraph", "codegraph.db"), "");
+        var indexPath = CodeIndex.IndexPath(workspace.Root);
+        Directory.CreateDirectory(Path.GetDirectoryName(indexPath)!);
+        await File.WriteAllTextAsync(indexPath, "{}");
         await extension.Configure(indexed, default);
         Assert.Contains("<allagent-codegraph>", indexed.VolatileSystemPrompt);
         Assert.Contains("skill_read", indexed.VolatileSystemPrompt);
+        Assert.Contains("refreshes automatically", indexed.VolatileSystemPrompt);
 
         var disabled = new AgentTurnContext(Guid.NewGuid(), workspace.Root, false, "question", "system", [], []);
         await extension.Configure(disabled, default);
@@ -56,8 +58,9 @@ public sealed class CodeGraphPluginTests
         Directory.CreateDirectory(noIndex);
         var missing = new AgentTurnContext(Guid.NewGuid(), noIndex, false, "question", "system", [], catalog.List());
         await extension.Configure(missing, default);
-        Assert.Contains("no .codegraph/", missing.VolatileSystemPrompt);
-        Assert.DoesNotContain("skill_read", missing.VolatileSystemPrompt);
+        Assert.Contains("no CodeGraph index", missing.VolatileSystemPrompt);
+        Assert.Contains("builds it automatically", missing.VolatileSystemPrompt);
+        Assert.DoesNotContain("no .codegraph/", missing.VolatileSystemPrompt);
 
         await plugin.DisposeAsync();
     }
@@ -86,49 +89,123 @@ public sealed class CodeGraphPluginTests
     }
 
     [Fact]
-    public async Task ServiceReadsStatusAndExploresThroughTheCli()
+    public async Task ServiceBuildsTheIndexAndExploresCSharpTypeScriptAndPython()
     {
         using var workspace = new TestWorkspace();
-        var fake = Path.Combine(workspace.Root, "fake-codegraph.cmd");
-        await File.WriteAllTextAsync(fake, """
-            @echo off
-            if "%1"=="version" (echo 1.6.2) else if "%1"=="status" (echo Files: 12) else if "%1"=="explore" (echo EXPLORE:%2) else if "%1"=="sync" (echo SYNCED) else if "%1"=="init" (echo INITIALIZED) else (echo OK)
+        var source = Path.Combine(workspace.Root, "src");
+        var web = Path.Combine(workspace.Root, "web");
+        var tools = Path.Combine(workspace.Root, "tools");
+        Directory.CreateDirectory(source);
+        Directory.CreateDirectory(web);
+        Directory.CreateDirectory(tools);
+        await File.WriteAllTextAsync(Path.Combine(source, "Alpha.cs"), """
+            namespace Demo;
+
+            public sealed class Alpha
+            {
+                public void Run()
+                {
+                    Beta.Helper();
+                }
+            }
             """);
+        await File.WriteAllTextAsync(Path.Combine(source, "Beta.cs"), """
+            namespace Demo;
+
+            public static class Beta
+            {
+                public static void Helper() { }
+            }
+            """);
+        await File.WriteAllTextAsync(Path.Combine(web, "app.ts"), """
+            export function renderCard(): void {
+              helper();
+            }
+            """);
+        await File.WriteAllTextAsync(Path.Combine(web, "Card.tsx"), """
+            export function Card(): JSX.Element {
+              return <div className="card" />;
+            }
+            """);
+        await File.WriteAllTextAsync(Path.Combine(web, "legacy.js"), """
+            export function renderLegacy() {
+              helper();
+            }
+            """);
+        await File.WriteAllTextAsync(Path.Combine(tools, "x.py"), """
+            def compute():
+                return 1
+            """);
+        await File.WriteAllTextAsync(Path.Combine(workspace.Root, "notes.md"), "unique-marker");
+
         var settings = new PluginSettings("AllAgent.NET.CodeGraph", new PluginSettingsStore(Path.Combine(workspace.Root, "shared", "plugins")));
-        settings.Set("path", fake);
-        await using var service = new CodeGraphService(Path.Combine(workspace.Root, "plugin-data"), settings);
+        await using var service = new CodeGraphService(settings);
 
         var status = await service.StatusAsync(workspace.Root, default);
-        Assert.True(status.Installed);
-        Assert.Equal("1.6.2", status.Version);
         Assert.False(status.Indexed);
 
-        Directory.CreateDirectory(Path.Combine(workspace.Root, ".codegraph"));
-        await File.WriteAllTextAsync(Path.Combine(workspace.Root, ".codegraph", "codegraph.db"), "");
+        var explore = await service.ExploreAsync(workspace.Root, "Alpha", default);
+        Assert.Null(explore.Error);
+        Assert.Contains("Alpha", explore.Output);
+        Assert.Contains("Run", explore.Output);
+        Assert.Contains("Beta.Helper", explore.Output);
+
         status = await service.StatusAsync(workspace.Root, default);
         Assert.True(status.Indexed);
-        Assert.Contains("Files: 12", status.Detail);
+        Assert.True(status.Files >= 6);
+        Assert.True(status.Symbols >= 6);
+        Assert.True(status.References >= 1);
 
-        var explore = await service.ExploreAsync(workspace.Root, "AgentEngine", default);
-        Assert.Null(explore.Error);
-        Assert.Contains("EXPLORE:AgentEngine", explore.Output);
+        var ts = await service.ExploreAsync(workspace.Root, "renderCard", default);
+        Assert.Null(ts.Error);
+        Assert.Contains("renderCard", ts.Output);
+        var tsx = await service.ExploreAsync(workspace.Root, "Card", default);
+        Assert.Null(tsx.Error);
+        Assert.Contains("Card", tsx.Output);
+        var js = await service.ExploreAsync(workspace.Root, "renderLegacy", default);
+        Assert.Null(js.Error);
+        Assert.Contains("renderLegacy", js.Output);
+        var py = await service.ExploreAsync(workspace.Root, "compute", default);
+        Assert.Null(py.Error);
+        Assert.Contains("compute", py.Output);
+        var text = await service.ExploreAsync(workspace.Root, "unique-marker", default);
+        Assert.Null(text.Error);
+        Assert.Contains("notes.md", text.Output);
+        var fileName = await service.ExploreAsync(workspace.Root, "notes.md", default);
+        Assert.Null(fileName.Error);
+        Assert.Contains("notes.md", fileName.Output);
 
-        using (AllAgent.NET.Core.Runtime.AgentExecutionScope.Enter(false, Guid.NewGuid(), workspace.Root))
-        {
-            var tools = new CodeGraphTools(service);
-            var toolStatus = await tools.StatusAsync(default);
-            Assert.True(toolStatus.Ok);
-            Assert.Equal("CODEGRAPH", toolStatus.Card?.Badge);
-            var toolExplore = await tools.ExploreAsync("AgentEngine", default);
-            Assert.True(toolExplore.Ok);
-            Assert.Equal("CODEGRAPH", toolExplore.Card?.Badge);
-            Assert.Contains("EXPLORE:AgentEngine", JsonSerializer.Serialize(toolExplore.Data, ToolResult.JsonOptions));
-        }
+        await File.WriteAllTextAsync(Path.Combine(source, "Alpha.cs"), """
+            namespace Demo;
 
+            public sealed class Alpha
+            {
+                public void Run()
+                {
+                    Beta.Helper();
+                }
+
+                public void Added() { }
+            }
+            """);
         var operation = service.StartIndex(workspace.Root, IndexMode.Sync);
         var finished = await service.WaitAsync(operation.Id, default);
         Assert.Equal("done", finished.State);
-        Assert.Contains("SYNCED", finished.Output);
+        var added = await service.ExploreAsync(workspace.Root, "Added", default);
+        Assert.Null(added.Error);
+        Assert.Contains("Added", added.Output);
+
+        using (AllAgent.NET.Core.Runtime.AgentExecutionScope.Enter(false, Guid.NewGuid(), workspace.Root))
+        {
+            var tool = new CodeGraphTools(service);
+            var toolStatus = await tool.StatusAsync(default);
+            Assert.True(toolStatus.Ok);
+            Assert.Equal("CODEGRAPH", toolStatus.Card?.Badge);
+            var toolExplore = await tool.ExploreAsync("Alpha", default);
+            Assert.True(toolExplore.Ok);
+            Assert.Equal("CODEGRAPH", toolExplore.Card?.Badge);
+            Assert.Contains("Alpha", JsonSerializer.Serialize(toolExplore.Data, ToolResult.JsonOptions));
+        }
 
         Assert.NotNull(CodeGraphService.ValidateQuery("-bad"));
         Assert.NotNull(CodeGraphService.ValidateQuery(""));
@@ -136,13 +213,38 @@ public sealed class CodeGraphPluginTests
     }
 
     [Fact]
-    public async Task PluginCommandUsesTheCurrentWorkspaceAndTheConfiguredCli()
+    public void FileWalkerRespectsGitIgnore()
     {
         using var workspace = new TestWorkspace();
-        var fake = Path.Combine(workspace.Root, "fake-codegraph.cmd");
-        await File.WriteAllTextAsync(fake, """
-            @echo off
-            if "%1"=="version" (echo 1.6.2) else if "%1"=="status" (echo Files: 12) else if "%1"=="explore" (echo EXPLORE:%2) else if "%1"=="sync" (echo SYNCED) else if "%1"=="init" (echo INITIALIZED) else (echo OK)
+        var source = Path.Combine(workspace.Root, "src");
+        var vendor = Path.Combine(workspace.Root, "vendor");
+        Directory.CreateDirectory(source);
+        Directory.CreateDirectory(vendor);
+        File.WriteAllText(Path.Combine(workspace.Root, ".gitignore"), "vendor/\n*.generated.cs\n");
+        File.WriteAllText(Path.Combine(source, "App.cs"), "public class App { }");
+        File.WriteAllText(Path.Combine(source, "Ignored.generated.cs"), "public class Generated { }");
+        File.WriteAllText(Path.Combine(vendor, "Lib.cs"), "public class Vendor { }");
+
+        var files = CodeIndex.EnumerateFiles(workspace.Root, out var truncated);
+        Assert.False(truncated);
+        Assert.Contains(files, file => file.EndsWith("App.cs", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(files, file => file.EndsWith("Ignored.generated.cs", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(files, file => file.Replace('\\', '/').Contains("/vendor/", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task PluginCommandUsesTheCurrentWorkspaceAndTheBuiltInIndex()
+    {
+        using var workspace = new TestWorkspace();
+        var source = Path.Combine(workspace.Root, "src");
+        Directory.CreateDirectory(source);
+        await File.WriteAllTextAsync(Path.Combine(source, "Alpha.cs"), """
+            namespace Demo;
+
+            public sealed class Alpha
+            {
+                public void Run() { }
+            }
             """);
         var data = Path.Combine(workspace.Root, "data");
         var shared = Path.Combine(workspace.Root, "shared");
@@ -154,21 +256,16 @@ public sealed class CodeGraphPluginTests
             [typeof(SkillCatalog)] = catalog,
             [typeof(PluginWorkspaceTasks)] = new PluginWorkspaceTasks(() => [], (_, _) => throw new NotSupportedException()) { Current = () => workspace.Root },
         }, "AllAgent.NET.CodeGraph", null, settings);
-        settings.Set("AllAgent.NET.CodeGraph", "path", fake);
         var plugin = new CodeGraphPlugin();
         plugin.Register(context);
         var command = Assert.Single(context.Commands);
 
         var status = await command.Execute(["status"], default);
-        Assert.Contains("\"installed\": true", status);
-        Assert.Contains("1.6.2", status);
-        var path = await command.Execute(["path"], default);
-        Assert.Contains(fake, path);
-
-        Directory.CreateDirectory(Path.Combine(workspace.Root, ".codegraph"));
-        await File.WriteAllTextAsync(Path.Combine(workspace.Root, ".codegraph", "codegraph.db"), "");
-        var explore = await command.Execute(["explore", "AgentEngine"], default);
-        Assert.Contains("EXPLORE:AgentEngine", explore);
+        Assert.Contains("\"indexed\": false", status);
+        var explore = await command.Execute(["explore", "Alpha"], default);
+        Assert.Contains("Alpha", explore);
+        var rebuild = await command.Execute(["rebuild"], default);
+        Assert.Contains("完成", rebuild);
         await plugin.DisposeAsync();
     }
 
@@ -181,15 +278,13 @@ public sealed class CodeGraphPluginTests
         var install = Path.Combine(pluginRoot, "allagent.net.codegraph-1.0.0-test");
         Directory.CreateDirectory(install);
         var source = Path.Combine(AppContext.BaseDirectory, "codegraph-plugin");
-        foreach (var file in Directory.GetFiles(source)) File.Copy(file, Path.Combine(install, Path.GetFileName(file)), true);
-        var webSource = Path.Combine(source, "web");
-        if (Directory.Exists(webSource))
-            foreach (var file in Directory.GetFiles(webSource, "*", SearchOption.AllDirectories))
-            {
-                var target = Path.Combine(install, "web", Path.GetRelativePath(webSource, file));
-                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                File.Copy(file, target, true);
-            }
+        foreach (var file in Directory.GetFiles(source, "*", SearchOption.AllDirectories))
+        {
+            var relative = Path.GetRelativePath(source, file);
+            var target = Path.Combine(install, relative);
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(file, target, true);
+        }
 
         using var store = new DataStore(Path.Combine(workspace.Root, "data"), false, shared);
         var catalog = new SkillCatalog(store, workspace.Root, shared);
@@ -203,8 +298,8 @@ public sealed class CodeGraphPluginTests
         Assert.Contains("codegraph_explore", status.Tools!);
         Assert.Contains("codegraph_status", status.Tools!);
         Assert.Equal(1, status.Web?.Settings);
-        Assert.True(host.SetSetting("AllAgent.NET.CodeGraph", "path", @"C:\tools\codegraph.exe"));
-        Assert.Equal(@"C:\tools\codegraph.exe", host.SettingsSnapshot("AllAgent.NET.CodeGraph")["path"]);
+        Assert.True(host.SetSetting("AllAgent.NET.CodeGraph", "autosync", "false"));
+        Assert.Equal("false", host.SettingsSnapshot("AllAgent.NET.CodeGraph")["autosync"]);
         Assert.Throws<ArgumentException>(() => host.SetSetting("AllAgent.NET.CodeGraph", "not_declared", "x"));
         Assert.True(File.Exists(Path.Combine(catalog.UserDirectory, "code-graph", "SKILL.md")));
     }
@@ -259,15 +354,15 @@ public sealed class CodeGraphPluginTests
         using var workspace = new TestWorkspace();
         var root = Path.Combine(workspace.Root, "plugins");
         var store = new PluginSettingsStore(root);
-        store.Set("AllAgent.NET.CodeGraph", "path", @"C:\tools\codegraph.exe");
         store.Set("AllAgent.NET.CodeGraph", "autosync", "false");
-        Assert.Equal(@"C:\tools\codegraph.exe", store.Get("AllAgent.NET.CodeGraph", "path"));
-        Assert.Equal("false", store.GetAll("AllAgent.NET.CodeGraph")["autosync"]);
+        store.Set("AllAgent.NET.CodeGraph", "extra", "true");
+        Assert.Equal("false", store.Get("AllAgent.NET.CodeGraph", "autosync"));
+        Assert.Equal("true", store.GetAll("AllAgent.NET.CodeGraph")["extra"]);
         Assert.Throws<ArgumentException>(() => store.Set("AllAgent.NET.CodeGraph", "Bad Key", "x"));
 
         var reloaded = new PluginSettingsStore(root);
-        Assert.Equal(@"C:\tools\codegraph.exe", reloaded.Get("AllAgent.NET.CodeGraph", "path"));
-        reloaded.Set("AllAgent.NET.CodeGraph", "path", null);
-        Assert.Null(reloaded.Get("AllAgent.NET.CodeGraph", "path"));
+        Assert.Equal("false", reloaded.Get("AllAgent.NET.CodeGraph", "autosync"));
+        reloaded.Set("AllAgent.NET.CodeGraph", "autosync", null);
+        Assert.Null(reloaded.Get("AllAgent.NET.CodeGraph", "autosync"));
     }
 }

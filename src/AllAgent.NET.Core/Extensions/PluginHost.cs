@@ -251,7 +251,8 @@ public sealed class PluginHost : IAsyncDisposable
         await Task.CompletedTask;
         RaiseChanged();
     }
-    /// <summary>Install plugins shipped next to the host once; an existing installation of the same package is kept.</summary>
+    /// <summary>Install plugins shipped next to the host; refresh a built-in folder when the shipped
+    /// version changes, keep user installs and the existing enable flags.</summary>
     public void InstallBuiltins(string builtinRoot)
     {
         if (!Directory.Exists(builtinRoot)) return;
@@ -260,15 +261,27 @@ public sealed class PluginHost : IAsyncDisposable
             var manifestPath = Path.Combine(source, "allagent-plugin.json");
             if (!File.Exists(manifestPath)) continue;
             var packageId = Path.GetFileName(source);
-            if (Installed.Any(p => p.PackageId.Equals(packageId, StringComparison.OrdinalIgnoreCase))) continue;
+            var existing = Installed.FirstOrDefault(p => p.PackageId.Equals(packageId, StringComparison.OrdinalIgnoreCase));
+            if (existing != null && !existing.Directory.EndsWith("-builtin", StringComparison.OrdinalIgnoreCase)) continue;
             var manifest = JsonSerializer.Deserialize<PluginManifest>(File.ReadAllText(manifestPath), new JsonSerializerOptions(JsonSerializerDefaults.Web)) ?? throw new InvalidDataException("内置插件清单无效：" + packageId);
             var assembly = Path.Combine(source, manifest.Assembly);
             var version = File.Exists(assembly) ? AssemblyName.GetAssemblyName(assembly).Version?.ToString(3) ?? "1.0.0" : "1.0.0";
+            if (existing != null && existing.Version == version && Directory.Exists(Path.Combine(_root, existing.Directory))) continue;
             var folder = packageId.ToLowerInvariant() + "-" + version + "-builtin";
             var destination = Path.Combine(_root, folder);
             if (Directory.Exists(destination)) Directory.Delete(destination, true);
             CopyDirectory(source, destination);
-            Save(new(packageId, version, folder));
+            if (existing != null)
+            {
+                var previous = Path.GetFullPath(Path.Combine(_root, existing.Directory));
+                var root = Path.GetFullPath(_root) + Path.DirectorySeparatorChar;
+                if (previous.StartsWith(root, StringComparison.OrdinalIgnoreCase)
+                    && !previous.Equals(Path.GetFullPath(destination), StringComparison.OrdinalIgnoreCase)
+                    && Directory.Exists(previous))
+                    Directory.Delete(previous, true);
+                Save(existing with { Version = version, Directory = folder });
+            }
+            else Save(new(packageId, version, folder));
         }
     }
     private static void CopyDirectory(string source, string destination)

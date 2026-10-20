@@ -70,6 +70,31 @@ public sealed class ExtensionTests
     }
 
     [Fact]
+    public async Task BuiltinPluginFoldersRefreshWhenTheShippedVersionChanges()
+    {
+        using var w = new TestWorkspace(); var data = Path.Combine(w.Root, "data");
+        var builtin = Path.Combine(w.Root, "builtin-plugins", "AllAgent.NET.SamplePlugin");
+        Directory.CreateDirectory(builtin);
+        await File.WriteAllTextAsync(Path.Combine(builtin, "allagent-plugin.json"), await File.ReadAllTextAsync(Path.Combine(AppContext.BaseDirectory, "sample-plugin", "allagent-plugin.json")));
+        File.Copy(Path.Combine(AppContext.BaseDirectory, "sample-plugin", "AllAgent.NET.SamplePlugin.dll"), Path.Combine(builtin, "AllAgent.NET.SamplePlugin.dll"));
+
+        var old = Path.Combine(data, "plugins", "allagent.net.sampleplugin-0.9.0-builtin");
+        Directory.CreateDirectory(old);
+        await File.WriteAllTextAsync(Path.Combine(old, "old.txt"), "old");
+        await File.WriteAllTextAsync(Path.Combine(data, "plugins", "installed.json"), """[{"PackageId":"AllAgent.NET.SamplePlugin","Version":"0.9.0","Directory":"allagent.net.sampleplugin-0.9.0-builtin","Enabled":false,"WebEnabled":false}]""");
+
+        await using var host = new PluginHost(data);
+        host.InstallBuiltins(Path.Combine(w.Root, "builtin-plugins"));
+        var installed = Assert.Single(host.Installed);
+        Assert.Equal("1.0.0", installed.Version);
+        Assert.Contains("-1.0.0-builtin", installed.Directory);
+        Assert.False(installed.Enabled);
+        Assert.False(installed.WebEnabled);
+        Assert.False(Directory.Exists(old));
+        Assert.Null(Assert.Single(host.Status).Error);
+    }
+
+    [Fact]
     public async Task LegacyLanAgentPluginPackagesAreReportedWithARebuildHint()
     {
         using var w = new TestWorkspace(); var data = Path.Combine(w.Root, "data");

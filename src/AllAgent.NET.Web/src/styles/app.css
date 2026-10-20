@@ -315,6 +315,30 @@ a { color: inherit; }
 .about-separator { height: 34px; }
 .about-badges { display: flex; gap: 6px; flex-wrap: wrap; }
 
+.webui-network-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.webui-network-urls { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted-foreground); }
+.webui-network-urls > div { display: flex; flex-direction: column; gap: 4px; }
+.webui-network-urls code { color: var(--foreground); overflow-wrap: anywhere; padding: 5px 8px; border: 1px solid var(--border); border-radius: 8px; background: color-mix(in oklab, var(--muted) 55%, transparent); }
+.webui-qr-wrap { display: flex; align-items: flex-start; gap: 16px; flex-wrap: wrap; padding: 12px; border: 1px solid var(--border); border-radius: 12px; }
+.webui-qr { width: 180px; height: 180px; flex-shrink: 0; border-radius: 10px; background: #fff; padding: 8px; image-rendering: pixelated; }
+.webui-qr-copy { display: flex; flex-direction: column; gap: 8px; flex: 1; min-width: 210px; font-size: 12px; }
+.webui-qr-copy strong { display: flex; align-items: center; gap: 6px; }
+.webui-qr-copy p { color: var(--muted-foreground); line-height: 1.7; }
+.webui-warning { color: #b45309; }
+
+.access-gate { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: var(--background); }
+.access-card { width: min(460px, 100%); }
+.access-icon { display: grid; place-items: center; width: 38px; height: 38px; margin-bottom: 10px; border: 1px solid var(--border); border-radius: 12px; color: var(--foreground); background: color-mix(in oklab, var(--muted) 60%, transparent); }
+.access-content { display: flex; flex-direction: column; gap: 14px; }
+.access-form { display: flex; flex-direction: column; gap: 12px; }
+.access-error { color: var(--destructive); font-size: 12px; }
+.access-qr-hint { display: flex; flex-direction: column; gap: 9px; padding: 14px; border: 1px solid var(--border); border-radius: 12px; color: var(--muted-foreground); font-size: 12px; line-height: 1.7; }
+.access-qr-hint svg { color: var(--foreground); }
+.access-loading { color: var(--muted-foreground); font-size: 13px; }
+.access-hint { color: var(--muted-foreground); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.access-hint code { color: var(--foreground); font-size: 12px; }
+.access-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
 .field { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
 .field > span { font-size: 12px; color: var(--muted-foreground); }
 .field-hint { font-size: 11px; color: var(--muted-foreground); }

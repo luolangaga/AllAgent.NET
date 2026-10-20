@@ -13,7 +13,7 @@ body {
 .muted { color: var(--ag-muted-foreground, #667085); }
 .head { display: flex; flex-wrap: wrap; gap: 10px; align-items: baseline; justify-content: space-between; }
 .line { margin-top: 8px; }
-#cli, #index { font-weight: 600; }
+#index { font-weight: 600; }
 [data-state="ok"] { color: var(--ag-success, #218739); }
 [data-state="error"] { color: var(--ag-destructive, #c0362c); }
 [data-state="muted"] { color: var(--ag-muted-foreground, #667085); }

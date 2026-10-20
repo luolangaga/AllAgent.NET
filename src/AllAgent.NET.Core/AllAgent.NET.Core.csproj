@@ -46,6 +46,7 @@
     <PackageReference Include="SkiaSharp.NativeAssets.Linux" Version="3.119.4" />
     <PackageReference Include="HtmlAgilityPack" Version="1.12.4" />
     <PackageReference Include="NuGet.Packaging" Version="7.9.0" />
+    <PackageReference Include="QRCoder" Version="1.6.0" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.13" />
     <!-- Pin the patched version above NuGet.Packaging's transitive minimum. -->
     <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />

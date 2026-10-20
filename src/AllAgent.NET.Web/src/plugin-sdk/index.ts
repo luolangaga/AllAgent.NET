@@ -96,6 +96,7 @@ export function connect(): PluginClient {
   const handlers = new Map<string, Set<(data: unknown) => void>>()
   const pending = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: number }>()
   let initialized = false
+  let helloTimer = 0
   let resolveReady!: () => void
   let rejectReady!: (error: Error) => void
   const ready = new Promise<void>((resolve, reject) => { resolveReady = resolve; rejectReady = reject })
@@ -139,6 +140,8 @@ export function connect(): PluginClient {
         state.context = payload.context ?? {}
         applyTheme(state.theme)
         initialized = true
+        window.clearTimeout(helloTimer)
+        helloTimer = 0
         resolveReady()
         break
       }
@@ -175,10 +178,20 @@ export function connect(): PluginClient {
   })
 
   window.setTimeout(() => {
-    if (!initialized) rejectReady(new PluginClientError('与宿主握手超时；请确认页面通过插件清单的 web 入口加载。', 'handshake_timeout'))
+    if (!initialized) {
+      window.clearTimeout(helloTimer)
+      rejectReady(new PluginClientError('与宿主握手超时；请确认页面通过插件清单的 web 入口加载。', 'handshake_timeout'))
+    }
   }, HANDSHAKE_TIMEOUT_MS)
 
-  send('hello', { token, sdkVersion: SDK_VERSION })
+  // The host registers its message listener in a React effect, so the first hello can race
+  // frame load. Repeat until init arrives; the host answers every valid hello idempotently.
+  function hello() {
+    if (initialized) return
+    send('hello', { token, sdkVersion: SDK_VERSION })
+    helloTimer = window.setTimeout(hello, 500)
+  }
+  hello()
 
   const client: PluginClient = {
     get plugin() { return state.plugin },

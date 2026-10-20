@@ -323,6 +323,19 @@ export interface WorkspaceInfo {
   workspacesRoot?: string
 }
 
+/** LAN listening and pairing state. Local requests never require the password. */
+export interface WebUiNetworkInfo {
+  lan: boolean
+  port: number
+  url: string
+  localUrl: string
+  urls: string[]
+  authenticationRequired: boolean
+  passwordConfigured: boolean
+  accessUrl?: string | null
+  qrDataUrl?: string | null
+}
+
 export interface WorkspaceEntry {
   workspace: string
   name: string

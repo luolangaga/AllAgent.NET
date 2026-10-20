@@ -208,12 +208,43 @@ function webViewTransport(): Transport | null {
   return null
 }
 
+const ACCESS_KEY = 'allagent.bridge.access'
+
+/** The per-run pairing token: from the QR link or the last successful password login. */
+export function getAccessToken(): string {
+  try {
+    const fromUrl = new URLSearchParams(window.location.search).get('access')
+    if (fromUrl) {
+      localStorage.setItem(ACCESS_KEY, fromUrl)
+      return fromUrl
+    }
+    return localStorage.getItem(ACCESS_KEY) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+export function setAccessToken(token: string | null): void {
+  try {
+    if (token) localStorage.setItem(ACCESS_KEY, token)
+    else localStorage.removeItem(ACCESS_KEY)
+  } catch {
+    // Storage may be unavailable; the current page still holds the token in the URL.
+  }
+}
+
+function withAccessToken(url: string): string {
+  const token = getAccessToken()
+  if (!token) return url
+  return url + (url.includes('?') ? '&' : '?') + 'access=' + encodeURIComponent(token)
+}
+
 function bridgeSocketTarget(): { url: string; explicit: boolean } | null {
   const override = new URLSearchParams(window.location.search).get('bridge')
-  if (override) return { url: override, explicit: true }
+  if (override) return { url: withAccessToken(override), explicit: true }
   if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {
     const scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    return { url: `${scheme}//${window.location.host}/bridge`, explicit: false }
+    return { url: withAccessToken(`${scheme}//${window.location.host}/bridge`), explicit: false }
   }
   return null
 }

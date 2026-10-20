@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Blocks, CheckCircle2, FolderOpen, HardDrive, Settings2 } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Blocks, CheckCircle2, Copy, ExternalLink, FolderOpen, HardDrive, QrCode, Settings2, ShieldCheck, Wifi } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/b-button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -8,6 +8,7 @@ import { Switch } from '@/components/ui/b-switch'
 import { Field, Picker } from '@/components/shared'
 import { PageShell } from '@/components/PageShell'
 import { PluginSettingsSection } from '@/components/plugins/PluginSettingsSection'
+import { invoke } from '@/bridge'
 import { useStore } from '@/lib/store'
 import { permissionOptions, permissionLabel } from '@/lib/permissions'
 import { useT } from '@/i18n'
@@ -17,7 +18,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useNoticesStore } from '@/stores/ui'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { AgentRoles } from './AgentRoles'
-import type { AppSettings } from '@/types'
+import type { AppSettings, WebUiNetworkInfo } from '@/types'
 
 export default function Settings() {
   const tr = useT()
@@ -28,6 +29,69 @@ export default function Settings() {
   const contributions = useStore(useContributionsStore)
   const [busy, setBusy] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [network, setNetwork] = useState<WebUiNetworkInfo | null>(null)
+  const [networkLan, setNetworkLan] = useState(false)
+  const [networkPort, setNetworkPort] = useState('')
+  const [networkPassword, setNetworkPassword] = useState('')
+  const [clearNetworkPassword, setClearNetworkPassword] = useState(false)
+  const [networkBusy, setNetworkBusy] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    invoke<WebUiNetworkInfo>('webui.network.get')
+      .then(value => {
+        if (cancelled) return
+        setNetwork(value)
+        setNetworkLan(value.lan)
+        setNetworkPort(String(value.port))
+      })
+      // Older hosts do not expose the bridge method; the card simply stays hidden.
+      .catch(() => { })
+    return () => { cancelled = true }
+  }, [])
+
+  async function saveNetwork() {
+    setNetworkBusy(true)
+    try {
+      const previous = network
+      const next = await invoke<WebUiNetworkInfo>('webui.network.save', {
+        lan: networkLan,
+        port: Number(networkPort) || 0,
+        password: clearNetworkPassword ? null : (networkPassword.trim() || null),
+        clearPassword: clearNetworkPassword,
+      })
+      setNetwork(next)
+      setNetworkPassword('')
+      setClearNetworkPassword(false)
+      if (next.lan && !next.passwordConfigured) {
+        notices.notify(tr('局域网访问已开启', 'LAN access enabled'), tr('尚未设置访问密码：其他设备请扫描二维码进入。建议设置密码，方便没有二维码时登录。', 'No access password yet: other devices should scan the QR code. Setting one is recommended so they can sign in without it.'), 'warning')
+      } else {
+        notices.notify(tr('网络设置已保存', 'Network settings saved'), next.lan ? tr('其他设备可在同一局域网内访问。', 'Other devices on the same LAN can connect.') : tr('已恢复为仅本机访问。', 'Listening on this machine only again.'), 'success')
+      }
+      // A bind or port change restarts the listener shortly after this response. The local
+      // window follows the new address; a remote page keeps its URL unless it still matches.
+      if (previous && (previous.lan !== next.lan || previous.port !== next.port)) {
+        const host = window.location.hostname
+        const local = ['127.0.0.1', 'localhost', '::1', '[::1]'].includes(host)
+        if (local) window.setTimeout(() => window.location.assign(next.localUrl), 1200)
+      }
+    } catch (error) {
+      notices.report(error)
+    } finally {
+      setNetworkBusy(false)
+    }
+  }
+
+  async function copyAccessUrl() {
+    const value = network?.accessUrl ?? network?.url
+    if (!value) return
+    try {
+      await navigator.clipboard.writeText(value)
+      notices.notify(tr('链接已复制', 'Link copied'), tr('链接包含访问令牌，请只发送给信任的设备。', 'The link contains an access token; share it only with trusted devices.'), 'success')
+    } catch (error) {
+      notices.report(error)
+    }
+  }
 
   async function setPermission(mode: string) {
     try {
@@ -193,6 +257,70 @@ export default function Settings() {
           </> : null}
         </CardContent>
       </Card>
+
+      {network ? <Card className="settings-wide">
+        <CardHeader>
+          <CardTitle>{tr('局域网访问与二维码', 'LAN access and QR code')}</CardTitle>
+          <CardDescription>{tr('开启后监听 0.0.0.0，同一局域网中的手机、平板或其他电脑即可访问。本机始终免密；其他设备扫码进入，或使用访问密码。首次开启时 Windows 防火墙可能询问，请允许「专用网络」。', 'When enabled, the server listens on 0.0.0.0 so phones, tablets and other computers on the same LAN can connect. This machine never needs a password; other devices scan the QR code or use the access password. Windows Firewall may ask the first time; allow private networks.')}</CardDescription>
+        </CardHeader>
+        <CardContent className="settings-fields">
+          <div className="setting-row"><div>
+            <strong>{tr('允许局域网访问（监听 0.0.0.0）', 'Allow LAN access (listen on 0.0.0.0)')}</strong>
+            <p>{tr('关闭时仅监听 127.0.0.1。修改监听地址或端口会重启服务，当前页面可能在约 1 秒后重连。', 'When off, the server listens on 127.0.0.1 only. Changing the address or port restarts the listener; the page may reconnect after about a second.')}</p>
+          </div>
+            <Switch aria-label={tr('允许局域网访问', 'Allow LAN access')} checked={networkLan} onCheckedChange={setNetworkLan} size="sm" />
+          </div>
+          <div className="field-pair">
+            <label className="field"><span>{tr('监听端口', 'Listener port')}</span>
+              <Field
+                label={tr('监听端口', 'Listener port')}
+                onChange={value => setNetworkPort(value.replace(/[^0-9]/g, ''))}
+                placeholder={tr('留空自动选择', 'Empty for automatic')}
+                value={networkPort}
+              />
+            </label>
+            <label className="field"><span>{tr('访问密码（可选）', 'Access password (optional)')}</span>
+              <Field
+                label={tr('访问密码', 'Access password')}
+                onChange={setNetworkPassword}
+                placeholder={network.passwordConfigured ? tr('已设置 · 留空保持不变', 'Set · leave empty to keep') : tr('建议设置一个密码', 'Setting one is recommended')}
+                type="password"
+                value={networkPassword}
+              />
+            </label>
+          </div>
+          {network.passwordConfigured ? <div className="setting-row"><div>
+            <strong>{tr('清除访问密码', 'Clear access password')}</strong>
+            <p>{tr('清除后其他设备只能通过二维码进入。', 'After clearing it, other devices can enter only through the QR code.')}</p>
+          </div>
+            <Switch aria-label={tr('清除访问密码', 'Clear access password')} checked={clearNetworkPassword} onCheckedChange={setClearNetworkPassword} size="sm" />
+          </div> : null}
+          <div className="webui-network-actions">
+            <Button icon={<Wifi size={14} />} loading={networkBusy} onClick={() => void saveNetwork()} size="sm">{tr('保存网络设置', 'Save network settings')}</Button>
+            {network.passwordConfigured
+              ? <Badge size="sm" variant="dot"><ShieldCheck size={12} />{tr('密码已设置', 'Password set')}</Badge>
+              : <Badge color="gray" size="sm" variant="dot">{tr('未设置密码', 'No password')}</Badge>}
+          </div>
+          {network.lan ? <>
+            <div className="webui-network-urls">
+              <span>{tr('其他设备访问地址', 'Addresses for other devices')}</span>
+              <div>{network.urls.map(url => <code key={url}>{url}</code>)}</div>
+            </div>
+            {network.qrDataUrl ? <div className="webui-qr-wrap">
+              <img alt={tr('局域网访问二维码', 'LAN access QR code')} className="webui-qr" src={network.qrDataUrl} />
+              <div className="webui-qr-copy">
+                <strong><QrCode size={14} />{tr('扫码直接进入', 'Scan to open')}</strong>
+                <p>{tr('二维码包含本次运行的访问令牌，手机扫描后无需再输入密码；服务重启后令牌失效。', 'The QR code contains this run’s access token, so a phone opens without typing the password. The token expires when the service restarts.')}</p>
+                {!network.passwordConfigured ? <p className="webui-warning">{tr('建议设置访问密码：否则没有二维码的设备无法进入。', 'Set an access password: without it, a device without the QR code cannot sign in.')}</p> : null}
+                <div className="webui-network-actions">
+                  <Button icon={<Copy size={14} />} onClick={() => void copyAccessUrl()} size="sm" variant="outline">{tr('复制带令牌链接', 'Copy link with token')}</Button>
+                  <Button icon={<ExternalLink size={14} />} onClick={() => window.open(network.accessUrl ?? network.url, '_blank', 'noopener')} size="sm" variant="outline">{tr('打开', 'Open')}</Button>
+                </div>
+              </div>
+            </div> : null}
+          </> : <p className="list-description">{tr('本机访问始终免密，无需设置密码。需要其他设备访问时，打开上方开关即可。', 'This machine never needs a password. Turn on the switch above when another device should connect.')}</p>}
+        </CardContent>
+      </Card> : null}
 
       <Card className="settings-wide">
         <CardHeader>

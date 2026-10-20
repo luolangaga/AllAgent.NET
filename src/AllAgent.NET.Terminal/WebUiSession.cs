@@ -17,6 +17,7 @@ namespace AllAgent.NET.Terminal;
 // Payloads registered on the bridge by this session.
 public sealed record WorkspaceSwitchParams(string Path, bool Create = false);
 public sealed record WorkspaceInfo(string Workspace, string DataDirectory, string SharedDirectory, string WorkspacesRoot = "");
+public sealed record WebUiNetworkParams(bool Lan, int Port, string? Password = null, bool ClearPassword = false);
 public sealed record SessionControlState(string PermissionMode, string PermissionLabel, string SandboxMode, string SandboxEffective, bool Running);
 public sealed record SessionPermissionParams(string Mode);
 public sealed record SessionSandboxParams(string Mode);
@@ -134,14 +135,23 @@ internal sealed class WebUiSession : IAsyncDisposable
     private readonly SessionControls? _controls;
     private readonly Dictionary<string, Bundle> _bundles = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _bundlesGate = new();
-    private WebUiServer _server = null!;
+    private readonly SemaphoreSlim _networkGate = new(1, 1);
+    private WebUiNetworkSettings _networkSettings = new();
+    private WebUiAccessControl _access = null!;
+    private volatile WebUiServer _server = null!;
+    private bool _disposed;
     private PluginAssetServer? _pluginAssets;
     private Bundle _current = null!;
     internal bool UseTerminalPrompts { get; set; }
 
     public string Url => _server.Url;
+    public string LocalUrl => _server.LocalUrl;
+    /// <summary>Local URLs never need a password or token, so the host can open this directly.</summary>
+    public string LocalAccessUrl => LocalUrl;
     public int Port => _server.Port;
     public int ConnectedClients => _server.ConnectedClients;
+    public bool Lan => _networkSettings.Lan;
+    public bool PasswordConfigured => _access.PasswordConfigured;
 
     /// <summary>The terminal changed the shared language setting: apply it to every open page.</summary>
     public void PushSettingsChanged()
@@ -212,7 +222,8 @@ internal sealed class WebUiSession : IAsyncDisposable
     }
 
     public static WebUiSession Start(WebUiTerminalHost terminal, Func<AgentOptions> baseOptions, AiProviderFactory factory, PluginHost plugins,
-        string sharedDirectory, int backgroundConcurrency, Func<ApiConfig, IAiProvider>? providerResolver = null, SessionControls? controls = null, int port = 0)
+        string sharedDirectory, int backgroundConcurrency, Func<ApiConfig, IAiProvider>? providerResolver = null, SessionControls? controls = null, int port = 0,
+        WebUiNetworkOptions? network = null)
     {
         var session = new WebUiSession(terminal, baseOptions, factory, plugins, sharedDirectory, backgroundConcurrency, providerResolver, controls);
         session.RegisterStaticHandlers();
@@ -220,14 +231,147 @@ internal sealed class WebUiSession : IAsyncDisposable
         // Plugin web payloads live on their own loopback origin so sandboxed frames cannot reach
         // the app page or the /bridge socket.
         session._pluginAssets = PluginAssetServer.TryStart(plugins, DefaultWebRoot);
-        session._server = WebUiServer.Start(session._dispatcher, session._pusher, DefaultWebRoot, port);
+        session.InitializeNetwork(network, port);
+        session._server = session.StartServer();
         session._approvals.HasClients = () => session._server.ConnectedClients > 0;
-        // A reloaded page starts with an empty prompt list, so hand it the prompts still waiting.
-        session._server.ClientConnected = session._approvals.ReplayPending;
         plugins.Changed += session.SyncPluginWeb;
         plugins.WebEvents.Pushed += session.OnPluginWebPush;
         session.SyncPluginWeb();
         return session;
+    }
+
+    private void InitializeNetwork(WebUiNetworkOptions? network, int port)
+    {
+        _networkSettings = WebUiNetworkSettings.Load(_sharedDirectory);
+        if (network?.Lan is { } lan) _networkSettings.Lan = lan;
+        if (network?.Port is { } requested) _networkSettings.Port = requested;
+        else if (port > 0) _networkSettings.Port = port;
+        _access = new WebUiAccessControl(_networkSettings);
+        if (network is { ClearPassword: true })
+        {
+            _access.SetPassword(null);
+            _access.CopyCredentialsTo(_networkSettings);
+        }
+        else if (!string.IsNullOrEmpty(network?.Password))
+        {
+            _access.SetPassword(network.Password);
+            _access.CopyCredentialsTo(_networkSettings);
+        }
+        _networkSettings.Save(_sharedDirectory);
+    }
+
+    private WebUiServer StartServer()
+    {
+        var server = WebUiServer.Start(_dispatcher, _pusher, DefaultWebRoot, new WebUiServerOptions(_networkSettings.Lan, _networkSettings.Port, _access));
+        // Remember the port actually bound (a busy port falls back to a free one) so the next
+        // launch and the QR code keep pointing at the same place.
+        if (_networkSettings.Port != server.Port)
+        {
+            _networkSettings.Port = server.Port;
+            _networkSettings.Save(_sharedDirectory);
+        }
+        // A reloaded page starts with an empty prompt list, so hand it the prompts still waiting.
+        server.ClientConnected = _approvals.ReplayPending;
+        return server;
+    }
+
+    /// <summary>Address, access and QR information for the terminal and the settings page.</summary>
+    public WebUiNetworkInfo NetworkInfo() => BuildNetworkInfo(_networkSettings.Port);
+
+    private WebUiNetworkInfo BuildNetworkInfo(int port)
+    {
+        var localUrl = $"http://127.0.0.1:{port}/";
+        var urls = _networkSettings.Lan ? WebUiAddress.Urls(port) : [localUrl];
+        if (urls.Count == 0) urls = [localUrl];
+        var url = _networkSettings.Lan ? urls[0] : localUrl;
+        // The QR pairs another device: it always carries the per-run token. Local pages never do.
+        var qrUrl = _networkSettings.Lan ? AccessUrl(url, port) : localUrl;
+        return new WebUiNetworkInfo(
+            _networkSettings.Lan, port, url, localUrl, urls,
+            _networkSettings.Lan, _access.PasswordConfigured,
+            _networkSettings.Lan ? qrUrl : localUrl,
+            WebUiQr.PngDataUrl(qrUrl));
+    }
+
+    private string AccessUrl(string url, int port) => _networkSettings.Lan
+        ? url + (url.Contains('?') ? "&" : "?") + "access=" + Uri.EscapeDataString(_access.AccessToken)
+        : $"http://127.0.0.1:{port}/";
+
+    /// <summary>Applies settings changed from the browser. A bind/port change restarts the listener
+    /// shortly after the RPC response is delivered, so the page can still receive its reply.</summary>
+    public async Task<WebUiNetworkInfo> UpdateNetworkAsync(WebUiNetworkParams parameters)
+    {
+        if (parameters.Port is < 0 or > 65535) throw new ArgumentException(L.Pick("端口必须在 1–65535 之间，或留空自动选择。", "The port must be between 1 and 65535, or empty for automatic selection."));
+        await _networkGate.WaitAsync();
+        try
+        {
+            var previousLan = _networkSettings.Lan;
+            var previousPort = _server.Port;
+            if (parameters.ClearPassword)
+            {
+                _access.SetPassword(null);
+                _access.CopyCredentialsTo(_networkSettings);
+            }
+            else if (!string.IsNullOrEmpty(parameters.Password))
+            {
+                _access.SetPassword(parameters.Password);
+                _access.CopyCredentialsTo(_networkSettings);
+            }
+            var port = parameters.Port == 0 ? FreePort(parameters.Lan) : parameters.Port;
+            if (port != previousPort) EnsurePortAvailable(parameters.Lan, port);
+            _networkSettings.Lan = parameters.Lan;
+            _networkSettings.Port = port;
+            _networkSettings.Save(_sharedDirectory);
+            var info = BuildNetworkInfo(port);
+            if (parameters.Lan != previousLan || port != previousPort) _ = RestartServerAsync();
+            return info;
+        }
+        finally
+        {
+            _networkGate.Release();
+        }
+    }
+
+    private async Task RestartServerAsync()
+    {
+        // Give the bridge response time to leave the old socket before it is closed.
+        await Task.Delay(700);
+        await _networkGate.WaitAsync();
+        try
+        {
+            if (_disposed) return;
+            var previous = _server;
+            try { await previous.DisposeAsync(); } catch { /* already stopped */ }
+            _server = StartServer();
+            _pusher.Push(JsonSerializer.Serialize(new
+            {
+                type = "webui.network.changed",
+                lan = _networkSettings.Lan,
+                port = _server.Port,
+                url = _server.Url,
+            }, JsonOptions.Default));
+        }
+        finally
+        {
+            _networkGate.Release();
+        }
+    }
+
+    private static int FreePort(bool lan)
+    {
+        using var listener = new System.Net.Sockets.TcpListener(lan ? System.Net.IPAddress.Any : System.Net.IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+        listener.Stop();
+        return port;
+    }
+
+    private static void EnsurePortAvailable(bool lan, int port)
+    {
+        using var listener = new System.Net.Sockets.TcpListener(lan ? System.Net.IPAddress.Any : System.Net.IPAddress.Loopback, port);
+        try { listener.Start(); }
+        catch (System.Net.Sockets.SocketException) { throw new InvalidOperationException(L.Pick($"端口 {port} 已被占用，请换一个端口。", $"Port {port} is already in use; choose another one.")); }
+        listener.Stop();
     }
 
     public static bool OpenBrowser(string url)
@@ -243,9 +387,15 @@ internal sealed class WebUiSession : IAsyncDisposable
         }
     }
 
-    public string StatusText() => L.Pick(
-        $"工作区：{_current.Workspace}\n数据目录：{_current.DataDirectory}\n打开的工作区：{_bundles.Count} 个 · 后台运行 {RunningList().Count} 个会话\n地址：{_server.Url}\n浏览器连接：{_server.ConnectedClients} 个\n停止：/web-ui stop",
-        $"Workspace: {_current.Workspace}\nData directory: {_current.DataDirectory}\nOpen workspaces: {_bundles.Count} · {RunningList().Count} background sessions\nURL: {_server.Url}\nBrowser connections: {_server.ConnectedClients}\nStop: /web-ui stop");
+    public string StatusText()
+    {
+        var access = _networkSettings.Lan
+            ? L.Pick(_access.PasswordConfigured ? "访问密码：已设置" : "访问密码：未设置（其他设备请扫码进入）", _access.PasswordConfigured ? "Access password: set" : "Access password: not set (other devices should scan the QR code)")
+            : L.Pick("访问密码：无需（仅本机监听）", "Access password: not needed (loopback only)");
+        return L.Pick(
+            $"工作区：{_current.Workspace}\n数据目录：{_current.DataDirectory}\n打开的工作区：{_bundles.Count} 个 · 后台运行 {RunningList().Count} 个会话\n监听：{(_networkSettings.Lan ? "局域网 0.0.0.0" : "仅本机 127.0.0.1")}\n地址：{_server.Url}\n本机地址：{_server.LocalUrl}\n{access}\n浏览器连接：{_server.ConnectedClients} 个\n停止：/web-ui stop",
+            $"Workspace: {_current.Workspace}\nData directory: {_current.DataDirectory}\nOpen workspaces: {_bundles.Count} · {RunningList().Count} background sessions\nListening: {(_networkSettings.Lan ? "LAN 0.0.0.0" : "loopback 127.0.0.1")}\nURL: {_server.Url}\nLocal URL: {_server.LocalUrl}\n{access}\nBrowser connections: {_server.ConnectedClients}\nStop: /web-ui stop");
+    }
 
     /// <summary>Rebuilds the browser runtime so a terminal-side change (plan mode, sandbox, …) takes effect immediately.</summary>
     public async Task RefreshRuntimeAsync()
@@ -259,6 +409,7 @@ internal sealed class WebUiSession : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        _disposed = true;
         _plugins.Changed -= SyncPluginWeb;
         _plugins.WebEvents.Pushed -= OnPluginWebPush;
         await _terminals.DisposeAsync();
@@ -441,6 +592,10 @@ internal sealed class WebUiSession : IAsyncDisposable
         });
         _dispatcher.Register<WorkspaceInfo>("workspace.get", _ => Task.FromResult(Info()));
         _dispatcher.Register<List<WorkspaceInfo>>("workspace.recent", _ => Task.FromResult(Recent()));
+        // LAN listening, access password and the pairing QR. The browser settings page drives
+        // these; a bind or port change restarts the listener after the response is delivered.
+        _dispatcher.Register<WebUiNetworkInfo>("webui.network.get", _ => Task.FromResult(NetworkInfo()));
+        _dispatcher.Register<WebUiNetworkParams, WebUiNetworkInfo>("webui.network.save", (parameters, _) => UpdateNetworkAsync(parameters));
         // `@`-reference completion in the browser composer: workspace-relative paths only.
         _dispatcher.Register<WorkspaceFilesParams, IReadOnlyList<WorkspaceFileEntry>>("workspace.files", (parameters, _) =>
             Task.FromResult(WorkspaceFiles.Match(_current.Workspace, parameters.Query, parameters.Limit)));

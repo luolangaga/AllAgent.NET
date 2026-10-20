@@ -1,129 +1,68 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text;
 using AllAgent.NET.Core.Extensions;
-using AllAgent.NET.Core.Runtime;
 using AllAgent.NET.Core.Tools;
 
 namespace AllAgent.NET.CodeGraph;
 
-/// <summary>Owns the codegraph CLI process, index operations and their logs. One instance per
-/// plugin host; every workspace is serialized through its own gate.</summary>
+/// <summary>Owns the in-process index. One instance per plugin host; every workspace is
+/// serialized through its own gate.</summary>
 public sealed class CodeGraphService : IAsyncDisposable
 {
-    private const string PackageVersion = "1.6.2";
-    private static readonly TimeSpan ExploreTimeout = TimeSpan.FromSeconds(120);
-    private static readonly TimeSpan StatusTimeout = TimeSpan.FromSeconds(20);
-    private static readonly TimeSpan SyncTimeout = TimeSpan.FromMinutes(2);
-    private static readonly TimeSpan IndexTimeout = TimeSpan.FromMinutes(30);
-    private static readonly TimeSpan InstallTimeout = TimeSpan.FromMinutes(10);
+    private const int MaxOutputCharacters = 64_000;
+    private const int MaxExcerptLines = 120;
+    private const int MaxExcerptCharacters = 6_000;
+    private static readonly TimeSpan BuildTimeout = TimeSpan.FromSeconds(60);
 
-    private readonly string _dataDirectory;
     private readonly PluginSettings _settings;
     private readonly CancellationTokenSource _lifetime = new();
     private readonly ConcurrentDictionary<string, OperationState> _operations = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, Task> _pending = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _gates = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, DateTime> _lastSync = new(StringComparer.OrdinalIgnoreCase);
-    private (DateTime Expires, string? Path, string? Version)? _detected;
+    private readonly ConcurrentDictionary<string, Snapshot> _snapshots = new(StringComparer.OrdinalIgnoreCase);
 
-    public CodeGraphService(string dataDirectory, PluginSettings settings)
-    {
-        _dataDirectory = dataDirectory;
-        _settings = settings;
-    }
+    public CodeGraphService(PluginSettings settings) => _settings = settings;
 
     public bool AutoSync => !string.Equals(_settings.Get("autosync"), "false", StringComparison.OrdinalIgnoreCase);
-    public bool Telemetry => string.Equals(_settings.Get("telemetry"), "true", StringComparison.OrdinalIgnoreCase);
 
-    private CodeGraphLocator Locator() => new(() => _settings.Get("path"), () => Telemetry);
-
-    private string LogsDirectory
+    public Task<CodeGraphStatus> StatusAsync(string workspace, CancellationToken ct)
     {
-        get
-        {
-            var directory = Path.Combine(_dataDirectory, "logs");
-            Directory.CreateDirectory(directory);
-            return directory;
-        }
-    }
-
-    public async Task<(string? Path, string? Version)> DetectAsync(CancellationToken ct)
-    {
-        var now = DateTime.UtcNow;
-        if (_detected is { } cached && cached.Expires > now) return (cached.Path, cached.Version);
-        var locator = Locator();
-        var path = locator.Resolve();
-        string? version = null;
-        if (path != null)
-        {
-            try { version = await locator.VersionAsync(ct); }
-            catch (Exception ex) when (ex is not OperationCanceledException) { path = null; }
-            if (version == null) path = null;
-        }
-        _detected = (now.AddSeconds(10), path, version);
-        return (path, version);
-    }
-
-    public async Task<CodeGraphStatus> StatusAsync(string workspace, CancellationToken ct)
-    {
+        ct.ThrowIfCancellationRequested();
         workspace = ValidateWorkspace(workspace);
-        var (path, version) = await DetectAsync(ct);
-        var indexPath = IndexPath(workspace);
-        var database = DatabasePath(workspace);
-        var indexed = File.Exists(database);
-        string? detail = null;
-        string? error = null;
-        if (path != null && indexed)
-        {
-            try
-            {
-                var output = await BoundedProcess.RunAsync(Locator().StartInfo(["status", workspace], workspace), StatusTimeout, ct, limit: 8_000, stripAnsi: true);
-                detail = output.ExitCode == 0 ? output.Stdout.Trim() : null;
-                if (output.ExitCode != 0) error = Trim(output.Stderr + output.Stdout);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException) { error = ex.Message; }
-        }
-        var file = File.Exists(database) ? new FileInfo(database) : null;
-        return new(workspace, path != null, path, version, indexed, indexPath, file?.Length, file?.LastWriteTimeUtc, detail, error);
+        var path = CodeIndex.IndexPath(workspace);
+        var exists = File.Exists(path);
+        var index = exists ? (SnapshotFor(workspace).Index ??= CodeIndex.Load(workspace)) : null;
+        var file = exists ? new FileInfo(path) : null;
+        var error = index == null && exists ? "索引文件无法读取，请重建索引。" : TreeSitterNative.Error;
+        var detail = Detail(index, exists, path, file);
+        return Task.FromResult(new CodeGraphStatus(
+            workspace,
+            index != null,
+            exists ? path : null,
+            file?.Length,
+            file?.LastWriteTimeUtc,
+            index?.Files.Count ?? 0,
+            index?.Symbols.Count ?? 0,
+            index?.References.Count ?? 0,
+            detail,
+            error));
     }
 
     public async Task<ExploreResult> ExploreAsync(string workspace, string query, CancellationToken ct)
     {
         workspace = ValidateWorkspace(workspace);
         if (ValidateQuery(query) is { } invalid) return new("", false, invalid, null);
-        var (path, _) = await DetectAsync(ct);
-        if (path == null)
-            return new("", false, "未找到 codegraph。请先运行 /ext codegraph install --yes，或在设置页安装 CodeGraph。", null);
-        if (!File.Exists(DatabasePath(workspace)))
-            return new("", false, "当前工作区还没有 CodeGraph 索引。请运行 /ext codegraph init，或在设置页构建索引。", null);
-
         var gate = _gates.GetOrAdd(workspace, _ => new(1, 1));
         await gate.WaitAsync(ct);
         try
         {
-            if (AutoSync && ShouldSync(workspace))
-            {
-                try { await RunSyncCoreAsync(workspace, ct); }
-                catch (Exception ex) when (ex is not OperationCanceledException) { /* a stale index is still readable */ }
-            }
-            ProcessOutput output;
-            try
-            {
-                output = await BoundedProcess.RunAsync(Locator().StartInfo(["explore", query], workspace), ExploreTimeout, ct,
-                    limit: 64_000, stripAnsi: true, tailOutputDirectory: LogsDirectory);
-            }
-            catch (TimeoutException)
-            {
-                return new("", false, "CodeGraph explore 超时（120 秒）；请缩小查询范围或重试。", LastSync(workspace));
-            }
-            catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception)
-            {
-                return new("", false, ex.Message, LastSync(workspace));
-            }
-            if (output.ExitCode != 0)
-                return new("", output.Truncated, Trim(output.Stderr + output.Stdout), LastSync(workspace));
-            return new(output.Stdout.TrimEnd(), output.Truncated, null, LastSync(workspace));
+            var index = await EnsureIndexAsync(workspace, refresh: AutoSync, force: false, forceCheck: false, ct);
+            var (output, truncated) = BuildExploreOutput(workspace, index, query);
+            return new(output, truncated, null, index.BuiltAt);
         }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex) { return new("", false, ex.Message, null); }
         finally { gate.Release(); }
     }
 
@@ -133,15 +72,6 @@ public sealed class CodeGraphService : IAsyncDisposable
         var operation = new OperationState(Guid.NewGuid().ToString("N"), mode.ToString().ToLowerInvariant(), workspace);
         _operations[operation.Id] = operation;
         _pending[operation.Id] = Task.Run(() => RunIndexAsync(operation, mode), CancellationToken.None);
-        Prune();
-        return operation.Snapshot();
-    }
-
-    public CodeGraphOperation StartInstall()
-    {
-        var operation = new OperationState(Guid.NewGuid().ToString("N"), "install", "");
-        _operations[operation.Id] = operation;
-        _pending[operation.Id] = Task.Run(() => RunInstallAsync(operation), CancellationToken.None);
         Prune();
         return operation.Snapshot();
     }
@@ -166,51 +96,20 @@ public sealed class CodeGraphService : IAsyncDisposable
         return true;
     }
 
-    public async Task<InstallResult> InstallAsync(CancellationToken ct)
-    {
-        var output = new StringBuilder();
-        var result = await InstallCoreAsync(ct, text => { lock (output) output.Append(text); });
-        return result with { Output = output.ToString() };
-    }
-
-    public async Task<string> UnlockAsync(string workspace, CancellationToken ct)
-    {
-        workspace = ValidateWorkspace(workspace);
-        var (path, _) = await DetectAsync(ct);
-        if (path == null) return "未安装 CodeGraph。";
-        var output = await BoundedProcess.RunAsync(Locator().StartInfo(["unlock", workspace], workspace), TimeSpan.FromSeconds(30), ct, limit: 4_000, stripAnsi: true);
-        return (output.Stdout + output.Stderr).Trim();
-    }
-
     private async Task RunIndexAsync(OperationState operation, IndexMode mode)
     {
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, operation.Cancellation.Token);
-        var ct = linked.Token;
-        var workspace = operation.Workspace;
-        var gate = _gates.GetOrAdd(workspace, _ => new(1, 1));
+        var gate = _gates.GetOrAdd(operation.Workspace, _ => new(1, 1));
         try
         {
-            await gate.WaitAsync(ct);
+            await gate.WaitAsync(linked.Token);
             try
             {
-                var exists = File.Exists(DatabasePath(workspace));
-                var args = mode switch
-                {
-                    IndexMode.Rebuild => new[] { "index", workspace, "--force" },
-                    IndexMode.Sync => new[] { "sync", workspace },
-                    _ => exists ? new[] { "sync", workspace } : new[] { "init", workspace }
-                };
-                operation.Append("$ codegraph " + string.Join(' ', args) + "\n");
-                var output = await BoundedProcess.RunAsync(Locator().StartInfo(args, workspace),
-                    mode == IndexMode.Sync ? SyncTimeout : IndexTimeout, ct,
-                    limit: 20_000, onOutput: (text, _) => operation.Append(text), stripAnsi: true, tailOutputDirectory: LogsDirectory);
-                operation.LogPath = output.StdoutPath ?? output.StderrPath;
-                if (output.ExitCode != 0) operation.Fail(Trim(output.Stderr + output.Stdout));
-                else
-                {
-                    _lastSync[workspace] = DateTime.UtcNow;
-                    operation.Complete();
-                }
+                operation.Append(mode == IndexMode.Rebuild ? "正在重建索引…\n" : "正在构建索引…\n");
+                var index = await EnsureIndexAsync(operation.Workspace, refresh: true, force: mode == IndexMode.Rebuild, forceCheck: true, linked.Token);
+                operation.Append($"完成：{index.Files.Count} 文件 · {index.Symbols.Count} 符号 · {index.References.Count} 引用\n");
+                if (index.Notice is { Length: > 0 } notice) operation.Append(notice + "\n");
+                operation.Complete();
             }
             finally { gate.Release(); }
         }
@@ -218,62 +117,265 @@ public sealed class CodeGraphService : IAsyncDisposable
         catch (Exception ex) { operation.Fail(ex.Message); }
     }
 
-    private async Task RunInstallAsync(OperationState operation)
+    private async Task<CodeIndex> EnsureIndexAsync(string workspace, bool refresh, bool force, bool forceCheck, CancellationToken ct)
     {
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, operation.Cancellation.Token);
+        var snapshot = SnapshotFor(workspace);
+        if (!force && !forceCheck && snapshot.Index is { } cached && (!refresh || DateTime.UtcNow - snapshot.CheckedAt < TimeSpan.FromSeconds(2)))
+            return cached;
+
+        var index = force ? null : (snapshot.Index ?? CodeIndex.Load(workspace));
+        index ??= new CodeIndex();
+        index.Workspace = workspace;
+
+        var files = CodeIndex.EnumerateFiles(workspace, out var truncated);
+        var absoluteByRelative = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var changed = new List<string>();
+        foreach (var absolute in files)
+        {
+            ct.ThrowIfCancellationRequested();
+            var info = new FileInfo(absolute);
+            if (!info.Exists) continue;
+            var relative = CodeIndex.RelativePath(workspace, absolute);
+            var language = CodeIndex.LanguageOf(relative);
+            absoluteByRelative[relative] = absolute;
+            seen.Add(relative);
+            if (index.Files.TryGetValue(relative, out var existing)
+                && existing.ModifiedTicks == info.LastWriteTimeUtc.Ticks
+                && existing.Size == info.Length
+                && existing.Language == language)
+                continue;
+            changed.Add(relative);
+        }
+
+        var removed = 0;
+        if (!truncated)
+        {
+            foreach (var stale in index.Files.Keys.Where(key => !seen.Contains(key)).ToArray())
+            {
+                index.Files.Remove(stale);
+                removed++;
+            }
+        }
+
+        var rebuildAll = force || index.Files.Count == 0 || changed.Count > Math.Max(20, absoluteByRelative.Count / 3);
+        if (rebuildAll) index.Files.Clear();
+
+        var targets = rebuildAll
+            ? files.ToArray()
+            : changed.Where(absoluteByRelative.ContainsKey).Select(relative => absoluteByRelative[relative]).ToArray();
+
+        var watch = Stopwatch.StartNew();
+        foreach (var absolute in targets)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (watch.Elapsed > BuildTimeout)
+            {
+                truncated = true;
+                break;
+            }
+            var relative = CodeIndex.RelativePath(workspace, absolute);
+            var info = new FileInfo(absolute);
+            if (!info.Exists) continue;
+            var language = CodeIndex.LanguageOf(relative);
+            var entry = new CodeIndexFile
+            {
+                Path = relative,
+                Language = language,
+                ModifiedTicks = info.LastWriteTimeUtc.Ticks,
+                Size = info.Length,
+            };
+            if (language != "other" && info.Length <= CodeIndex.MaxParseBytes)
+            {
+                try
+                {
+                    var text = await File.ReadAllTextAsync(absolute, ct);
+                    entry = CodeScanner.Scan(relative, language, text, info.LastWriteTimeUtc.Ticks, info.Length);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    entry.Error = ex.Message;
+                }
+            }
+            index.Files[relative] = entry;
+        }
+
+        index.BuiltAt = DateTime.UtcNow;
+        index.Rebuild();
+        index.Notice = BuildNotice(truncated, index);
+        if (rebuildAll || changed.Count > 0 || removed > 0) index.Save();
+        snapshot.Index = index;
+        snapshot.CheckedAt = DateTime.UtcNow;
+        return index;
+    }
+
+    private static string? BuildNotice(bool truncated, CodeIndex index)
+    {
+        if (truncated) return "索引已截断：文件数或构建耗时超过上限，可缩小工作区后重建。";
+        var errors = index.Files.Values.Count(file => file.Error != null);
+        return errors > 0 ? $"{errors} 个文件解析失败，详见状态信息。" : null;
+    }
+
+    private (string Text, bool Truncated) BuildExploreOutput(string workspace, CodeIndex index, string query)
+    {
+        var symbols = index.Search(query);
+        if (symbols.Count == 0) symbols = index.SearchFile(query);
+
+        var builder = new StringBuilder();
+        if (TreeSitterNative.Error is { Length: > 0 } nativeError) builder.AppendLine("Warning: " + nativeError);
+        builder.AppendLine($"CodeGraph · {index.Files.Count} files · {index.Symbols.Count} symbols · {index.References.Count} refs");
+        if (index.Notice is { Length: > 0 } notice) builder.AppendLine(notice);
+
+        if (symbols.Count == 0)
+        {
+            var terms = CodeIndex.Tokenize(query);
+            var files = index.Files.Keys
+                .Where(path => terms.Any(term => path.Contains(term, StringComparison.OrdinalIgnoreCase)))
+                .Take(20)
+                .ToArray();
+            if (files.Length > 0)
+            {
+                builder.AppendLine("Files:");
+                foreach (var file in files) builder.AppendLine(file);
+            }
+            var matches = SearchText(workspace, index, query, 200);
+            if (matches.Count > 0)
+            {
+                builder.AppendLine("Text matches (the query did not match a symbol):");
+                foreach (var match in matches) builder.AppendLine(match);
+            }
+            if (files.Length == 0 && matches.Count == 0)
+                builder.AppendLine("No symbols or text matches. Try a symbol name, file name, or shorter terms.");
+            return (builder.ToString(), false);
+        }
+
+        var truncated = false;
+        var emitted = 0;
+        foreach (var symbol in symbols)
+        {
+            var chunk = FormatSymbol(workspace, index, symbol);
+            if (builder.Length + chunk.Length > MaxOutputCharacters)
+            {
+                truncated = true;
+                break;
+            }
+            builder.Append(chunk);
+            if (++emitted >= 6) break;
+        }
+        return (builder.ToString(), truncated);
+    }
+
+    private static string FormatSymbol(string workspace, CodeIndex index, CodeSymbol symbol)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine($"## {symbol.Name} ({symbol.Kind}) · {symbol.File}:{symbol.StartLine}-{symbol.EndLine}");
+        if (!string.IsNullOrWhiteSpace(symbol.Signature)) builder.AppendLine(symbol.Signature);
+        if (ReadExcerpt(workspace, symbol) is { } excerpt)
+        {
+            builder.AppendLine("```");
+            builder.AppendLine(excerpt);
+            builder.AppendLine("```");
+        }
+        var allCallers = index.ReferencesTo(symbol.Name);
+        if (allCallers.Count is > 0 and <= 100)
+        {
+            var callers = allCallers
+                .Where(reference => reference.File != symbol.File || reference.Line < symbol.StartLine || reference.Line > symbol.EndLine)
+                .DistinctBy(reference => (reference.File, reference.Line))
+                .Take(8)
+                .ToArray();
+            if (callers.Length > 0)
+                builder.AppendLine("Callers (name match): " + string.Join(", ", callers.Select(reference => $"{reference.File}:{reference.Line}")));
+        }
+        else if (allCallers.Count > 100)
+        {
+            var files = allCallers.Select(reference => reference.File).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+            builder.AppendLine($"Callers: {allCallers.Count} references in {files} files (name match; too many to list)");
+        }
+        var callees = index.ReferencesIn(symbol).Select(reference => reference.Name)
+            .Where(name => name.Length > 1)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (callees.Length > 0)
+            builder.AppendLine("Calls: " + string.Join(", ", callees.Take(12)) + (callees.Length > 12 ? "…" : ""));
+        var impact = allCallers.Select(reference => reference.File).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        if (impact > 0) builder.AppendLine($"Impact: {impact} file(s)");
+        builder.AppendLine();
+        return builder.ToString();
+    }
+
+    private static string? ReadExcerpt(string workspace, CodeSymbol symbol)
+    {
+        var path = Path.Combine(workspace, symbol.File);
+        if (!File.Exists(path)) return null;
         try
         {
-            var result = await InstallCoreAsync(linked.Token, text => operation.Append(text));
-            if (result.Installed) operation.Complete();
-            else operation.Fail(result.Error ?? "安装失败。");
+            var lines = File.ReadAllLines(path);
+            if (symbol.StartLine < 1 || symbol.StartLine > lines.Length) return null;
+            var start = symbol.StartLine - 1;
+            var end = Math.Min(lines.Length, Math.Min(symbol.EndLine, symbol.StartLine + MaxExcerptLines - 1));
+            return ToolResult.Clip(string.Join('\n', lines[start..end]), MaxExcerptCharacters);
         }
-        catch (OperationCanceledException) { operation.Cancel(); }
-        catch (Exception ex) { operation.Fail(ex.Message); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
     }
 
-    private async Task<InstallResult> InstallCoreAsync(CancellationToken ct, Action<string> onOutput)
+    private static readonly HashSet<string> TextExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
-        var (path, version) = await DetectAsync(ct);
-        if (path != null) return new(true, path, version, "", null);
+        ".md", ".json", ".jsonc", ".yml", ".yaml", ".xml", ".csproj", ".props", ".targets",
+        ".sln", ".slnx", ".txt", ".css", ".scss", ".html", ".htm", ".svg", ".ps1", ".sh",
+        ".bat", ".cmd", ".toml", ".ini", ".config", ".gradle", ".vue",
+    };
 
-        ProcessOutput output;
-        var npm = EnvironmentDoctor.FindExecutable("npm.cmd") ?? EnvironmentDoctor.FindExecutable("npm");
-        if (npm != null)
-        {
-            onOutput("$ npm install -g @colbymchenry/codegraph@" + PackageVersion + "\n");
-            output = await RunCommandAsync(npm, ["install", "-g", "@colbymchenry/codegraph@" + PackageVersion], ct, InstallTimeout, onOutput);
-        }
-        else if (OperatingSystem.IsWindows())
-        {
-            var powershell = EnvironmentDoctor.FindExecutable("powershell.exe") ?? "powershell.exe";
-            const string command = "irm https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.ps1 | iex";
-            onOutput("$ powershell -NoProfile -ExecutionPolicy Bypass -Command \"" + command + "\"\n");
-            output = await RunCommandAsync(powershell, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command], ct, InstallTimeout, onOutput);
-        }
-        else
-        {
-            throw new InvalidOperationException("请安装 Node.js/npm，或运行 codegraph 官方安装脚本后再试。");
-        }
-
-        RefreshPath();
-        _detected = null;
-        var (installedPath, installedVersion) = await DetectAsync(ct);
-        if (installedPath == null)
-            return new(false, null, null, output.Stdout, Trim(output.Stderr + output.Stdout));
-        _settings.Set("path", installedPath);
-        return new(true, installedPath, installedVersion, output.Stdout, null);
-    }
-
-    private async Task RunSyncCoreAsync(string workspace, CancellationToken ct)
+    private static List<string> SearchText(string workspace, CodeIndex index, string query, int limit)
     {
-        var output = await BoundedProcess.RunAsync(Locator().StartInfo(["sync", workspace], workspace), SyncTimeout, ct, limit: 8_000, stripAnsi: true);
-        if (output.ExitCode == 0) _lastSync[workspace] = DateTime.UtcNow;
+        var terms = CodeIndex.Tokenize(query);
+        if (terms.Count == 0) return [];
+        var results = new List<string>();
+        foreach (var file in index.Files.Values)
+        {
+            if (file.Size > CodeIndex.MaxParseBytes) continue;
+            if (file.Language == "other" && !TextExtensions.Contains(Path.GetExtension(file.Path))) continue;
+            var path = Path.Combine(workspace, file.Path);
+            if (!File.Exists(path)) continue;
+            try
+            {
+                var lines = File.ReadAllLines(path);
+                for (var indexLine = 0; indexLine < lines.Length; indexLine++)
+                {
+                    if (!terms.Any(term => lines[indexLine].Contains(term, StringComparison.OrdinalIgnoreCase))) continue;
+                    results.Add($"{file.Path}:{indexLine + 1}: {ToolResult.Clip(lines[indexLine].Trim(), 300)}");
+                    if (results.Count >= limit) return results;
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+        return results;
     }
 
-    private bool ShouldSync(string workspace) =>
-        AutoSync && (!_lastSync.TryGetValue(workspace, out var last) || DateTime.UtcNow - last > TimeSpan.FromSeconds(2));
+    private static string Detail(CodeIndex? index, bool exists, string path, FileInfo? file)
+    {
+        if (!exists) return "内置索引 · 未构建（首次 codegraph_explore 会自动构建）";
+        if (index == null) return "内置索引 · 无法读取（请重建）";
+        var builder = new StringBuilder();
+        builder.Append($"内置索引 · {index.Files.Count} 文件 · {index.Symbols.Count:N0} 符号 · {index.References.Count:N0} 引用");
+        var languages = index.Languages();
+        if (languages.Count > 0) builder.Append('\n').Append(string.Join(" · ", languages));
+        if (file != null) builder.Append('\n').Append($"{Path.GetFileName(path)} · {FormatBytes(file.Length)} · {file.LastWriteTimeUtc.ToLocalTime():yyyy-MM-dd HH:mm}");
+        if (index.Notice is { Length: > 0 } notice) builder.Append('\n').Append(notice);
+        var errors = index.Files.Values.Where(entry => entry.Error != null).Select(entry => $"{entry.Path}: {entry.Error}").Take(3).ToArray();
+        if (errors.Length > 0) builder.Append('\n').Append(string.Join('\n', errors));
+        if (TreeSitterNative.Error is { Length: > 0 } nativeError) builder.Append('\n').Append(nativeError);
+        return builder.ToString();
+    }
 
-    private DateTime? LastSync(string workspace) => _lastSync.TryGetValue(workspace, out var last) ? last : null;
+    private static string FormatBytes(long bytes) => bytes switch
+    {
+        < 1024 => $"{bytes} B",
+        < 1024 * 1024 => $"{bytes / 1024.0:F1} KB",
+        _ => $"{bytes / 1024.0 / 1024.0:F1} MB",
+    };
+
+    private Snapshot SnapshotFor(string workspace) => _snapshots.GetOrAdd(workspace, _ => new Snapshot());
 
     private void Prune()
     {
@@ -286,15 +388,6 @@ public sealed class CodeGraphService : IAsyncDisposable
             _pending.TryRemove(stale.Id, out _);
         }
     }
-
-    public static string IndexPath(string workspace)
-    {
-        var configured = Environment.GetEnvironmentVariable("CODEGRAPH_DIR");
-        var directory = string.IsNullOrWhiteSpace(configured) ? ".codegraph" : configured.Trim();
-        return Path.GetFullPath(Path.IsPathFullyQualified(directory) ? directory : Path.Combine(workspace, directory));
-    }
-
-    public static string DatabasePath(string workspace) => Path.Combine(IndexPath(workspace), "codegraph.db");
 
     public static string? ValidateQuery(string? query)
     {
@@ -314,26 +407,6 @@ public sealed class CodeGraphService : IAsyncDisposable
         return full;
     }
 
-    private static async Task<ProcessOutput> RunCommandAsync(string executable, string[] args, CancellationToken ct, TimeSpan timeout, Action<string> onOutput)
-    {
-        var info = executable.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase) || executable.EndsWith(".bat", StringComparison.OrdinalIgnoreCase)
-            ? BoundedProcess.StartInfo(Environment.GetEnvironmentVariable("ComSpec") is { Length: > 0 } command ? command : "cmd.exe",
-                ["/d", "/s", "/c", "call", executable, .. args])
-            : BoundedProcess.StartInfo(executable, args);
-        info.Environment["NO_COLOR"] = "1";
-        return await BoundedProcess.RunAsync(info, timeout, ct, limit: 20_000, onOutput: (text, _) => onOutput(text), stripAnsi: true);
-    }
-
-    private static void RefreshPath()
-    {
-        var current = Environment.GetEnvironmentVariable("PATH") ?? "";
-        var machine = Environment.GetEnvironmentVariable("PATH", EnvironmentVariableTarget.Machine) ?? "";
-        var user = Environment.GetEnvironmentVariable("PATH", EnvironmentVariableTarget.User) ?? "";
-        Environment.SetEnvironmentVariable("PATH", string.Join(';', new[] { current, machine, user }.Where(value => !string.IsNullOrWhiteSpace(value))));
-    }
-
-    private static string Trim(string text) => ToolResult.Clip(text.Trim(), 2_000);
-
     public async ValueTask DisposeAsync()
     {
         await _lifetime.CancelAsync();
@@ -342,14 +415,24 @@ public sealed class CodeGraphService : IAsyncDisposable
         _lifetime.Dispose();
     }
 
+    private sealed class Snapshot
+    {
+        public CodeIndex? Index { get; set; }
+        public DateTime CheckedAt { get; set; }
+    }
+
     private sealed class OperationState
     {
         private readonly object _sync = new();
         private readonly StringBuilder _output = new();
+
         public OperationState(string id, string kind, string workspace)
         {
-            Id = id; Kind = kind; Workspace = workspace;
+            Id = id;
+            Kind = kind;
+            Workspace = workspace;
         }
+
         public string Id { get; }
         public string Kind { get; }
         public string Workspace { get; }
@@ -357,7 +440,6 @@ public sealed class CodeGraphService : IAsyncDisposable
         public DateTime StartedAt { get; } = DateTime.UtcNow;
         public string State { get; private set; } = "running";
         public string? Error { get; private set; }
-        public string? LogPath { get; set; }
         public DateTime? FinishedAt { get; private set; }
 
         public void Append(string? text)
@@ -376,7 +458,7 @@ public sealed class CodeGraphService : IAsyncDisposable
 
         public CodeGraphOperation Snapshot()
         {
-            lock (_sync) return new(Id, Kind, Workspace, State, _output.ToString(), Error, LogPath, StartedAt, FinishedAt);
+            lock (_sync) return new(Id, Kind, Workspace, State, _output.ToString(), Error, StartedAt, FinishedAt);
         }
     }
 }

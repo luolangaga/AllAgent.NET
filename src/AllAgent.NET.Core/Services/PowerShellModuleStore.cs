@@ -45,7 +45,14 @@ public sealed class PowerShellModuleStore(string sharedDirectory, string? worker
         var payload = Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { operation, name, version })));
         var info = BoundedProcess.StartInfo(_worker, ["--modules", payload]);
         info.Environment["ALLAGENT_PS_MODULE_ROOT"] = Root;
-        var result = await BoundedProcess.RunAsync(info, TimeSpan.FromMinutes(5), ct, limit: 2_000_000);
+        ProcessOutput result;
+        try { result = await BoundedProcess.RunAsync(info, TimeSpan.FromMinutes(5), ct, limit: 2_000_000); }
+        catch (TimeoutException)
+        {
+            throw new InvalidOperationException(operation == "search"
+                ? "连接 PowerShell Gallery 超时（5 分钟）。请检查网络、系统代理或 HTTPS_PROXY 后重试。"
+                : "安装 PowerShell 模块超时（5 分钟）。请检查网络后重试，已下载的部分不会注册为能力。");
+        }
         if (result.ExitCode != 0 || result.Truncated) throw new InvalidOperationException("PowerShell module operation failed: " + result.Stderr + (result.Truncated ? " Catalog exceeds size limit." : ""));
         using var parsed = JsonDocument.Parse(result.Stdout);
         if (parsed.RootElement.ValueKind != JsonValueKind.Array) throw new InvalidOperationException("Module worker returned an invalid catalog.");

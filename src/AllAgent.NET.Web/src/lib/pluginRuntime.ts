@@ -206,15 +206,19 @@ function onMessage(event: MessageEvent) {
   if (record.origin && event.origin !== record.origin) return
   const data = event.data as FrameEnvelope | undefined
   if (!data || typeof data !== 'object' || data.allagent !== FRAME_PROTOCOL || typeof data.type !== 'string') return
-  if (!record.authed) {
-    if (data.type !== 'hello') return
+  if (data.type === 'hello') {
     const hello = (data.payload ?? {}) as { token?: string }
     if (hello.token !== record.token) return
-    record.authed = true
-    record.onReady?.()
+    if (!record.authed) {
+      record.authed = true
+      record.onReady?.()
+    }
+    // The SDK retries hello until it sees init, so answer every hello: one of them wins
+    // even when the first frame message arrived before this listener was registered.
     send(record, { allagent: FRAME_PROTOCOL, type: 'init', payload: initPayload(record) })
     return
   }
+  if (!record.authed) return
   switch (data.type) {
     case 'invoke': {
       const payload = (data.payload ?? {}) as { id?: string; method?: string; params?: unknown }

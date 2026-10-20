@@ -9,7 +9,7 @@ namespace AllAgent.NET.CodeGraph;
 /// stay hidden until the model loads it.</summary>
 public partial class CodeGraphTools(CodeGraphService service) : IAgentToolPreflight
 {
-    [AgentTool("codegraph_explore"), Description("Answer architecture, call-flow, where-is-X or impact questions from the pre-built CodeGraph index in one read-only call. Returns verbatim source, call paths and blast radius. Load the code-graph skill first.")]
+    [AgentTool("codegraph_explore"), Description("Answer architecture, call-flow, where-is-X or impact questions from the built-in CodeGraph index in one read-only call. The index is built and refreshed in-process on demand. Returns verbatim source, call paths and blast radius. Load the code-graph skill first.")]
     public async Task<ToolResult> ExploreAsync(
         [Description("Natural-language question or a set of symbol/file names; not a shell command")] string query,
         CancellationToken ct = default)
@@ -28,26 +28,28 @@ public partial class CodeGraphTools(CodeGraphService service) : IAgentToolPrefli
             Fields:
             [
                 new("工作区", Path.GetFileName(workspace)),
-                new("同步", result.SyncedAt is { } synced ? synced.ToLocalTime().ToString("HH:mm:ss") : "auto"),
+                new("索引", result.SyncedAt is { } synced ? synced.ToLocalTime().ToString("HH:mm:ss") : "自动"),
                 new("截断", truncated ? "是" : "否", truncated ? "error" : "muted"),
             ]);
         return ToolResult.Success(new { workspace, output, truncated, syncedAt = result.SyncedAt }, truncated) with { Card = card };
     }
 
-    [AgentTool("codegraph_status"), Description("Report whether the current workspace has a CodeGraph index and show its statistics. Read-only. Load the code-graph skill first.")]
+    [AgentTool("codegraph_status"), Description("Report whether the current workspace has a CodeGraph index and show its statistics. The index is built in-process; no external installation is involved. Read-only. Load the code-graph skill first.")]
     public async Task<ToolResult> StatusAsync(CancellationToken ct = default)
     {
         var status = await service.StatusAsync(Workspace(), ct);
         var card = new AgentToolCard(
             Badge: "CODEGRAPH",
             Title: "索引状态",
-            Summary: !status.Installed ? "未安装" : status.Indexed ? "已构建" : "未构建",
+            Summary: status.Indexed ? "已构建" : "未构建",
             Body: "text",
             Text: ToolResult.Clip(status.Detail, 4_000),
             Fields:
             [
-                new("CLI", status.Version ?? "未安装", status.Installed ? "ok" : "error"),
                 new("索引", status.Indexed ? "已构建" : "未构建", status.Indexed ? "ok" : "muted"),
+                new("文件", status.Files.ToString(), "muted"),
+                new("符号", status.Symbols.ToString(), "muted"),
+                new("引用", status.References.ToString(), "muted"),
                 new("工作区", Path.GetFileName(status.Workspace)),
             ]);
         return ToolResult.Success(status) with { Card = card };

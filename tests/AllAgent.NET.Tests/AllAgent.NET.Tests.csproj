@@ -31,6 +31,7 @@
     <PackageReference Include="Spectre.Console.Testing" Version="0.57.2" />
     <ProjectReference Include="../../src/AllAgent.NET.ToolGenerator/AllAgent.NET.ToolGenerator.csproj" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
+    <PackageReference Include="TreeSitter.DotNet" Version="1.3.0" />
   </ItemGroup>
   <Target Name="CopyProcessProbe" AfterTargets="Build">
     <ItemGroup><ProbeFiles Include="../AllAgent.NET.ProcessProbe/bin/$(Configuration)/net10.0/*" /></ItemGroup>
@@ -43,11 +44,14 @@
   <Target Name="CopyCodeGraphPlugin" AfterTargets="Build">
     <ItemGroup>
       <CodeGraphPluginFiles Include="../../plugins/AllAgent.NET.CodeGraph/bin/$(Configuration)/net10.0/AllAgent.NET.CodeGraph.dll" />
+      <CodeGraphPluginFiles Include="../../plugins/AllAgent.NET.CodeGraph/bin/$(Configuration)/net10.0/TreeSitter.dll" />
       <CodeGraphPluginFiles Include="../../plugins/AllAgent.NET.CodeGraph/allagent-plugin.json" />
       <CodeGraphPluginWebFiles Include="../../plugins/AllAgent.NET.CodeGraph/web/**/*" />
+      <CodeGraphNativeFiles Include="../../plugins/AllAgent.NET.CodeGraph/bin/$(Configuration)/net10.0/native/win-x64/*.dll" />
     </ItemGroup>
     <Copy SourceFiles="@(CodeGraphPluginFiles)" DestinationFolder="$(OutDir)codegraph-plugin" SkipUnchangedFiles="true" />
     <Copy SourceFiles="@(CodeGraphPluginWebFiles)" DestinationFiles="@(CodeGraphPluginWebFiles->'$(OutDir)codegraph-plugin/web/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(CodeGraphNativeFiles)" DestinationFolder="$(OutDir)codegraph-plugin/native/win-x64" SkipUnchangedFiles="true" />
   </Target>
   <!-- Tests launch the referenced terminal as a separate process in this output
        directory. Its dependencies use this project's shared-framework resolution. -->

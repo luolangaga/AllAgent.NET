@@ -40,6 +40,33 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+## QRCoder
+
+The browser workspace renders LAN pairing QR codes with QRCoder 1.6.0.
+Source: https://github.com/codebude/QRCoder
+
+The MIT License (MIT)
+
+Copyright (c) 2013-2024 Raffael Herrmann
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
 ## FlaUI
 
 Windows Computer Use distributes FlaUI.Core and FlaUI.UIA3 5.0.0.
@@ -189,3 +216,29 @@ The bundled AllAgent.NET.PowerShell worker embeds Microsoft.PowerShell.SDK 7.6.7
 ## Everything and ES (voidtools)
 
 The Windows application bundles unmodified Everything 1.4.1.1032 portable binaries and ES 1.1.0.38 for x86, x64 and ARM64 from https://www.voidtools.com/downloads/. Everything includes PCRE; its complete copyright/license notices are distributed in `everything/Everything-LICENSE.txt`. ES is MIT licensed; its notice is distributed in `everything/LICENSE.txt`. These files accompany build, publish and NuGet content outputs. Upstream: https://github.com/voidtools/ES.
+
+## TreeSitter.DotNet and tree-sitter grammars
+
+The CodeGraph plugin bundles the managed TreeSitter.DotNet 1.3.0 bindings and the Windows x64 native binaries for tree-sitter plus the C#, TypeScript, TSX, JavaScript and Python grammars. These files are distributed under `allagent/native/win-x64/` in the plugin package and next to the built-in plugin. Upstream: https://github.com/mariusgreuel/tree-sitter-dotnet-bindings, https://github.com/tree-sitter and the individual grammar repositories (tree-sitter-c-sharp, tree-sitter-typescript, tree-sitter-javascript, tree-sitter-python), all MIT licensed.
+
+MIT License
+
+Copyright (c) 2025 Marius Greuel
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

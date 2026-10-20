@@ -10,25 +10,11 @@
         "title": "CodeGraph",
         "fields": [
           {
-            "key": "path",
-            "label": "codegraph 可执行文件路径",
-            "type": "text",
-            "placeholder": "留空自动检测",
-            "description": "支持绝对路径；也可用环境变量 ALLAGENT_CODEGRAPH_PATH。"
-          },
-          {
             "key": "autosync",
-            "label": "查询前自动同步索引",
+            "label": "查询前自动增量索引",
             "type": "boolean",
             "default": "true",
-            "description": "每次 explore 前增量同步，最多每 2 秒一次。"
-          },
-          {
-            "key": "telemetry",
-            "label": "允许 CodeGraph 匿名遥测",
-            "type": "boolean",
-            "default": "false",
-            "description": "默认关闭；只包含工具使用与语言统计，不包含代码、路径或查询。"
+            "description": "每次 explore 前检查文件变更并增量更新，最多每 2 秒一次。"
           }
         ],
         "entry": "web/settings.html"

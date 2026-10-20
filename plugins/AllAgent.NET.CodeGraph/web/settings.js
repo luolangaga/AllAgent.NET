@@ -4,7 +4,7 @@ const state = { workspace: sdk.context.workspace || '', operation: null, busy: f
 const labels = { running: '执行中', done: '完成', error: '失败', cancelled: '已取消' };
 
 function bytes(value) {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return '未知大小';
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '';
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
   return `${(value / 1024 / 1024).toFixed(1)} MB`;
@@ -25,36 +25,38 @@ function show(text, error) {
 }
 
 function setActions(enabled) {
-  for (const id of ['install', 'init', 'sync', 'rebuild']) $(id).disabled = !enabled;
+  for (const id of ['init', 'rebuild']) $(id).disabled = !enabled;
 }
 
 async function refresh() {
   if (!state.workspace) {
-    $('cli').textContent = '没有可用的工作区';
-    $('cli').dataset.state = 'muted';
-    $('index').textContent = '索引：未选择工作区';
+    $('index').textContent = '没有可用的工作区';
     $('index').dataset.state = 'muted';
+    $('stats').textContent = '';
     setActions(false);
     return;
   }
   try {
     const status = await sdk.invoke('status', { workspace: state.workspace });
-    $('cli').textContent = status.installed ? `CodeGraph ${status.version || ''}` : 'CodeGraph 未安装';
-    $('cli').dataset.state = status.installed ? 'ok' : 'error';
-    $('path').textContent = status.path || '';
-    $('index').textContent = status.indexed
-      ? `索引已构建 · ${bytes(status.indexBytes)}${date(status.indexUpdatedAt) ? ' · ' + date(status.indexUpdatedAt) : ''}`
-      : '索引未构建';
+    $('index').textContent = status.indexed ? '索引已构建' : '索引未构建';
     $('index').dataset.state = status.indexed ? 'ok' : 'muted';
-    $('install').disabled = state.busy || status.installed;
-    $('init').disabled = state.busy || !status.installed || status.indexed;
-    $('sync').disabled = state.busy || !status.installed || !status.indexed;
-    $('rebuild').disabled = state.busy || !status.installed || !status.indexed;
-    if (status.detail) show(status.detail);
-    if (status.error) show(status.error, true);
+    $('path').textContent = status.indexPath || '';
+    $('path').title = status.indexPath || '';
+    const parts = [];
+    if (status.indexed) {
+      parts.push(`${status.files} 文件`, `${status.symbols} 符号`, `${status.references} 引用`);
+      const size = bytes(status.indexBytes);
+      if (size) parts.push(size);
+      const updated = date(status.indexUpdatedAt);
+      if (updated) parts.push(updated);
+    }
+    $('stats').textContent = parts.join(' · ');
+    setActions(!state.busy);
+    if (status.detail) show(status.detail, Boolean(status.error));
+    else if (status.error) show(status.error, true);
   } catch (error) {
-    $('cli').textContent = error?.message || String(error);
-    $('cli').dataset.state = 'error';
+    $('index').textContent = error?.message || String(error);
+    $('index').dataset.state = 'error';
     setActions(false);
   }
   sdk.resize();
@@ -88,9 +90,7 @@ async function begin(method, params) {
   }
 }
 
-$('install').addEventListener('click', () => void begin('install'));
 $('init').addEventListener('click', () => void begin('index', { workspace: state.workspace, mode: 'init' }));
-$('sync').addEventListener('click', () => void begin('index', { workspace: state.workspace, mode: 'sync' }));
 $('rebuild').addEventListener('click', () => void begin('index', { workspace: state.workspace, mode: 'rebuild' }));
 $('cancel').addEventListener('click', () => {
   if (state.operation) void sdk.invoke('cancel', { id: state.operation.id }).catch(error => show(error?.message || String(error), true));

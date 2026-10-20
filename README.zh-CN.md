@@ -264,7 +264,11 @@ allagent chat --workspace C:\Projects\MyProject
 allagent -guimode
 allagent gui --gui-url http://127.0.0.1:5173/
 allagent web-ui
+allagent web-ui --lan --port 8765 --password 你的密码
+allagent web-ui --no-lan
 ```
+
+需要手机或平板操作时，使用 `--lan`（聊天内为 `/web-ui --lan`）：宿主监听 `0.0.0.0`，在终端显示二维码，其他设备扫码即可进入。本机始终免密；其他设备默认通过二维码令牌进入，设置访问密码后也可以输入密码登录（外部页面始终显示密码框）。二维码令牌随服务重启失效。用 `--no-lan`（或 `--local`）可关闭局域网监听并记住该选择，避免下次启动再次对外监听；Web 设置页的「局域网访问与二维码」提供同样的开关、端口、密码和二维码。首次监听时 Windows 防火墙可能询问，请允许「专用网络」。
 
 窗口是随包分发的 WPF + WebView2 外壳（`AllAgent.NET.Gui.exe`），同一数据目录只允许一个窗口。工作台页面包括对话、模型与 API、技能、工具、PowerShell、插件、MCP 服务、任务与设置；「PowerShell」页与终端的 `/powershell` 面板共享同一份模块目录。
 

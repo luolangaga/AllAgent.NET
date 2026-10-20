@@ -54,7 +54,7 @@ internal static class PowerShellStorePanel
     {
         var query = (await ManagementUi.Text("搜索 PSGallery 模块")).Trim();
         if (query.Length == 0) return;
-        var json = await ManagementUi.Busy("正在搜索 PowerShell Gallery", token => store.ExecuteAsync("search", "*" + query + "*", ct: token), ct);
+        var json = await ManagementUi.Busy("正在搜索 PowerShell Gallery（通常 10–60 秒）", token => store.ExecuteAsync("search", "*" + query + "*", ct: token), ct);
         using var results = JsonDocument.Parse(json);
         var items = results.RootElement.EnumerateArray().Select(m => m.Clone()).ToArray();
         while (true)

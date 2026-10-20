@@ -235,12 +235,16 @@
     <Copy SourceFiles="@(WorkBuddyPluginFiles)" DestinationFolder="$(OutDir)builtin-plugins/AllAgent.NET.WorkBuddy/" SkipUnchangedFiles="true" />
     <ItemGroup>
       <CodeGraphPluginFiles Include="../../plugins/AllAgent.NET.CodeGraph/bin/$(Configuration)/net10.0/AllAgent.NET.CodeGraph.dll" Condition="Exists('../../plugins/AllAgent.NET.CodeGraph/bin/$(Configuration)/net10.0/AllAgent.NET.CodeGraph.dll')" />
+      <CodeGraphPluginFiles Include="../../plugins/AllAgent.NET.CodeGraph/bin/$(Configuration)/net10.0/TreeSitter.dll" Condition="Exists('../../plugins/AllAgent.NET.CodeGraph/bin/$(Configuration)/net10.0/TreeSitter.dll')" />
       <CodeGraphPluginFiles Include="../../plugins/AllAgent.NET.CodeGraph/allagent-plugin.json" />
       <CodeGraphPluginWebFiles Include="../../plugins/AllAgent.NET.CodeGraph/web/**/*" />
+      <CodeGraphNativeFiles Include="../../plugins/AllAgent.NET.CodeGraph/bin/$(Configuration)/net10.0/native/win-x64/*.dll" Condition="Exists('../../plugins/AllAgent.NET.CodeGraph/bin/$(Configuration)/net10.0/native/win-x64')" />
     </ItemGroup>
     <Error Condition="'$(CopyGuiShell)' == 'true' and !Exists('../../plugins/AllAgent.NET.CodeGraph/bin/$(Configuration)/net10.0/AllAgent.NET.CodeGraph.dll')" Text="Built-in CodeGraph plugin output is missing; build plugins/AllAgent.NET.CodeGraph before copying." />
+    <Error Condition="'$(CopyGuiShell)' == 'true' and !Exists('../../plugins/AllAgent.NET.CodeGraph/bin/$(Configuration)/net10.0/native/win-x64/tree-sitter-c-sharp.dll')" Text="Built-in CodeGraph native grammars are missing; build plugins/AllAgent.NET.CodeGraph before copying." />
     <Copy SourceFiles="@(CodeGraphPluginFiles)" DestinationFolder="$(OutDir)builtin-plugins/AllAgent.NET.CodeGraph/" SkipUnchangedFiles="true" />
     <Copy SourceFiles="@(CodeGraphPluginWebFiles)" DestinationFiles="@(CodeGraphPluginWebFiles->'$(OutDir)builtin-plugins/AllAgent.NET.CodeGraph/web/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(CodeGraphNativeFiles)" DestinationFolder="$(OutDir)builtin-plugins/AllAgent.NET.CodeGraph/native/win-x64/" SkipUnchangedFiles="true" />
   </Target>
   <Target Name="IncludeBuiltinPluginsInToolPackage" AfterTargets="ComputeFilesToPublish" Condition="'$(PackAsTool)' == 'true'">
     <ItemGroup>

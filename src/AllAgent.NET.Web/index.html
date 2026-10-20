@@ -7,6 +7,45 @@
     <meta name="description" content="AllAgent.NET local agent workspace.">
     <title>AllAgent.NET</title>
     <script>
+      // A LAN page is served over plain HTTP, which is not a secure context: crypto.randomUUID
+      // is missing there even in current browsers. Request ids only need to be unique.
+      try {
+        if (!window.crypto) window.crypto = {}
+        if (typeof window.crypto.randomUUID !== 'function') {
+          Object.defineProperty(window.crypto, 'randomUUID', {
+            configurable: true,
+            value: function () {
+              var bytes = new Uint8Array(16)
+              if (typeof window.crypto.getRandomValues === 'function') window.crypto.getRandomValues(bytes)
+              else for (var i = 0; i < 16; i++) bytes[i] = Math.floor(Math.random() * 256)
+              bytes[6] = (bytes[6] & 15) | 64
+              bytes[8] = (bytes[8] & 63) | 128
+              var hex = ''
+              for (var j = 0; j < 16; j++) hex += ('0' + bytes[j].toString(16)).slice(-2)
+              return hex.slice(0, 8) + '-' + hex.slice(8, 12) + '-' + hex.slice(12, 16) + '-' + hex.slice(16, 20) + '-' + hex.slice(20)
+            }
+          })
+        }
+      } catch (_) {}
+      try {
+        if (typeof Array.prototype.at !== 'function') {
+          Object.defineProperty(Array.prototype, 'at', {
+            configurable: true,
+            writable: true,
+            value: function (index) {
+              var length = this.length >>> 0
+              var relative = Math.trunc(index) || 0
+              if (relative < 0) relative += length
+              return relative < 0 || relative >= length ? undefined : this[relative]
+            }
+          })
+        }
+      } catch (_) {}
+      try {
+        if (typeof window.structuredClone !== 'function') {
+          window.structuredClone = function (value) { return JSON.parse(JSON.stringify(value)) }
+        }
+      } catch (_) {}
       // Apply the system theme and cached language before first paint so nothing flashes.
       try {
         if (window.matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.classList.add('dark')

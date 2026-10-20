@@ -23,8 +23,19 @@ export default function PowerShell() {
   const [details, setDetails] = useState<PowerShellModuleInfo | null>(null)
   const [manualName, setManualName] = useState('')
   const [manualVersion, setManualVersion] = useState('')
+  const [searchSeconds, setSearchSeconds] = useState(0)
+  const searching = store.searching
 
   useEffect(() => { void store.load() }, [])
+
+  // PowerShell Gallery can take tens of seconds. The request has no progress events,
+  // so count the wait locally instead of leaving the page looking frozen.
+  useEffect(() => {
+    if (!searching) { setSearchSeconds(0); return }
+    const started = Date.now()
+    const timer = window.setInterval(() => setSearchSeconds(Math.floor((Date.now() - started) / 1000)), 1000)
+    return () => window.clearInterval(timer)
+  }, [searching])
 
   async function run(action: () => Promise<unknown>, success?: string) {
     try {
@@ -134,6 +145,9 @@ export default function PowerShell() {
             variant="outline"
           >搜索</Button>
         </div>
+        {searching ? <p className="list-description plugin-empty">
+          正在查询 PowerShell Gallery，已等待 {searchSeconds} 秒。Gallery 响应可能较慢，通常需要 10–60 秒；超过 5 分钟会返回超时提示。
+        </p> : null}
         {store.packages.length ? <div className="divide-list">{store.packages.map(pkg => <div className="list-row" key={`${pkg.name}@${pkg.version}`}>
           <div className="list-content">
             <div className="resource-title">
