@@ -1,12 +1,17 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
-  ChevronRight, ClipboardCopy, ExternalLink, Eye, EyeOff, FileText, FolderTree, MessageSquarePlus, RefreshCw,
-  Search, SquareTerminal,
+  ChevronsDownUp, ChevronsUpDown, ClipboardCopy, Copy, ExternalLink, Eye, EyeOff, FileText, FolderOpen,
+  FolderTree, GitBranch, MessageSquarePlus, RefreshCw, Search, SquareTerminal,
 } from 'lucide-react'
 import { Alert } from '@/components/ui/alert'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/b-button'
 import { CodeBlock } from '@/components/ui/code-block'
+import {
+  ContextMenu, ContextMenuCheckboxItem, ContextMenuContent, ContextMenuGroup, ContextMenuItem,
+  ContextMenuSeparator, ContextMenuShortcut, ContextMenuSub, ContextMenuSubContent,
+  ContextMenuSubTrigger, ContextMenuTrigger,
+} from '@/components/ui/b-context-menu'
+import { FileTreeFromItems, type FileTreeNodeData } from '@/components/ui/file-tree'
 import { Input } from '@/components/ui/input'
 import { Spinner } from '@/components/ui/spinner'
 import { Tooltip } from '@/components/ui/b-tooltip'
@@ -18,12 +23,14 @@ import { useStore } from '@/lib/store'
 import { invoke } from '@/bridge'
 import { formatBytes } from '@/lib/attachments'
 import { formatDateTime } from '@/lib/format'
+import { useT } from '@/i18n'
 import { usePanelsStore } from '@/stores/panels'
 import { useCommandsStore } from '@/stores/commands'
 import { useNoticesStore } from '@/stores/ui'
 import { useTerminalStore } from '@/stores/terminal'
+import { useWorkspaceStore } from '@/stores/workspace'
 import { isIgnoredName, useWorkspaceBrowserStore } from '@/stores/workspaceBrowser'
-import type { WorkspaceFileContent, WorkspaceTreeEntry } from '@/types'
+import type { WorkspaceFileContent, WorkspaceFileEntry, WorkspaceTreeEntry } from '@/types'
 
 const CODE_EXTENSIONS: Record<string, string> = {
   ts: 'typescript', tsx: 'tsx', js: 'javascript', jsx: 'jsx', mjs: 'javascript', cjs: 'javascript',
@@ -44,53 +51,121 @@ function extensionOf(path: string): string {
   return dot > 0 ? name.slice(dot + 1).toLowerCase() : ''
 }
 
+function parentOf(path: string): string {
+  const index = path.lastIndexOf('/')
+  return index < 0 ? '.' : path.slice(0, index) || '.'
+}
+
+function absolutePath(root: string, path: string): string {
+  if (!root) return path
+  const separator = root.includes('\\') ? '\\' : '/'
+  const cleanRoot = root.replace(/[\\/]+$/, '')
+  const cleanPath = path.replace(/^\.?[\\/]/, '').replace(/\//g, separator)
+  return `${cleanRoot}${separator}${cleanPath}`
+}
+
+function buildTreeNodes(entries: WorkspaceTreeEntry[] | undefined, store: ReturnType<typeof useWorkspaceBrowserStore>): FileTreeNodeData[] {
+  if (!entries) return []
+  return entries
+    .filter(entry => !(store.hideIgnored && isIgnoredName(entry.name)))
+    .map(entry => {
+      const loaded = entry.directory && !entry.link && store.expanded.includes(entry.path)
+        ? store.trees[entry.path]
+        : undefined
+      return {
+        id: entry.path,
+        label: entry.name,
+        icon: <FileTypeIcon directory={entry.directory} name={entry.name} size={14} />,
+        openIcon: entry.directory ? <FileTypeIcon directory name={entry.name} open size={14} /> : undefined,
+        hasChildren: entry.directory && !entry.link,
+        loading: store.loadingDirs.includes(entry.path),
+        children: loaded ? buildTreeNodes(loaded, store) : undefined,
+      }
+    })
+}
+
 export function WorkspacePanel() {
+  const tr = useT()
   const panels = useStore(usePanelsStore)
   const store = useStore(useWorkspaceBrowserStore)
+  const [contextPath, setContextPath] = useState<string | null>(null)
   const open = panels.open.files
 
   useEffect(() => {
     if (open && !store.loaded) void store.loadTree('.')
   }, [open, store.loaded])
 
+  const entries = useMemo(() => {
+    const map = new Map<string, WorkspaceTreeEntry>()
+    for (const list of Object.values(store.trees)) {
+      if (!Array.isArray(list)) continue
+      for (const entry of list) map.set(entry.path, entry)
+    }
+    for (const entry of store.matches) {
+      if (map.has(entry.path)) continue
+      map.set(entry.path, {
+        name: entry.name,
+        path: entry.path,
+        directory: entry.isDirectory,
+        size: 0,
+        modified: '',
+        link: false,
+        hidden: false,
+      })
+    }
+    return map
+  }, [store.trees, store.matches])
+
   if (!open) return null
+  const contextEntry = contextPath ? entries.get(contextPath) ?? null : null
+
   return <FloatingPanel
     defaultRect={{ x: Math.max(24, window.innerWidth - 880), y: 64, width: 860, height: 560 }}
-    headerExtra={<Tooltip content="重新读取目录与文件">
-      <Button iconLabel="刷新工作区文件" onClick={() => void store.refresh()} size="icon-xs" variant="ghost"><RefreshCw size={12} /></Button>
+    headerExtra={<Tooltip content={tr('重新读取目录与文件', 'Reload folders and files')}>
+      <Button iconLabel={tr('刷新工作区文件', 'Refresh workspace files')} onClick={() => void store.refresh()} size="icon-xs" variant="ghost"><RefreshCw size={12} /></Button>
     </Tooltip>}
     icon={<FolderTree size={13} />}
     id="files"
     minHeight={320}
     minWidth={560}
     onClose={() => panels.closePanel('files')}
-    title="工作区文件"
+    title={tr('工作区文件', 'Workspace files')}
   >
     <div className="wsb-body">
       <div className="wsb-side">
         <div className="wsb-tools">
           <Input
-            aria-label="搜索工作区文件"
+            aria-label={tr('搜索工作区文件', 'Search workspace files')}
             onValueChange={value => void store.search(value)}
-            placeholder="搜索文件…"
+            placeholder={tr('搜索文件…', 'Search files…')}
             size="sm"
             startAdornment={<Search size={13} />}
             value={store.query}
           />
-          <Tooltip content={store.hideIgnored ? '显示 node_modules、.git 等' : '隐藏常见忽略目录'}>
+          <Tooltip content={store.hideIgnored ? tr('显示 node_modules、.git 等', 'Show node_modules, .git and similar') : tr('隐藏常见忽略目录', 'Hide common ignored folders')}>
             <Button
-              iconLabel="切换忽略目录显示"
+              iconLabel={tr('切换忽略目录显示', 'Toggle ignored folders')}
               onClick={() => { store.hideIgnored = !store.hideIgnored }}
               size="icon-sm"
               variant="ghost"
             >{store.hideIgnored ? <EyeOff size={13} /> : <Eye size={13} />}</Button>
           </Tooltip>
         </div>
-        <div className="wsb-tree">
-          {store.query.trim()
-            ? <SearchResults />
-            : <TreeLevel depth={0} path="." />}
-        </div>
+        <ContextMenu onOpenChange={open => { if (!open) setContextPath(null) }}>
+          <ContextMenuTrigger asChild>
+            <div
+              className="wsb-tree"
+              onContextMenu={event => {
+                if (!(event.target as HTMLElement).closest('[role="treeitem"]')) setContextPath(null)
+              }}
+            >
+              {store.query.trim()
+                ? <SearchResults onContextMenu={entry => setContextPath(entry.path)} />
+                : <WorkspaceTree entries={entries} onContextMenu={setContextPath} />}
+            </div>
+          </ContextMenuTrigger>
+          <WorkspaceContextMenu entry={contextEntry} onDone={() => setContextPath(null)} />
+        </ContextMenu>
       </div>
       <div className="wsb-preview">
         <Preview />
@@ -99,15 +174,179 @@ export function WorkspacePanel() {
   </FloatingPanel>
 }
 
-function SearchResults() {
+function WorkspaceTree({ entries, onContextMenu }: {
+  entries: Map<string, WorkspaceTreeEntry>
+  onContextMenu: (path: string) => void
+}) {
+  const tr = useT()
   const store = useStore(useWorkspaceBrowserStore)
-  if (store.searching && !store.matches.length) return <p className="wsb-note"><Spinner size="sm" /> 正在搜索…</p>
-  if (!store.matches.length) return <p className="wsb-note">没有匹配的文件。</p>
+  const notices = useStore(useNoticesStore)
+  const root = store.trees['.']
+  const nodes = useMemo(() => buildTreeNodes(root, store), [root, store.expanded, store.hideIgnored, store.loadingDirs, store.trees])
+
+  if (!root) {
+    return store.errors['.']
+      ? <p className="wsb-note">{store.errors['.']}</p>
+      : <p className="wsb-note"><Spinner size="sm" />{tr('正在读取…', 'Loading…')}</p>
+  }
+
+  return <FileTreeFromItems
+    className="wsb-filetree"
+    expandedIds={store.expanded.filter(path => path !== '.')}
+    indentSize={14}
+    items={nodes}
+    maxHeight="100%"
+    onLoadChildren={path => void store.loadTree(path)}
+    onNodeClick={path => {
+      const entry = entries.get(path)
+      if (!entry) return
+      if (entry.link) {
+        void invoke<boolean>('shell.openPath', { path }).catch(notices.report)
+        return
+      }
+      if (!entry.directory) void store.openFile(path)
+    }}
+    onNodeContextMenu={path => onContextMenu(path)}
+    onNodeExpand={(path, expanded) => store.setDirectoryExpanded(path, expanded)}
+    onSelectedIdsChange={() => { }}
+    selectedIds={store.file ? [store.file.path] : []}
+    truncate
+  />
+}
+
+function WorkspaceContextMenu({ entry, onDone }: { entry: WorkspaceTreeEntry | null; onDone: () => void }) {
+  const tr = useT()
+  const store = useStore(useWorkspaceBrowserStore)
+  const panels = useStore(usePanelsStore)
+  const terminal = useStore(useTerminalStore)
+  const notices = useStore(useNoticesStore)
+  const commands = useStore(useCommandsStore)
+  const workspace = useStore(useWorkspaceStore)
+  const path = entry?.path ?? ''
+  const directory = entry?.directory ?? false
+  const parent = path ? parentOf(path) : '.'
+  const absolute = path ? absolutePath(workspace.workspace, path) : workspace.workspace
+  const expanded = path ? store.expanded.includes(path) : false
+
+  function copy(value: string, label: string) {
+    void navigator.clipboard.writeText(value)
+      .then(() => notices.notify(tr('已复制', 'Copied'), label, 'success'))
+      .catch(notices.report)
+  }
+
+  async function openInTerminal() {
+    try {
+      await terminal.create({ cwd: directory ? path : parent })
+      panels.openPanel('terminal')
+    } catch (error) {
+      notices.report(error)
+    }
+  }
+
+  function openExternal() {
+    if (path) void invoke<boolean>('shell.openPath', { path }).catch(notices.report)
+  }
+
+  function reveal() {
+    if (path) void invoke<boolean>('shell.openPath', { path: directory ? path : parent }).catch(notices.report)
+  }
+
+  function quote() {
+    commands.queueDraft(`@${path} `)
+    notices.notify(tr('已放入输入框', 'Added to composer'), path, 'success')
+  }
+
+  function refreshDirectory() {
+    if (!path) { void store.refresh(); return }
+    if (directory) void store.loadTree(path)
+    else void store.loadTree(parent)
+  }
+
+  if (!entry) {
+    return <ContextMenuContent className="w-60" collisionPadding={8}>
+      <div className="max-w-[220px] truncate px-3 py-1 font-medium text-muted-foreground text-xs">{tr('工作区', 'Workspace')}</div>
+      <ContextMenuGroup>
+        <ContextMenuItem onClick={() => void store.refresh()}><RefreshCw size={15} />{tr('重新加载文件树', 'Reload file tree')}</ContextMenuItem>
+        <ContextMenuItem onClick={() => { store.expandLoaded(); onDone() }}><ChevronsUpDown size={15} />{tr('展开已加载目录', 'Expand loaded folders')}</ContextMenuItem>
+        <ContextMenuItem onClick={() => { store.collapseAll(); onDone() }}><ChevronsDownUp size={15} />{tr('折叠全部目录', 'Collapse all folders')}</ContextMenuItem>
+        <ContextMenuCheckboxItem
+          checked={store.hideIgnored}
+          onCheckedChange={value => { store.hideIgnored = value }}
+        >{tr('隐藏忽略目录', 'Hide ignored folders')}</ContextMenuCheckboxItem>
+      </ContextMenuGroup>
+      <ContextMenuSeparator />
+      <ContextMenuItem onClick={() => void store.search('')}><Search size={15} />{tr('清除搜索', 'Clear search')}</ContextMenuItem>
+    </ContextMenuContent>
+  }
+
+  return <ContextMenuContent className="w-64" collisionPadding={8}>
+    <div className="max-w-[220px] truncate px-3 py-1 font-medium text-muted-foreground text-xs">{entry.name}</div>
+    {entry.path !== entry.name ? <div className="wsb-context-path">{entry.path}{directory ? tr(' · 目录', ' · folder') : ''}</div> : null}
+    <ContextMenuSeparator />
+    <ContextMenuGroup>
+      {directory
+        ? <ContextMenuItem onClick={() => { store.setDirectoryExpanded(path, !expanded); onDone() }}>
+          <FolderOpen size={15} />{expanded ? tr('折叠目录', 'Collapse folder') : tr('展开目录', 'Expand folder')}
+        </ContextMenuItem>
+        : <ContextMenuItem onClick={() => void store.openFile(path)}>
+          <FileText size={15} />{tr('预览文件', 'Preview file')}<ContextMenuShortcut>↵</ContextMenuShortcut>
+        </ContextMenuItem>}
+      <ContextMenuSub>
+        <ContextMenuSubTrigger><ExternalLink size={15} />{tr('打开方式', 'Open with')}</ContextMenuSubTrigger>
+        <ContextMenuSubContent className="w-56">
+          <ContextMenuItem onClick={openExternal}>{tr('系统默认程序', 'Default application')}</ContextMenuItem>
+          <ContextMenuItem onClick={reveal}>{directory ? tr('在资源管理器中打开', 'Open in Explorer') : tr('打开所在文件夹', 'Open containing folder')}</ContextMenuItem>
+          <ContextMenuItem onClick={() => void openInTerminal()}><SquareTerminal size={15} />{tr('在此目录打开终端', 'Open terminal here')}</ContextMenuItem>
+          <ContextMenuItem onClick={() => panels.openPanel('git')}><GitBranch size={15} />{tr('在 Git 面板中查看', 'Open Git panel')}<ContextMenuShortcut>Ctrl+Shift+G</ContextMenuShortcut></ContextMenuItem>
+        </ContextMenuSubContent>
+      </ContextMenuSub>
+    </ContextMenuGroup>
+    <ContextMenuSeparator />
+    <ContextMenuSub>
+      <ContextMenuSubTrigger><Copy size={15} />{tr('复制', 'Copy')}</ContextMenuSubTrigger>
+      <ContextMenuSubContent className="w-56">
+        <ContextMenuItem onClick={() => copy(path, tr('相对路径', 'relative path'))}>{tr('相对路径', 'Relative path')}</ContextMenuItem>
+        <ContextMenuItem onClick={() => copy(absolute, tr('绝对路径', 'absolute path'))}>{tr('绝对路径', 'Absolute path')}</ContextMenuItem>
+        <ContextMenuItem onClick={() => copy(entry.name, tr('文件名', 'file name'))}>{tr('文件名', 'File name')}</ContextMenuItem>
+        <ContextMenuItem onClick={() => copy(`[${entry.name}](${path})`, tr('Markdown 链接', 'Markdown link'))}>{tr('Markdown 链接', 'Markdown link')}</ContextMenuItem>
+        <ContextMenuItem onClick={() => copy(`@${path}`, tr('@ 引用', '@ reference'))}>{tr('@ 引用', '@ reference')}</ContextMenuItem>
+      </ContextMenuSubContent>
+    </ContextMenuSub>
+    <ContextMenuItem onClick={quote}><MessageSquarePlus size={15} />{tr('引用到对话', 'Quote in chat')}</ContextMenuItem>
+    <ContextMenuItem onClick={() => void store.search(entry.name)}><Search size={15} />{tr('查找同名文件', 'Find files with this name')}</ContextMenuItem>
+    <ContextMenuSeparator />
+    <ContextMenuGroup>
+      <ContextMenuItem onClick={refreshDirectory}><RefreshCw size={15} />{tr('刷新此目录', 'Refresh this folder')}</ContextMenuItem>
+      <ContextMenuItem onClick={() => { store.expandLoaded(); onDone() }}><ChevronsUpDown size={15} />{tr('展开已加载目录', 'Expand loaded folders')}</ContextMenuItem>
+      <ContextMenuItem onClick={() => { store.collapseAll(); onDone() }}><ChevronsDownUp size={15} />{tr('折叠全部目录', 'Collapse all folders')}</ContextMenuItem>
+      <ContextMenuCheckboxItem
+        checked={store.hideIgnored}
+        onCheckedChange={value => { store.hideIgnored = value }}
+      >{tr('隐藏忽略目录', 'Hide ignored folders')}</ContextMenuCheckboxItem>
+    </ContextMenuGroup>
+    <ContextMenuSeparator />
+    <ContextMenuItem onClick={() => panels.openPanel('git')}><GitBranch size={15} />{tr('打开 Git 面板', 'Open Git panel')}<ContextMenuShortcut>Ctrl+Shift+G</ContextMenuShortcut></ContextMenuItem>
+  </ContextMenuContent>
+}
+
+function SearchResults({ onContextMenu }: { onContextMenu: (entry: WorkspaceFileEntry) => void }) {
+  const tr = useT()
+  const store = useStore(useWorkspaceBrowserStore)
+  if (store.searching && !store.matches.length) return <p className="wsb-note"><Spinner size="sm" />{tr('正在搜索…', 'Searching…')}</p>
+  if (!store.matches.length) return <p className="wsb-note">{tr('没有匹配的文件。', 'No matching files.')}</p>
   return <div className="wsb-results">
     {store.matches.map(entry => <button
       className="tree-row tree-row-flat"
       key={entry.path}
-      onClick={() => void (entry.isDirectory ? store.loadTree(entry.path) : store.openFile(entry.path))}
+      onClick={() => {
+        if (entry.isDirectory) {
+          void store.search('')
+          store.setDirectoryExpanded(entry.path, true)
+        } else {
+          void store.openFile(entry.path)
+        }
+      }}
+      onContextMenu={() => onContextMenu(entry)}
       type="button"
     >
       <FileTypeIcon directory={entry.isDirectory} name={entry.name} size={14} />
@@ -115,79 +354,6 @@ function SearchResults() {
       <span className="tree-path mono">{entry.path}</span>
     </button>)}
   </div>
-}
-
-function TreeLevel({ path, depth }: { path: string; depth: number }) {
-  const store = useStore(useWorkspaceBrowserStore)
-  const entries = store.trees[path]
-  if (!entries) {
-    return store.errors[path]
-      ? <p className="wsb-note">{store.errors[path]}</p>
-      : <p className="wsb-note"><Spinner size="sm" /> 正在读取…</p>
-  }
-  const visible = entries.filter(entry => !(store.hideIgnored && isIgnoredName(entry.name)))
-  if (!visible.length && depth === 0) return <p className="wsb-note">这个目录是空的。</p>
-  return <>
-    {visible.map(entry => <TreeRow depth={depth} entry={entry} key={entry.path} />)}
-    {store.truncated[path] ? <p className="wsb-note">目录内容过多，仅显示前 2000 项。</p> : null}
-  </>
-}
-
-function TreeRow({ entry, depth }: { entry: WorkspaceTreeEntry; depth: number }) {
-  const store = useStore(useWorkspaceBrowserStore)
-  const panels = useStore(usePanelsStore)
-  const terminal = useStore(useTerminalStore)
-  const notices = useStore(useNoticesStore)
-  const open = store.expanded.includes(entry.path)
-
-  async function openInTerminal() {
-    try {
-      await terminal.create({ cwd: entry.path })
-      panels.openPanel('terminal')
-    } catch (error) {
-      notices.report(error)
-    }
-  }
-
-  function activate() {
-    if (entry.link) {
-      void invoke<boolean>('shell.openPath', { path: entry.path }).catch(notices.report)
-      return
-    }
-    if (entry.directory) void store.toggleDirectory(entry.path)
-    else void store.openFile(entry.path)
-  }
-
-  // Children render as siblings of the row; nesting them inside the flex row would lay
-  // them out horizontally next to the parent.
-  return <>
-    <div className="tree-row" style={{ paddingLeft: 6 + depth * 14 }}>
-      <button className="tree-main" onClick={activate} title={entry.path} type="button">
-        {entry.directory
-          ? <ChevronRight aria-hidden className={`tree-chevron${open ? ' is-open' : ''}`} size={12} />
-          : <span aria-hidden className="tree-chevron-spacer" />}
-        <FileTypeIcon directory={entry.directory} name={entry.name} open={open} size={14} />
-        <span className="tree-name">{entry.name}</span>
-        {entry.link ? <Badge color="gray" size="sm">链接</Badge> : null}
-      </button>
-      <div className="tree-actions">
-        {entry.directory && !entry.link ? <Tooltip content="在终端中打开">
-          <Button iconLabel="在终端中打开" onClick={() => void openInTerminal()} size="icon-xs" variant="ghost"><SquareTerminal size={11} /></Button>
-        </Tooltip> : null}
-        <Tooltip content="用资源管理器打开">
-          <Button
-            iconLabel="用资源管理器打开"
-            onClick={() => void invoke<boolean>('shell.openPath', { path: entry.path }).catch(notices.report)}
-            size="icon-xs"
-            variant="ghost"
-          ><ExternalLink size={11} /></Button>
-        </Tooltip>
-      </div>
-    </div>
-    {entry.directory && open && !entry.link
-      ? <div className="tree-children"><TreeLevel depth={depth + 1} path={entry.path} /></div>
-      : null}
-  </>
 }
 
 function Preview() {

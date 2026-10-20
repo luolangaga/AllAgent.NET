@@ -1,4 +1,5 @@
 import { invoke } from '@/bridge'
+import { renderMarkdown } from '@/lib/markdown'
 import { useCommandsStore } from '@/stores/commands'
 import { useConversationsStore } from '@/stores/conversations'
 import { useNoticesStore } from '@/stores/ui'
@@ -20,6 +21,8 @@ const CAPABILITIES: Record<string, string> = {
   'host.conversation.messages': 'conversation.read',
   'host.workspace.info': 'workspace.read',
   'host.workspace.files': 'workspace.read',
+  'host.pickFolder': 'workspace.pick',
+  'host.markdown.render': 'markdown',
   'host.navigate': 'navigation',
   'host.openConversation': 'navigation',
   'host.composer.insertText': 'composer.write',
@@ -112,6 +115,17 @@ export async function invokeHostApi(plugin: PluginWebInfo, method: string, param
       const query = clip(p.query, 400)
       const limit = Math.max(1, Math.min(Number(p.limit ?? 40) || 40, 100))
       return invoke('workspace.files', { query, limit })
+    }
+    case 'host.pickFolder': {
+      // Non-blocking: the native dialog's result arrives as a workspace.folderPicked event,
+      // which the frame runtime forwards to subscribers. The SDK invoke timeout therefore
+      // never cuts a slow browse short.
+      await invoke('workspace.pickFolder')
+      return true
+    }
+    case 'host.markdown.render': {
+      const text = clip(p.text, 200_000)
+      return text.trim() ? renderMarkdown(text) : ''
     }
     case 'host.navigate': {
       const page = clip(p.page, 200).trim()

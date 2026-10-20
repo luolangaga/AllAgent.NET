@@ -160,7 +160,7 @@ export const useConversationsStore = defineStore('conversations', () => {
           streamingMessageId.value = assistantId
           activeStreamId.value = state.streamId
           const replay: StreamEvent[] = state.events.map(item => [item.eventName, { ...item.data, streamId: state.streamId, sequence: item.sequence, timestamp: item.timestamp } as BridgeEvents[keyof BridgeEvents]])
-          attachStream(state.streamId, id, assistantId, state.input, [...replay, ...early])
+          attachStream(state.streamId, id, assistantId, [...replay, ...early])
         } else {
           messages.value = restoreMessages(loaded)
         }
@@ -171,13 +171,14 @@ export const useConversationsStore = defineStore('conversations', () => {
     }
   }
 
-  function resetView(conversation: Conversation) {
+  /** Swap the view; a null conversation is an unsaved draft that the first message creates. */
+  function resetView(conversation: Conversation | null) {
     selectionVersion++
     detachStream?.()
     streamingMessageId.value = null
     activeStreamId.value = null
-    conversations.value = [conversation, ...conversations.value.filter(item => item.id !== conversation.id)]
-    activeId.value = conversation.id
+    if (conversation) conversations.value = [conversation, ...conversations.value.filter(item => item.id !== conversation.id)]
+    activeId.value = conversation?.id ?? null
     messages.value = []
     todos.value = []
     plan.value = null
@@ -188,13 +189,11 @@ export const useConversationsStore = defineStore('conversations', () => {
   }
 
   // A new conversation never interrupts a run in progress: the previous session keeps
-  // working in the background and is listed as running. Only the submit window itself
-  // still owns the optimistic bubbles, so it has to settle first.
-  async function createConversation() {
+  // working in the background and is listed as running. Nothing is persisted here —
+  // creating a session for a view the user may never use only litters the history.
+  function newConversation() {
     if (sending.value) throw new Error('消息正在提交中，请稍候再新建会话。')
-    const created = await invoke<Conversation>('conversations.create', { title: 'New Conversation' })
-    resetView(created)
-    return created
+    resetView(null)
   }
 
   /** Internal helper for sendMessage: creating a conversation is part of the send. */
@@ -281,7 +280,7 @@ export const useConversationsStore = defineStore('conversations', () => {
         return
       }
       activeStreamId.value = streamId
-      attachStream(streamId, conversationId, assistantId, '', early)
+      attachStream(streamId, conversationId, assistantId, early)
     } finally {
       sending.value = false
     }
@@ -290,6 +289,20 @@ export const useConversationsStore = defineStore('conversations', () => {
   async function renameConversation(id: string, title: string) {
     await invoke('conversations.rename', { id, title })
     conversations.value = conversations.value.map(item => (item.id === id ? { ...item, title } : item))
+  }
+
+  // The host mirrors an untitled conversation as "新对话"/"New conversation" in
+  // conversations.list, so both that fallback and the raw creation title count as untitled.
+  const untitled = new Set(['', 'New Conversation', '新对话', 'New conversation'])
+
+  /** Name a conversation from its first prompt at send time, not when the run ends. */
+  function applyInitialTitle(id: string, content: string) {
+    const conversation = conversations.value.find(item => item.id === id)
+    const line = content.replace(/\n/g, ' ').trim()
+    if (!conversation || !line || !untitled.has(conversation.title)) return
+    const title = line.length > 40 ? `${line.slice(0, 40)}…` : line
+    conversation.title = title
+    void invoke('conversations.rename', { id, title }).catch(() => {})
   }
 
   async function deleteConversation(id: string) {
@@ -325,7 +338,7 @@ export const useConversationsStore = defineStore('conversations', () => {
 
   type StreamEvent = [keyof BridgeEvents, BridgeEvents[keyof BridgeEvents]]
 
-  function attachStream(streamId: string, conversationId: string, assistantId: string, content: string, early: StreamEvent[]) {
+  function attachStream(streamId: string, conversationId: string, assistantId: string, early: StreamEvent[]) {
     let lastSequence = 0
     // A steer admitted mid-run closes the current answer bubble and continues in a
     // fresh one, so the user's guidance stays at the point it took effect.
@@ -556,12 +569,6 @@ export const useConversationsStore = defineStore('conversations', () => {
         streamingMessageId.value = null
         activeStreamId.value = null
       }
-      const conversation = conversations.value.find(item => item.id === conversationId)
-      if (conversation && conversation.title === 'New Conversation' && content.trim()) {
-        const title = content.trim()
-        conversation.title = title.length > 40 ? `${title.slice(0, 40)}…` : title
-        void invoke('conversations.rename', { id: conversation.id, title: conversation.title }).catch(() => {})
-      }
       // Usage is persisted as the run reports it: refetch so the cache line lands with the answer.
       void loadUsage(conversationId)
     }
@@ -602,6 +609,7 @@ export const useConversationsStore = defineStore('conversations', () => {
     let assistantId = ''
     try {
       conversationId = await ensureConversation()
+      applyInitialTitle(conversationId, content)
       const userMessage: Message = { id: crypto.randomUUID(), role: 'user', content, createdAt: new Date().toISOString(), status: 'done', images: attachments }
       assistantId = crypto.randomUUID()
       const assistantMessage: Message = { id: assistantId, role: 'assistant', content: '', createdAt: new Date().toISOString(), status: 'streaming', toolCalls: [] }
@@ -637,7 +645,7 @@ export const useConversationsStore = defineStore('conversations', () => {
       bridgeEvents.off('*', buffer)
       activeStreamId.value = streamId
 
-      attachStream(streamId, conversationId, assistantId, content, early)
+      attachStream(streamId, conversationId, assistantId, early)
     } finally {
       sending.value = false
     }
@@ -678,7 +686,7 @@ export const useConversationsStore = defineStore('conversations', () => {
       }
       bridgeEvents.off('*', buffer)
       activeStreamId.value = streamId
-      attachStream(streamId, conversationId, assistantId, '', early)
+      attachStream(streamId, conversationId, assistantId, early)
       // Compaction moves the summary boundary, so the old meter is stale until the next turn.
       contextUsage.value = null
       conversationUsage.value = null
@@ -780,7 +788,7 @@ export const useConversationsStore = defineStore('conversations', () => {
     conversations, activeId, active, messages, todos, plan, pendingInputs, contextUsage, conversationUsage,
     sending, streamingMessageId, activeStreamId, isLoading, running,
     isRunning, runState, runsIn, loadRunning, cancelRun,
-    loadAll, selectConversation, createConversation, renameConversation,
+    loadAll, selectConversation, newConversation, renameConversation,
     deleteConversation, setTodos, sendMessage, compact, cancelStream, refreshAfterBackendChange,
     loadPending, enqueueMessage, cancelPending, runPending,
   }

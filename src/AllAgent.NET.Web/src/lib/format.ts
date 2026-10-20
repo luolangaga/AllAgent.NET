@@ -91,6 +91,7 @@ export function providerLabel(providerId: string): string {
     case 'openai': return 'OpenAI'
     case 'anthropic': return 'Anthropic'
     case 'gemini': return 'Google Gemini'
+    case 'google': return 'Google Gemini'
     case 'ollama': return 'Ollama'
     default: return providerId
   }

@@ -205,9 +205,11 @@ describe('conversation streaming', () => {
   it('prevents overlapping sends and releases the lock after a start failure', async () => {
     const { useConversationsStore } = await import('../src/stores/conversations')
     const store = useConversationsStore()
-    await store.createConversation()
     let pending: Request | undefined
-    handle = request => { pending = request }
+    handle = request => {
+      if (request.method === 'conversations.create') return reply(request, createdConversation)
+      pending = request
+    }
     const sending = store.sendMessage('hi', 'config-1')
     await expect(store.sendMessage('duplicate', 'config-1')).rejects.toThrow('正在生成')
     reply(pending!, null, 'cannot start')
@@ -318,7 +320,6 @@ describe('conversation history races', () => {
   it('a late history load never wipes an in-flight send', async () => {
     const { useConversationsStore } = await import('../src/stores/conversations')
     const store = useConversationsStore()
-    await store.createConversation()
     const pending: Request[] = []
     handle = request => request.method === 'chat.startStream' ? reply(request, 'stream-1') : request.method === 'chat.getStreamState' ? reply(request, null) : pending.push(request)
     const loading = store.selectConversation('conv-1')
@@ -352,7 +353,7 @@ describe('conversation history races', () => {
     expect(store.streamingMessageId).toBeNull()
   })
 
-  it('creating a conversation during an initial send is rejected without discarding the UI', async () => {
+  it('starting a new conversation during an initial send is rejected without discarding the UI', async () => {
     const { useConversationsStore } = await import('../src/stores/conversations')
     const store = useConversationsStore()
     let createRequest: Request | undefined
@@ -363,7 +364,7 @@ describe('conversation history races', () => {
     }
     const sending = store.sendMessage('first input', 'config-1')
     // Only the submit window itself still owns the optimistic bubbles.
-    await expect(store.createConversation()).rejects.toThrow()
+    await expect(async () => store.newConversation()).rejects.toThrow()
     expect(store.sending).toBe(true)
     expect(createRequest).toBeDefined()
     reply(createRequest!, createdConversation)
@@ -389,15 +390,15 @@ describe('conversation history races', () => {
     expect(store.streamingMessageId).not.toBeNull()
 
     // Nothing here needs the run to stop: the view moves on, the run does not.
-    const next = await store.createConversation()
-    expect(next.id).toBe('conv-2')
-    expect(store.activeId).toBe('conv-2')
+    // The new view is a draft, so no empty conversation is persisted.
+    store.newConversation()
+    expect(store.activeId).toBeNull()
+    expect(store.conversations).toHaveLength(1)
     expect(store.messages).toEqual([])
     // The host reports the session that is still working, so the list can mark it.
     host.__bridgeCallback(JSON.stringify({ type: 'runs.changed', conversations: [{ conversationId: 'conv-1', title: 'New Conversation', workspace: 'C:/work', workspaceName: 'work', dataDirectory: 'C:/work/.allagent/data', state: 'running' }] }))
     expect(store.isRunning('conv-1')).toBe(true)
     expect(store.runState('conv-1')).toBe('running')
-    expect(store.isRunning('conv-2')).toBe(false)
     // The detached stream neither leaks into the visible conversation nor gets cancelled.
     event('agent.token', { text: ' still running' })
     expect(store.messages).toEqual([])
@@ -461,7 +462,7 @@ describe('TODO tracking', () => {
     expect(store.todos).toHaveLength(1)
   })
 
-  it('persists an automatic title after the first completed exchange', async () => {
+  it('applies an automatic title as soon as the first message is sent', async () => {
     const { useConversationsStore } = await import('../src/stores/conversations')
     const store = useConversationsStore()
     const renames: Request[] = []
@@ -472,10 +473,34 @@ describe('TODO tracking', () => {
       reply(request, true)
     }
     await store.sendMessage('帮我整理一份很长的发布说明，包含所有变更点与升级步骤', 'config-1')
-    event('agent.done', { reason: 'stop' })
-    await Promise.resolve()
     expect(renames).toHaveLength(1)
     expect(renames[0].params.title.length).toBeLessThanOrEqual(41)
     expect(store.conversations[0].title).toBe(renames[0].params.title)
+    // The run ending is not what applies the title: it is already persisted.
+    event('agent.done', { reason: 'stop' })
+    await Promise.resolve()
+    expect(renames).toHaveLength(1)
+  })
+
+  it('titles a conversation whose listed title is the localized placeholder', async () => {
+    const { useConversationsStore } = await import('../src/stores/conversations')
+    const store = useConversationsStore()
+    const renames: Request[] = []
+    handle = request => {
+      if (request.method === 'conversations.list') return reply(request, [{ ...createdConversation, title: '新对话' }])
+      if (request.method === 'conversations.getMessages') return reply(request, [])
+      if (request.method === 'chat.pendingInputs') return reply(request, [])
+      if (request.method === 'todos.get') return reply(request, [])
+      if (request.method === 'chat.getStreamState') return reply(request, null)
+      if (request.method === 'chat.startStream') return reply(request, 'stream-1')
+      if (request.method === 'conversations.rename') { renames.push(request); return reply(request, true) }
+      reply(request, true)
+    }
+    await store.loadAll()
+    await store.selectConversation('conv-1')
+    await store.sendMessage('修复标题时机', 'config-1')
+    expect(renames).toHaveLength(1)
+    expect(store.conversations[0].title).toBe('修复标题时机')
+    event('agent.done', { reason: 'stop' })
   })
 })

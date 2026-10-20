@@ -29,6 +29,7 @@ internal static class TerminalSession
             // The GUI host has no console of its own; a broken inherited handle must never
             // fault the session, and diagnostics belong to the log file.
             if (GuiHost) GuiShell.SilenceOutput();
+            if (GuiHost) CrashNotice.ShowPending(guiHost: true);
             return await TerminalApp.RunAsync(raw);
         }
         try
@@ -36,6 +37,10 @@ internal static class TerminalSession
             var args = TerminalArguments.Parse(raw);
             AllAgent.NET.Core.Localization.HostText.Set(AllAgent.NET.Core.Localization.HostText.Resolve(
                 AllAgent.NET.Core.Localization.LanguageProbe.Read(args.SettingsDirectory)));
+            // A detached broker has no user in front of it; only a normal launch reminds the
+            // user about a crash from the previous run.
+            if (mode != "broker" && !args.GuiMode && args.Command != "crash" && !args.Flags.Contains("help") && args.Command != "help")
+                CrashNotice.ShowPending(guiHost: false, quiet: args.Flags.Contains("json"));
             if (mode == "broker") return await BrokerAsync(PipeName(args.DataDirectory), raw);
             if (args.Command != "attach" || args.Flags.Contains("help")) return await TerminalApp.RunAsync(raw);
             if (!OperatingSystem.IsWindows() || Console.IsInputRedirected || Console.IsOutputRedirected)
@@ -45,7 +50,7 @@ internal static class TerminalSession
             catch (TimeoutException) { throw new InvalidOperationException(L.Pick("没有可接入的旧版后台会话；运行 allagent 开始独立聊天。", "No legacy background session to attach to; run allagent to start a standalone chat.")); }
             return await ClientAsync(existing);
         }
-        catch (Exception ex) { Console.Error.WriteLine("AllAgent: " + ex.Message); return 1; }
+        catch (Exception ex) { CrashNotice.ReportUnexpected(ex); Console.Error.WriteLine("AllAgent: " + ex.Message); return 1; }
     }
     internal static string PipeName(string directory) => "allagent-session-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory)).ToUpperInvariant())))[..32];
     internal static ProcessStartInfo StartInfo(string[] raw, string mode)

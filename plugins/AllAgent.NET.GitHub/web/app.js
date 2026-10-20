@@ -1,7 +1,8 @@
-/* GitHub data is rendered as text only. No remote HTML, scripts, or arbitrary API URLs. */
+/* GitHub data is rendered as text or through the host's sanitized Markdown renderer. */
 const sdk = AllAgentPlugin.connect();
 const $ = id => document.getElementById(id);
 const state = { kind: 'issues', page: 1, more: false, selected: null, detail: null, version: 0, detailVersion: 0, task: null, operations: new Set(), loggedIn: false };
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 function node(tag, text, className) { const el = document.createElement(tag); if (text != null) el.textContent = text; if (className) el.className = className; return el; }
 function button(text, handler, className) { const el = node(className === 'list-item' ? 'button' : 'ag-button', text, className); el.type = 'button'; el.addEventListener('click', handler); return el; }
 function error(value, target = 'error') { $(target).textContent = value instanceof Error ? value.message : String(value); $(target).hidden = false; }
@@ -9,6 +10,16 @@ function clearError() { $('error').hidden = true; }
 function external(url) { try { const parsed = new URL(url); if (parsed.protocol === 'https:' && parsed.hostname === 'github.com' && !parsed.username && !parsed.password) sdk.openExternal(parsed.href); } catch { /* invalid remote URL */ } }
 function stamp(value) { const date = new Date(value); return Number.isNaN(date.valueOf()) ? '' : date.toLocaleDateString('zh-CN'); }
 function repositoryOf(item) { const match = /^https:\/\/api\.github\.com\/repos\/([\w.-]+\/[\w.-]+)$/.exec(item.repository_url || ''); return item.full_name || item.repository?.full_name || match?.[1] || ''; }
+// Issue/PR bodies and comments are Markdown; the host renders and sanitizes them.
+function markdownBody(text, empty = '暂无描述。') {
+  const container = node('div', null, 'body-text markdown');
+  const content = typeof text === 'string' ? text.trim() : '';
+  if (!content) { container.textContent = empty; return container; }
+  sdk.invoke('host.markdown.render', { text: content })
+    .then(html => { container.innerHTML = typeof html === 'string' ? html : ''; })
+    .catch(() => { container.textContent = content; });
+  return container;
+}
 function itemInfo(item) {
   const repository = repositoryOf(item);
   const subject = item.subject;
@@ -26,8 +37,16 @@ async function checkLogin() {
     $('account-button').textContent = status.loggedIn ? '退出登录' : '登录 GitHub';
     $('login-panel').hidden = status.loggedIn;
     $('workbench').hidden = !status.loggedIn;
-    if (status.loggedIn) { await loadRepositories(); await loadList(); }
+    if (status.loggedIn) { $('device-auth').hidden = true; $('device-code').textContent = ''; $('device-hint').textContent = ''; lastDeviceCode = ''; await loadRepositories(); await loadList(); }
   } catch (e) { error(e); $('account').textContent = '连接失败'; $('login-panel').hidden = false; }
+}
+async function refreshLogin(attempts = 10) {
+  for (let index = 0; index < attempts; index++) {
+    await checkLogin();
+    if (state.loggedIn) return true;
+    await delay(800);
+  }
+  return false;
 }
 async function loadRepositories() {
   try { const data = await sdk.invoke('list', { kind: 'repositories', page: 1 }); $('repos').replaceChildren(...data.items.map(repo => { const option = node('option'); option.value = repo.full_name; return option; })); }
@@ -94,7 +113,7 @@ async function showItem(item, row) {
     if (item.unread) actions.append(readButton(item));
     $('detail').append(actions);
     if (info.kind === 'pull') $('detail').append(node('p', `${content.head?.label || ''} → ${content.base?.label || ''} · ${content.changed_files} 个文件 · +${content.additions} −${content.deletions}`, 'muted'));
-    $('detail').append(node('div', content.body || '暂无描述。', 'body-text'));
+    $('detail').append(markdownBody(content.body));
     if (detail.truncated) $('detail').append(node('p', '上下文较大，当前仅展示部分内容。Agent 会收到覆盖范围提示。', 'notice'));
     if (detail.files?.length) {
       $('detail').append(node('hr'), node('h3', '变更文件'));
@@ -102,7 +121,7 @@ async function showItem(item, row) {
     }
     const comments = [...(detail.comments || []), ...(detail.reviews || [])];
     if (comments.length) $('detail').append(node('hr'), node('h3', `讨论与行内评论 · ${comments.length}`));
-    for (const comment of comments) { const box = node('section', null, 'comment'); box.append(node('div', `${comment.user?.login || ''} · ${stamp(comment.created_at)}${comment.path ? ` · ${comment.path}:${comment.line || comment.original_line || ''}` : ''}`, 'muted'), node('div', comment.body || '', 'body-text')); $('detail').append(box); }
+    for (const comment of comments) { const box = node('section', null, 'comment'); box.append(node('div', `${comment.user?.login || ''} · ${stamp(comment.created_at)}${comment.path ? ` · ${comment.path}:${comment.line || comment.original_line || ''}` : ''}`, 'muted'), markdownBody(comment.body, '')); $('detail').append(box); }
   } catch (e) { if (version === state.detailVersion) $('detail').replaceChildren(node('div', e.message || String(e), 'notice error')); }
 }
 function readButton(item) { const result = button('标记已读', async () => { result.disabled = true; try { await sdk.invoke('read', { id: item.id }); item.unread = false; result.textContent = '已读'; } catch (e) { error(e); result.disabled = false; } }); return result; }
@@ -116,25 +135,58 @@ async function openTask(info) {
   $('task-dialog').showModal();
   try {
     const workspaces = await sdk.invoke('workspaces');
-    const placeholder = node('option', '选择工作区，或在下方输入路径'); placeholder.value = '';
-    $('workspace-choice').replaceChildren(placeholder, ...workspaces.map(workspace => { const option = node('option', `${workspace.name} · ${workspace.path}`); option.value = workspace.path; return option; }));
-    $('workspace-choice').value = sdk.context.workspace || '';
-    $('workspace-path').value = sdk.context.workspace || '';
+    $('workspace-choice').replaceChildren(...workspaces.map(workspace => { const option = node('option', `${workspace.name} · ${workspace.path}`); option.value = workspace.path; return option; }));
+    const current = workspaces.find(workspace => workspace.path === sdk.context.workspace) || workspaces[0];
+    $('workspace-choice').value = current?.path || '';
+    if (current && $('workspace-choice').value !== current.path) $('workspace-choice').selectedIndex = 0;
+    $('workspace-path').value = '';
     document.querySelector('[name=mode][value=existing]').checked = true; updateMode();
   } catch (e) { error(e, 'task-error'); }
 }
-function updateMode() { const clone = document.querySelector('[name=mode]:checked').value === 'clone'; $('workspace-choice').hidden = clone; $('workspace-label').hidden = clone; $('workspace-hint').textContent = clone ? '目标必须为空目录或尚不存在。PR 会克隆并检出本次读取的 head SHA；失败时保留文件。' : '校验 origin；保留现有分支及未提交修改。'; if (clone) $('workspace-path').value = ''; }
+function updateMode() {
+  const clone = document.querySelector('[name=mode]:checked').value === 'clone';
+  $('existing-picker').hidden = clone; $('clone-picker').hidden = !clone;
+  $('workspace-hint').textContent = clone
+    ? '目标必须为空目录或尚不存在。PR 会克隆并检出本次读取的 head SHA；失败时保留文件。'
+    : '校验 origin；保留现有分支及未提交修改。';
+}
+// The host owns the native folder dialog; the pick arrives as a workspace.folderPicked event.
+function pickHostFolder() {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const off = sdk.on('workspace.folderPicked', data => {
+      if (settled) return;
+      settled = true; off();
+      if (data?.error) reject(new Error(data.error)); else resolve(data?.path || null);
+    });
+    sdk.invoke('host.pickFolder').catch(cause => { if (settled) return; settled = true; off(); reject(cause); });
+  });
+}
+async function browseWorkspace() {
+  const control = $('browse-workspace'); control.disabled = true;
+  try { const path = await pickHostFolder(); if (path) $('workspace-path').value = path; }
+  catch (e) { error(e, 'task-error'); }
+  finally { control.disabled = false; }
+}
 async function trackOperation(operation) {
   if (state.operations.has(operation.id)) return;
   state.operations.add(operation.id);
   $('activity').hidden = false; $('activity').textContent = '正在准备 GitHub 上下文与工作区…克隆可能需要几分钟，完成后可打开 Agent 会话。';
   try {
-    while (operation.state === 'running') { await new Promise(resolve => setTimeout(resolve, 1500)); operation = await sdk.invoke('operation', { id: operation.id }); }
+    while (operation.state === 'running') { await delay(1500); operation = await sdk.invoke('operation', { id: operation.id }); }
     if (operation.state === 'error') throw new Error(operation.error || '启动失败');
     const result = operation.result;
     $('activity').replaceChildren(node('span', 'Agent 流程已启动。结果保存在独立会话，切换页面后会继续运行。'), button('打开 Agent 会话 →', async () => { try { await sdk.invoke('host.openConversation', { id: result.conversationId, workspace: result.workspace }); } catch (e) { error(e); } }, 'operation-link'));
   } catch (e) { $('activity').textContent = 'GitHub 任务准备未完成。'; error(e); }
   finally { state.operations.delete(operation.id); $('start-task').disabled = false; }
+}
+let lastDeviceCode = '';
+async function copyDeviceCode(code) {
+  if (!code) return;
+  try {
+    await sdk.invoke('host.clipboard.writeText', { text: code });
+    $('device-hint').textContent = '设备码已复制。浏览器中确认授权后，本页会自动刷新。';
+  } catch { $('device-hint').textContent = '无法自动复制，请点击“复制设备码”。'; }
 }
 $('search-form').addEventListener('submit', event => { event.preventDefault(); state.page = 1; void loadList(); });
 $('refresh').addEventListener('click', () => void loadList());
@@ -145,17 +197,60 @@ document.querySelectorAll('[data-query]').forEach(el => el.addEventListener('cli
 $('create-token').addEventListener('click', () => external('https://github.com/settings/tokens/new?scopes=repo,notifications,read:user&description=AllAgent.NET'));
 $('account-button').addEventListener('click', async () => { if (state.loggedIn) { if (!window.confirm('退出 GitHub？本机保存的 Token 将被移除。')) return; try { await sdk.invoke('logout'); state.version++; state.detailVersion++; await checkLogin(); } catch (e) { error(e); } } else { $('login-panel').hidden = false; $('token').focus(); } });
 $('login-form').addEventListener('submit', async event => { event.preventDefault(); $('login-submit').disabled = true; clearError(); const token = $('token').value; $('token').value = ''; try { await sdk.invoke('login', { token }); await checkLogin(); } catch (e) { error(e); } finally { $('login-submit').disabled = false; } });
-$('browser-login').addEventListener('click', async () => { $('browser-login').disabled = true; try { await sdk.invoke('browserLogin'); $('device-code').textContent = '正在请求设备授权…'; let status; do { await new Promise(resolve => setTimeout(resolve, 1500)); status = await sdk.invoke('loginProgress'); $('device-code').textContent = status.instructions || '请在浏览器完成授权'; } while (status.pending); if (status.error) throw new Error(status.error); await checkLogin(); } catch (e) { error(e); } finally { $('browser-login').disabled = false; } });
+$('copy-code').addEventListener('click', () => void copyDeviceCode($('device-code').textContent.trim()));
+$('browser-login').addEventListener('click', async () => {
+  $('browser-login').disabled = true;
+  $('device-code').textContent = ''; $('device-auth').hidden = true; lastDeviceCode = ''; $('device-hint').textContent = '正在请求设备授权…';
+  try {
+    await sdk.invoke('browserLogin');
+    let status;
+    do {
+      await delay(1200);
+      status = await sdk.invoke('loginProgress');
+      if (status.userCode && status.userCode !== lastDeviceCode) {
+        lastDeviceCode = status.userCode;
+        $('device-code').textContent = status.userCode; $('device-auth').hidden = false;
+        $('device-hint').textContent = '已打开浏览器；如未打开，请访问 github.com/login/device 并输入设备码。';
+        void copyDeviceCode(status.userCode);
+      } else if (!status.userCode && status.instructions) {
+        $('device-hint').textContent = status.instructions;
+      }
+    } while (status.pending);
+    if (status.error) throw new Error(status.error);
+    $('device-hint').textContent = '授权成功，正在刷新…';
+    await refreshLogin(10);
+  } catch (e) { error(e); }
+  finally { $('browser-login').disabled = false; }
+});
 for (const id of ['close-dialog', 'cancel-dialog']) $(id).addEventListener('click', () => $('task-dialog').close());
 document.querySelectorAll('[name=mode]').forEach(el => el.addEventListener('change', updateMode));
-$('workspace-choice').addEventListener('change', () => { $('workspace-path').value = $('workspace-choice').value; });
+$('browse-workspace').addEventListener('click', () => void browseWorkspace());
+$('detail').addEventListener('click', event => {
+  const link = event.target instanceof Element ? event.target.closest('a') : null;
+  if (!link) return;
+  let href = (link.getAttribute('data-ref') || link.getAttribute('href') || '').trim();
+  if (/^\/[^/]/.test(href)) href = 'https://github.com' + href;
+  if (!/^https:\/\//i.test(href)) return;
+  event.preventDefault(); sdk.openExternal(href);
+});
 $('task-form').addEventListener('submit', async event => {
   event.preventDefault(); $('task-error').hidden = true; $('start-task').disabled = true;
   try {
     const info = state.task;
-    const operation = await sdk.invoke('start', { repository: info.repository, number: info.number, kind: info.kind === 'pull' ? 'review' : 'solve', workspace: $('workspace-path').value.trim(), cloneRepository: document.querySelector('[name=mode]:checked').value === 'clone', instructions: $('instructions').value.trim() });
+    const clone = document.querySelector('[name=mode]:checked').value === 'clone';
+    const workspace = (clone ? $('workspace-path').value : $('workspace-choice').value).trim();
+    if (!workspace) throw new Error(clone ? '请选择一个空目录作为克隆目标。' : '请选择工作区。');
+    const operation = await sdk.invoke('start', { repository: info.repository, number: info.number, kind: info.kind === 'pull' ? 'review' : 'solve', workspace, cloneRepository: clone, instructions: $('instructions').value.trim() });
     $('task-dialog').close(); void trackOperation(operation);
   } catch (e) { error(e, 'task-error'); $('start-task').disabled = false; }
 });
-sdk.ready.then(async () => { await checkLogin(); const operations = await sdk.invoke('operations'); for (const operation of operations.filter(item => item.state === 'running' || item.state === 'done').slice(-1)) void trackOperation(operation); }).catch(error);
-
+sdk.ready.then(async () => {
+  // Login finishes in the plugin backend; the push refreshes the page without extra polling.
+  sdk.on('auth', data => {
+    if (data?.loggedIn) void refreshLogin(3);
+    else if (data?.error) error(new Error(data.error));
+  });
+  await checkLogin();
+  const operations = await sdk.invoke('operations');
+  for (const operation of operations.filter(item => item.state === 'running' || item.state === 'done').slice(-1)) void trackOperation(operation);
+}).catch(error);

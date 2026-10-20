@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows;
+using AllAgent.NET.Diagnostics;
 using AllAgent.NET.Gui.Interop;
 
 namespace AllAgent.NET.Gui;
@@ -35,19 +37,32 @@ public sealed record ShellOptions(string Url, string Title, string CacheDirector
 
 internal static class Program
 {
+    private const uint IconError = 0x00000010;
+    private const uint YesNo = 0x00000004;
+    private const int IdYes = 6;
+
     [STAThread]
     private static int Main(string[] args)
     {
+        CrashReporter.Install("gui-shell", onReported: NotifyCrash);
         ShellOptions options;
         try { options = ShellOptions.Parse(args); }
         catch (Exception ex)
         {
-            MessageBox.Show(ex.Message, "AllAgent.NET", MessageBoxButton.OK, MessageBoxImage.Error);
+            MessageBox(IntPtr.Zero, ex.Message, "AllAgent.NET", IconError);
             return 2;
         }
         try
         {
             var application = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
+            application.DispatcherUnhandledException += (_, e) =>
+            {
+                // The report is written synchronously and the prompt offers the GitHub page.
+                // The shell cannot recover a broken dispatcher, so it shuts down deliberately.
+                e.Handled = true;
+                CrashReporter.Report(e.Exception, "gui-shell", fatal: true);
+                application.Shutdown(4);
+            };
             var window = new MainWindow(options);
             application.Run(window);
             return window.ExitCode;
@@ -55,9 +70,26 @@ internal static class Program
         catch (Exception ex)
         {
             Log("startup failed: " + ex);
-            MessageBox.Show("GUI 启动失败：" + ex.Message, "AllAgent.NET", MessageBoxButton.OK, MessageBoxImage.Error);
+            if (CrashReporter.Report(ex, "gui-shell", fatal: true) == null)
+                MessageBox(IntPtr.Zero, "GUI 启动失败：" + ex.Message, "AllAgent.NET", IconError);
             return 1;
         }
+    }
+
+    private static void NotifyCrash(CrashReport report)
+    {
+        if (!report.Fatal)
+        {
+            Log("non-fatal crash report: " + report.MarkdownPath);
+            return;
+        }
+        var answer = MessageBox(IntPtr.Zero,
+            "AllAgent.NET 发生未处理的异常，窗口即将关闭。\n\n诊断报告：\n" + report.MarkdownPath +
+            "\n\n是否打开 GitHub 提交页面？", "AllAgent.NET", YesNo | IconError);
+        CrashReporter.MarkNotified(report);
+        if (answer != IdYes) return;
+        if (CrashReporter.OpenIssue(report)) CrashReporter.MarkReported(report);
+        else MessageBox(IntPtr.Zero, "无法打开浏览器，请手动打开：\n" + report.UrlPath, "AllAgent.NET", IconError);
     }
 
     internal static void Log(string message)
@@ -77,4 +109,7 @@ internal static class Program
         try { Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true }); }
         catch (Exception ex) { Log("open in browser failed: " + ex.Message); }
     }
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int MessageBox(IntPtr window, string text, string caption, uint type);
 }

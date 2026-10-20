@@ -27,7 +27,7 @@ internal static class PowerShellStoreCommand
         if (args.Count > (operation == "install" ? 3 : operation == "search" ? 2 : 1)) throw new ArgumentException("用法 powershell list|search 关键词|install 模块 [版本]|commands [模块]");
         var name = args.ElementAtOrDefault(1);
         if (operation == "search") name = string.IsNullOrWhiteSpace(name) ? throw new ArgumentException("用法 powershell search 关键词") : "*" + name + "*";
-        var json = await ManagementUi.Busy(operation == "install" ? "从 PSGallery 安装模块及其依赖（可能需要数分钟）" : "查询 PowerShell 能力商店（通常 10–60 秒）", token => store.ExecuteAsync(operation, name, args.ElementAtOrDefault(2), token), ct);
+        var json = await ManagementUi.Busy(operation == "install" ? "从 PSGallery 安装模块及其依赖（可能需要数分钟）" : "查询 PowerShell 能力商店（通常 1–3 秒）", token => store.ExecuteAsync(operation, name, args.ElementAtOrDefault(2), token), ct);
         using var doc = JsonDocument.Parse(json);
         if (operation == "search") Show(doc.RootElement.Clone());
         else Show(new { modules = JsonSerializer.Deserialize<JsonElement>(store.Summary), path = store.Root });

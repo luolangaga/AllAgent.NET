@@ -5,6 +5,7 @@ using AllAgent.NET.Core.Models;
 using AllAgent.NET.Core.Runtime;
 using AllAgent.NET.Core.Services;
 using AllAgent.NET.Core.Services.AI;
+using AllAgent.NET.Core.Services.Updates;
 using AllAgent.NET.Core.Tools;
 using AllAgent.NET.Core.Extensions;
 using System.Runtime.CompilerServices;
@@ -65,7 +66,16 @@ internal static class TerminalApp
         {
             var args = TerminalArguments.Parse(raw); ui = new(args.Flags.Contains("json"), args.Flags.Contains("verbose"));
             HostText.Set(HostText.Resolve(LanguageProbe.Read(args.SettingsDirectory)));
+            UpdateRuntimeContext.Configure(raw, args.GuiMode);
+            if (args.Get("update-result") is { Length: > 0 } updateResultPath)
+            {
+                var updateResult = UpdateHealth.ReadAndApply(updateResultPath, new UpdateStateStore(args.SharedDirectory));
+                if (updateResult?.Status == "failed")
+                    TerminalOutput.Write(new Text(L.Pick("上次更新失败：", "The last update failed: ") + updateResult.Error + "\n", new Style(Color.Red)));
+            }
             if (args.Flags.Contains("help") || args.Command == "help") { Help(); return 0; }
+            if (args.Command == "update")
+                return (await UpdateCommand.RunAsync(args, ui, args.SharedDirectory, restartArgs: null, guiLauncher: false, settings: null)).ExitCode;
             var approval = new ToolsApproval(ui) { Permission = args.Permission, PlanMode = planMode, SimpleMode = simpleMode };
             Func<PlanProposal, CancellationToken, Task<PlanDecision>> planHandler = (_, _) =>
                 Task.FromResult(new PlanDecision(false, L.Pick("计划审批尚未初始化。", "Plan approval is not initialized yet.")));
@@ -96,6 +106,7 @@ internal static class TerminalApp
                 options.BrowserUse.Load(doctorStore);
                 return await DoctorAsync(args, options, ui);
             }
+            if (args.Command == "crash") return CrashCommand.Execute(args, ui);
             if (args.Command == "powershell")
             {
                 await PowerShellStoreCommand.ExecuteAsync(new PowerShellModuleStore(args.SharedDirectory, options.PowerShellPath), ui, args.Positionals);
@@ -115,32 +126,32 @@ internal static class TerminalApp
             await TerminalHosts.EvictIdleAsync(dataDir, sharedConfig, options, ui);
             var store = host.Store;
             LanguageSetting.Apply(store);
+            UpdateHealth.WriteIfRequested(args.Get("update-health"));
+            if (!(args.GuiMode && !TerminalSession.GuiHost) && args.Command is "chat" or "gui" or "web-ui")
+            {
+                if (await UpdateStartupCheck.TryAutoInstallAsync(store, ui, raw, CancellationToken.None)) return 0;
+                _ = UpdateStartupCheck.RunAsync(store, ui, args.SharedDirectory, CancellationToken.None);
+            }
             options = options with { SandboxMode = SavedSandboxMode(store) };
             options = options with { SharedDirectory = args.SharedDirectory };
             var browser = host.Browser;
             var computer = host.Computer;
             if (args.Command == "browser") { await browser.ExecuteAsync(args.Positionals); return 0; }
             if (args.Command == "computer") { computer.Execute(args.Positionals); return 0; }
-            ValueTask<bool> NotifyInstallationAsync(string message, CancellationToken ct)
-            {
-                ct.ThrowIfCancellationRequested();
-                ManagementUi.Output(ui, new { notice = message }, () => TerminalOutput.Write(new Text(message + "\n")));
-                return ValueTask.FromResult(true);
-            }
             async Task<AgentOptions> CancelableInitializationAsync()
             {
                 var configured = options;
                 await CancelableAsync(ct => ManagementUi.Busy(L.Pick("初始化运行环境与 PowerShell 能力", "Initializing the runtime and PowerShell support"), async token =>
                 {
                     var doctor = new EnvironmentDoctor();
-                    var environment = await doctor.EnsureAsync(NotifyInstallationAsync, options.PythonPath, options.PowerShellPath, token);
+                    var environment = await doctor.CheckAsync(options.PowerShellPath, token);
                     await doctor.EnsureRipgrepAsync(token);
                     await using var browserCheck = new BrowserUseTools(options.BrowserUse);
                     var browserEnvironment = await browserCheck.CheckEnvironmentAsync(token);
                     if (!browserEnvironment.Ok) throw new InvalidOperationException(browserEnvironment.Error);
                     ManagementUi.Success(ui, L.Pick("浏览器环境检查完成：C# / WebView2，不安装 Python 浏览器库或 Chromium。", "Browser environment ready: C# / WebView2; no Python browser libraries or Chromium are installed."));
                     TerminalArguments.DiscoverShellExecutables(args.Shell);
-                    configured = options with { PythonPath = environment.Python, PowerShellPath = environment.PowerShell };
+                    configured = options with { PowerShellPath = environment.PowerShell };
                     await using var initializedRuntime = await AgentRuntime.CreateAsync(configured, token);
                     var initializedProbe = await initializedRuntime.ProbeSandboxAsync(token);
                     if (!initializedProbe.Ok) throw new InvalidOperationException(initializedProbe.Error ?? L.Pick("沙箱执行校验失败。", "Sandbox execution verification failed."));
@@ -486,7 +497,10 @@ internal static class TerminalApp
                     config = SubAgentModelSelection.Resolve(config ?? store.ApiConfigs.First(c => c.Id == saved), store.ApiConfigs, target.ModelId, saved.ToString());
                 ui.Header(options.WorkspaceRoot, config?.DefaultModel ?? target.ModelId, target.Id);
             }
-            WebUiSession StartWebUi(int port = 0, WebUiNetworkOptions? network = null) => WebUiSession.Start(
+            WebUiSession StartWebUi(int port = 0, WebUiNetworkOptions? network = null)
+            {
+                UpdateRuntimeContext.WebUiHost = true;
+                return WebUiSession.Start(
                 new WebUiTerminalHost(store, mcp, tasks, checkpoints, catalog, options.WorkspaceRoot, dataDir),
                 () => options,
                 new AiProviderFactory(plugins.Providers),
@@ -502,6 +516,7 @@ internal static class TerminalApp
                     SetSandboxModeAsync),
                 port,
                 network);
+            }
             async Task SetPermissionModeAsync(string mode)
             {
                 if (mode is not ("restricted" or "ask" or "full" or "plan" or "simple")) throw new ArgumentException(L.Pick("权限模式：restricted / ask / full / plan / simple。", "Permission mode: restricted / ask / full / plan / simple."));
@@ -517,11 +532,14 @@ internal static class TerminalApp
             }
             planHandler = async (plan, ct) =>
             {
-                if (!await ui.RequestPlanApprovalAsync(plan, ct))
-                    return new PlanDecision(false, "The human rejected the plan. Revise it and call plan_propose again.");
+                var decision = await ui.RequestPlanApprovalAsync(plan, ct);
+                if (!decision.Approved)
+                    return string.IsNullOrWhiteSpace(decision.Feedback)
+                        ? new PlanDecision(false, "The human rejected the plan. Revise it and call plan_propose again.")
+                        : decision;
                 await SetPermissionModeAsync("full");
                 ManagementUi.Success(ui, L.Pick("计划已批准：已切换到完全访问，AI 将继续执行。", "Plan approved: switched to full access; the AI will continue."));
-                return new PlanDecision(true, Mode: "full");
+                return new PlanDecision(true, decision.Feedback, "full");
             };
             async Task SetSandboxModeAsync(string mode)
             {
@@ -671,7 +689,8 @@ internal static class TerminalApp
                 screen?.Enter();
                 if (screen != null) screen.ExtensionSummary = () => L.Pick($"插件 · {plugins.Status.Count(p => p.Enabled && p.Error == null)} 个\n任务 · {tasks.List.Count(j => j.State is BackgroundTaskState.Running or BackgroundTaskState.Queued)} 运行 / 排队\n等待处理 · {tasks.List.Count(j => j.State is BackgroundTaskState.AwaitingAnswer or BackgroundTaskState.AwaitingApproval)} 个  /tasks",
                     $"Plugins · {plugins.Status.Count(p => p.Enabled && p.Error == null)}\nTasks · {tasks.List.Count(j => j.State is BackgroundTaskState.Running or BackgroundTaskState.Queued)} running / queued\nWaiting · {tasks.List.Count(j => j.State is BackgroundTaskState.AwaitingAnswer or BackgroundTaskState.AwaitingApproval)}  /tasks");
-                if (screen != null) screen.TaskNotice = () => (tasks.List.Count(j => j.State is BackgroundTaskState.AwaitingAnswer or BackgroundTaskState.AwaitingApproval) is var count && count > 0 ? L.Pick($"后台待处理 {count} · /tasks | ", $"{count} background items need attention · /tasks | ") : "") +
+                if (screen != null) screen.TaskNotice = () => (UpdateStartupCheck.Notice is { Length: > 0 } updateNotice ? updateNotice + " | " : "") +
+                    (tasks.List.Count(j => j.State is BackgroundTaskState.AwaitingAnswer or BackgroundTaskState.AwaitingApproval) is var count && count > 0 ? L.Pick($"后台待处理 {count} · /tasks | ", $"{count} background items need attention · /tasks | ") : "") +
                     (runs.Active.Count(run => run.ConversationId != conversation.Id) is var others && others > 0 ? L.Pick($"后台会话 {others} 个运行中 | ", $"{others} background conversations running | ") : "") +
                     (runs.Find(conversation.Id) is { Waiting: true } waitingRun ? waitingRun.State switch { SessionRunState.AwaitingApproval => L.Pick("本会话等待授权 | ", "This conversation awaits approval | "), SessionRunState.AwaitingPlan => L.Pick("本会话等待计划审批 | ", "This conversation awaits plan approval | "), _ => L.Pick("本会话等待回答 | ", "This conversation awaits an answer | ") } : "") +
                     (ui.Inbox?.Label is { Length: > 0 } inboxLabel ? inboxLabel + " | " : "");
@@ -782,7 +801,7 @@ internal static class TerminalApp
                     {
                         try { await ui.AttachRunAsync(liveRun, CancellationToken.None); }
                         catch (OperationCanceledException) { }
-                        catch (Exception ex) { ui.Error(ex.Message); }
+                        catch (Exception ex) { CrashNotice.ReportUnexpected(ex); ui.Error(ex.Message); }
                         continue;
                     }
                     foreach (var finished in runs.TakeFinished())
@@ -796,7 +815,7 @@ internal static class TerminalApp
                             await RunTurnAsync(runs, pendingEngine, conversation.Id, pendingInput.Content, config!, ui, checkpoints, store, pendingInput: pendingInput);
                         }
                         catch (OperationCanceledException) { ui.Error(L.Pick("待处理输入执行已取消。", "Pending input execution was cancelled.")); }
-                        catch (Exception ex) { ui.Error(ex.Message); }
+                        catch (Exception ex) { CrashNotice.ReportUnexpected(ex); ui.Error(ex.Message); }
                         if (ui.Inbox.Pending.Any(item => item.Id == pendingInput.Id))
                         {
                             ui.Inbox.AutomaticDeliveryPaused = true;
@@ -816,7 +835,7 @@ internal static class TerminalApp
                                 await RunTurnAsync(runs, resumedEngine, conversation.Id, "Review the newly delivered delegated task results and continue the existing parent objective. Verify claims before relying on them.", config!, ui, checkpoints, store, internalMessage: true);
                             }
                             catch (OperationCanceledException) { ui.Error(L.Pick("父任务继续处理已取消；子代理结果已保存。", "Continuing the parent task was cancelled; child-agent results are saved.")); }
-                            catch (Exception ex) { ui.Error(ex.Message); }
+                            catch (Exception ex) { CrashNotice.ReportUnexpected(ex); ui.Error(ex.Message); }
                         }
                         continue;
                     }
@@ -1080,6 +1099,14 @@ internal static class TerminalApp
                                     TerminalOutput.Write(new Panel(new Text(L.Pick($"工作区：{options.WorkspaceRoot}\n会话：{conversation.Id}\n模型：{config?.DisplayName ?? "未选择"} / {config?.DefaultModel}\n思考：{config?.ReasoningEffort ?? "default"}\n权限：{approval.ModeLabel}\n计划：{PlanStatus(store.GetPlan(conversation.Id))}\n沙箱：{(CurrentRuntime()?.SandboxName is { } sandboxName ? sandboxName + " 已验证" : "首次任务时检查")}\n技能：{catalog.List().Count(s => s.Enabled)}\nMCP：{mcp.GetAllServerTools().Count} 个已连接\n后台会话：{runs.Active.Count} 个运行中\n审计：{options.AuditPath}", $"Workspace: {options.WorkspaceRoot}\nConversation: {conversation.Id}\nModel: {config?.DisplayName ?? "not selected"} / {config?.DefaultModel}\nReasoning: {config?.ReasoningEffort ?? "default"}\nPermission: {approval.ModeLabel}\nPlan: {PlanStatus(store.GetPlan(conversation.Id))}\nSandbox: {(CurrentRuntime()?.SandboxName is { } sandboxNameEn ? sandboxNameEn + " verified" : "checked on the first task")}\nSkills: {catalog.List().Count(s => s.Enabled)}\nMCP: {mcp.GetAllServerTools().Count} connected\nBackground conversations: {runs.Active.Count} running\nAudit: {options.AuditPath}"))).Header(L.Pick("会话状态", "Conversation status"))); continue;
                                 case "/install-pip":
                                     throw new ArgumentException(L.Pick("pip 清单功能已移除，请使用 /powershell 搜索和安装 PowerShell 模块。", "The pip manifest feature was removed; use /powershell to search for and install PowerShell modules."));
+                                case "/update":
+                                {
+                                    var updateArgs = TerminalArguments.Parse(["update", .. rest]);
+                                    var updateOutcome = await UpdateCommand.RunAsync(updateArgs, ui, args.SharedDirectory, raw, args.GuiMode, store.GetSetting, CancellationToken.None);
+                                    if (updateOutcome.ExitApplication)
+                                        throw new ChatExit(L.Pick("更新程序已启动 · 应用将退出并在安装完成后自动重启。", "The updater is running · the application exits and restarts after installation."));
+                                    continue;
+                                }
                                 case "/doctor":
                                     if (rest.FirstOrDefault() == "install") options = await CancelableInitializationAsync();
                                     await DoctorAsync(args, options, ui); continue;
@@ -1168,7 +1195,7 @@ internal static class TerminalApp
                     catch (WorkspaceChange) { throw; }
                     catch (ChatExit) { throw; }
                     catch (OperationCanceledException) { TerminalOutput.MarkupLine(L.Pick("[dim]操作已取消；可以继续输入。[/]", "[dim]Operation cancelled; you can keep typing.[/]")); }
-                    catch (Exception ex) { ui.Error(ex.Message); }
+                    catch (Exception ex) { CrashNotice.ReportUnexpected(ex); ui.Error(ex.Message); }
                 }
             }
             finally
@@ -1181,7 +1208,7 @@ internal static class TerminalApp
         catch (WorkspaceChange) { throw; }
         catch (ChatExit exit) { TerminalOutput.Write(new Text("\n" + exit.Message + "\n", new Style(Color.Grey))); return 0; }
         catch (OperationCanceledException) { return 130; }
-        catch (Exception ex) { if (ui != null) ui.Error(ex.Message); else Console.Error.WriteLine(ex.Message); return 1; }
+        catch (Exception ex) { CrashNotice.ReportUnexpected(ex); if (ui != null) ui.Error(ex.Message); else Console.Error.WriteLine(ex.Message); return 1; }
     }
     /// <summary>
     /// Stable host instruction block: project instructions and plan mode. The skill catalog is a
@@ -1228,23 +1255,32 @@ internal static class TerminalApp
     private static async Task<int> DoctorAsync(TerminalArguments args, AgentOptions options, TerminalUi ui)
     {
         var doctor = new EnvironmentDoctor(); if (args.Flags.Contains("install") && !ui.Interactive) throw new ArgumentException(L.Pick("安装需要交互终端逐项确认。", "Installation needs an interactive terminal to confirm each step."));
-        var environment = args.Flags.Contains("install") ? await doctor.EnsureAsync(ConfirmAsync, options.PythonPath, options.PowerShellPath) : await doctor.CheckAsync(options.PythonPath, options.PowerShellPath);
+        var environment = await doctor.CheckAsync(options.PowerShellPath);
+        var python = await doctor.ResolvePythonAsync(options.PythonPath);
+        environment = environment with { Python = python };
         if (args.Flags.Contains("install"))
         {
+            python = await doctor.EnsurePythonAsync(ConfirmAsync, options.PythonPath);
+            environment = environment with { Python = python };
             await doctor.EnsureRipgrepAsync();
-            options = options with { PythonPath = environment.Python };
-            environment = await doctor.CheckAsync(options.PythonPath, environment.PowerShell);
         }
         var ripgrep = EnvironmentDoctor.FindExecutable("rg.exe");
         await using var browserCheck = new BrowserUseTools(options.BrowserUse);
         var browserEnvironment = await browserCheck.CheckEnvironmentAsync();
         var powershell = new PowerShellModuleStore(args.SharedDirectory, environment.PowerShell);
-        if (environment.PowerShell != null) await powershell.ExecuteAsync("list");
+        if (environment.PowerShell != null)
+        {
+            try { await powershell.ExecuteAsync("list"); }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                environment = environment with { PowerShell = null, Problems = [.. environment.Problems, L.Pick("随包 PowerShell SDK worker 无法启动：", "The bundled PowerShell SDK worker failed to start: ") + ex.Message] };
+            }
+        }
         ManagementUi.Output(ui, new { environment, ripgrep, browser = browserEnvironment, powershell = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(powershell.Summary) }, () =>
         {
             var table = new Table().AddColumn(L.Pick("环境", "Environment")).AddColumn(L.Pick("结果", "Result"));
             table.AddRow("Browser Use / WebView2", Markup.Escape(browserEnvironment.Ok ? browserEnvironment.ToJson() : browserEnvironment.Error ?? L.Pick("环境检查失败", "environment check failed")));
-            table.AddRow(L.Pick("宿主 Python 3.10–3.14（沙箱运行依赖）", "Host Python 3.10-3.14 (required by the sandbox)"), Markup.Escape(environment.Python ?? L.Pick("缺失或版本不符", "missing or wrong version"))); table.AddRow(L.Pick("内嵌 PowerShell SDK", "Embedded PowerShell SDK"), Markup.Escape(environment.PowerShell ?? L.Pick("缺失", "missing")));
+            table.AddRow(L.Pick("宿主 Python（仅 Monty 备用沙箱，按需使用）", "Host Python (Monty fallback sandbox only, on demand)"), Markup.Escape(environment.Python ?? L.Pick("未检测到（Hyperlight 正常时不需要）", "not found (unnecessary while Hyperlight works)"))); table.AddRow(L.Pick("随包 PowerShell SDK worker", "Bundled PowerShell SDK worker"), Markup.Escape(environment.PowerShell ?? L.Pick("缺失", "missing")));
             table.AddRow("ripgrep", Markup.Escape(ripgrep ?? L.Pick("缺失", "missing")));
             table.AddRow(L.Pick("PowerShell 能力", "PowerShell support"), Markup.Escape(powershell.Summary));
             table.AddRow(L.Pick("执行模式", "Execution mode"), L.Pick("自动选择 Hyperlight / Monty · ", "Automatically select Hyperlight / Monty · ") + (options.Permission switch { PermissionMode.Full => L.Pick("完全访问 · 宿主工具免审批", "Full access · host tools need no approval"), PermissionMode.Restricted => L.Pick("限制模式 · 工作区内免审", "Restricted · workspace operations need no approval"), _ => L.Pick("逐次授权", "Ask each time") })); table.AddRow(L.Pick("工作区", "Workspace"), Markup.Escape(options.WorkspaceRoot));
@@ -1335,6 +1371,12 @@ internal static class TerminalApp
         allagent tasks [list|show ID]            任务跨启动保留结果；任务仅在当前 chat 进程内运行
         allagent powershell list|search 关键词|install 模块 [版本]|commands [模块]
         allagent doctor [--install]            环境检查；安装前询问
+        allagent update [--check]              检查并安装更新（NuGet / GitCode → GitHub）
+        allagent update --source github        指定来源：auto|gitcode|github|nuget
+        allagent update --pre --yes            预发布通道 / 非交互确认
+        allagent update --rollback             回滚到上一版本
+        allagent crash [list|show [ID]|open [ID]|path]
+                                               崩溃报告：查看、定位、打开 GitHub 提交页
         allagent tools [--json]                工具契约
         allagent browser on|off|status        浏览器操作开关（默认开启）
         allagent browser connect             外置浏览器连接向导
@@ -1387,6 +1429,12 @@ internal static class TerminalApp
         allagent tasks [list|show ID]            Results survive restarts; tasks run only inside the current chat process
         allagent powershell list|search query|install module [version]|commands [module]
         allagent doctor [--install]            Environment check; asks before installing
+        allagent update [--check]              Check and install updates (NuGet / GitCode -> GitHub)
+        allagent update --source github        Source: auto|gitcode|github|nuget
+        allagent update --pre --yes            Preview channel / non-interactive confirmation
+        allagent update --rollback             Roll back to the previous version
+        allagent crash [list|show [ID]|open [ID]|path]
+                                               Crash reports: inspect, locate, open the GitHub submission page
         allagent tools [--json]                Tool contracts
         allagent browser on|off|status        Browser-use switch (enabled by default)
         allagent browser connect             External-browser connection guide

@@ -91,6 +91,14 @@ internal static class GuiShell
         catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException) { }
     }
 
+    /// <summary>A hidden GUI host has no console; crash prompts must use a native dialog.</summary>
+    public static bool AskYesNo(string message, string caption = "AllAgent.NET")
+    {
+        Log(message);
+        try { return MessageBox(IntPtr.Zero, message, caption, 0x00000004 | 0x00000030) == 6; }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException) { return false; }
+    }
+
     public static void Log(string message)
     {
         try

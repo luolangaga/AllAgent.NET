@@ -74,7 +74,7 @@ public sealed class WorkBuddyAccount : IAuthenticationProvider, IAccountModelPro
         ModelProvider = new WorkBuddyProvider(this);
         Automation = new WorkBuddyAutomation(this, directory);
     }
-    public ApiConfig CreateConfiguration() => new() { ProviderId = Id, Protocol = Id, BaseUrl = Endpoint + "/v2", DisplayName = Name, AuthenticationProviderId = Id, ReasoningProtocol = "none" };
+    public ApiConfig CreateConfiguration() => new() { ProviderId = Id, Protocol = Id, BaseUrl = Endpoint + "/v2", DisplayName = Name, AuthenticationProviderId = Id, ReasoningProtocol = "workbuddy", ContextWindowTokens = 300000 };
     public void ValidateModelConfiguration(ApiConfig config)
     {
         if (config.BaseUrl.TrimEnd('/') != Endpoint + "/v2" || config.Protocol != Id)
@@ -300,12 +300,55 @@ public sealed class WorkBuddyProvider(WorkBuddyAccount account) : IAiProvider
         try { data = WorkBuddyAccount.Data(await account.JsonAsync("/v3/config", HttpMethod.Get, token, null, ct)); }
         catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException)
         { data = WorkBuddyAccount.Data(await account.JsonAsync("/v2/enterprises/personal/models", HttpMethod.Get, token, null, ct)); }
-        var ids = new HashSet<string>(StringComparer.Ordinal);
+        var found = new Dictionary<string, ModelInfo>(StringComparer.Ordinal);
         if (data.TryGetProperty("agents", out var agents))
             foreach (var agent in agents.EnumerateArray())
                 if (agent.TryGetProperty("models", out var models))
                     foreach (var model in models.EnumerateArray())
-                        if (model.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(model.GetString())) ids.Add(model.GetString()!);
-        return ids.Select(id => new ModelInfo(id, id)).ToArray();
+                        if (ReadModel(model) is { } info) found[info.Id] = info;
+        return found.Values.ToArray();
     }
+    /// <summary>Models arrive as bare IDs on some accounts and as objects with declared limits and
+    /// reasoning levels on others; keep whichever spec the endpoint advertises.</summary>
+    private static ModelInfo? ReadModel(JsonElement model)
+    {
+        if (model.ValueKind == JsonValueKind.String)
+        {
+            var text = model.GetString();
+            return string.IsNullOrWhiteSpace(text) ? null : new ModelInfo(text, text);
+        }
+        if (model.ValueKind != JsonValueKind.Object) return null;
+        var id = ReadText(model, "id") ?? ReadText(model, "modelId") ?? ReadText(model, "model_id") ?? ReadText(model, "name");
+        if (string.IsNullOrWhiteSpace(id)) return null;
+        var name = ReadText(model, "displayName") ?? ReadText(model, "display_name") ?? ReadText(model, "name") ?? id;
+        return new ModelInfo(id, name,
+            ReadLimit(model, "contextLength", "context_length", "contextWindow", "context_window", "maxContextTokens", "max_context_tokens"),
+            ReadLimit(model, "maxOutputTokens", "max_output_tokens", "maxTokens", "max_tokens"))
+        {
+            ReasoningLevels = ReadLevels(model)
+        };
+    }
+    private static string? ReadText(JsonElement item, string property) =>
+        item.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(value.GetString()) ? value.GetString() : null;
+    private static int? ReadLimit(JsonElement item, params string[] properties)
+    {
+        foreach (var property in properties)
+            if (item.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var number) && number > 0) return number;
+        return null;
+    }
+    private static IReadOnlyList<string>? ReadLevels(JsonElement item)
+    {
+        foreach (var property in new[] { "reasoningEfforts", "reasoning_efforts", "reasoningEffortLevels", "supportedEfforts", "supported_efforts", "efforts" })
+        {
+            if (!item.TryGetProperty(property, out var value)) continue;
+            if (value.ValueKind == JsonValueKind.Array)
+                return Levels(value.EnumerateArray().Select(level => level.ValueKind == JsonValueKind.String ? level.GetString() : null));
+            if (value.ValueKind == JsonValueKind.Object) return Levels(value.EnumerateObject().Select(level => level.Name));
+            // An explicit null/empty list means the model decides its own depth.
+            if (value.ValueKind is JsonValueKind.Null or JsonValueKind.False) return [];
+        }
+        return null;
+    }
+    private static IReadOnlyList<string> Levels(IEnumerable<string?> levels) =>
+        levels.Where(level => !string.IsNullOrWhiteSpace(level)).Select(level => level == "off" ? "none" : level!).Distinct(StringComparer.Ordinal).ToArray();
 }

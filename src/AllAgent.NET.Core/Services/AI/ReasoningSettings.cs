@@ -5,7 +5,7 @@ namespace AllAgent.NET.Core.Services.AI;
 
 public static class ReasoningSettings
 {
-    public static IReadOnlyList<string> Protocols { get; } = ["auto", "none", "openai", "deepseek", "qwen", "openrouter", "anthropic-adaptive", "anthropic-budget", "gemini-level", "gemini-budget", "toggle", "xai"];
+    public static IReadOnlyList<string> Protocols { get; } = ["auto", "none", "openai", "deepseek", "workbuddy", "commandcode", "qoder", "qwen", "openrouter", "anthropic-adaptive", "anthropic-budget", "gemini-level", "gemini-budget", "toggle", "xai"];
     public static ReasoningCapabilities Capabilities(ApiConfig config) => ReasoningPolicy.Describe(config);
     public static IReadOnlyList<string> Efforts(ApiConfig config) => Capabilities(config).Efforts;
     public static int? Budget(ApiConfig config) => ReasoningPolicy.Budget(config, config.ReasoningEffort);

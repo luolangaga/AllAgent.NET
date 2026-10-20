@@ -66,7 +66,7 @@ print(call_tool("run_shell", exe="pwsh", args=["-NoProfile", "-EncodedCommand", 
 
 guest 补入原版 CPython 3.14 的 base64、struct、UTF-16/UTF-16LE/UTF-16BE 模块，编码转换在 Python 中完成。每次恢复干净快照后重新载入，用户修改模块不会污染后续调用；无需专用宿主转换工具。普通程序启动直接用目标 exe 和参数；不要为普通启动套上 Start-Process、RunAs 或动态 `--%`。提升权限需要用户明确授权。
 
-首次初始化检查 PowerShell 7.6，缺少时先提示通过 winget 安装，成功后停止并提示重启 AllAgent.NET。宿主 Python 检查可执行性和 3.10–3.14 版本范围，缺少或版本不符时提示通过 winget 安装 Python 3.13 并在成功后重启；环境就绪后在 `python/venv` 中安装常用 pip 库并生成 `pip.md`。随后实际验证 Hyperlight guest 的标准库导入、编码往返及 struct 操作；只有成功后才记录初始化完成。`/doctor` 和聊天启动也使用相同 guest 校验。宿主 pip 库仍通过目录中明确的 Python 可执行文件与 run_shell 使用，脚本需要显式 import；它们不自动成为 guest 的库或全局变量。
+首次初始化只确认随包 PowerShell SDK worker 存在，缺失时提示重新安装软件，不再探测或安装系统 PowerShell；宿主 Python 只在 Monty 备用沙箱需要初始化时按需查找 3.10–3.14，Hyperlight 可用时无需安装。随后实际验证 Hyperlight guest 的标准库导入、编码往返及 struct 操作；只有成功后才记录初始化完成。`/doctor` 和聊天启动也使用相同 guest 校验。宿主 pip 库仍通过目录中明确的 Python 可执行文件与 run_shell 使用，脚本需要显式 import；它们不自动成为 guest 的库或全局变量。
 
 Hyperlight worker 的初始化、执行、快照恢复和释放固定在同一线程。检测到原生 Tokio 上下文错误或 poisoned lock 时丢弃 worker，下一次调用创建新的 microVM；不自动重放失败的代码，因为之前的宿主副作用可能已经发生。普通 Python 异常保持原诊断并由下一次干净快照恢复。
 

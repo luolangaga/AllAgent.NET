@@ -30,8 +30,19 @@ if (!$Version) {
     $Version = $projectXml.Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
     if (!$Version) { throw "No <Version> in $project; pass -Version instead." }
 }
-# The installer stamps this into the exe version resource, which only takes numbers.
-if ($Version -notmatch '^\d+(\.\d+){1,3}$') { throw "Version must be numeric like 1.0.7 (got '$Version')." }
+# NuGet and the release tag may carry a pre-release suffix; the installer keeps
+# the full string for display but writes a numeric value into the exe resource.
+if ($Version -notmatch '^\d+(\.\d+){1,3}(-[0-9A-Za-z.-]+)?$') {
+    throw "Version must look like 1.0.7 or 1.0.7-beta.1 (got '$Version')."
+}
+$VersionInfo = ($Version -split '-', 2)[0]
+if ($VersionInfo -notmatch '^\d+(\.\d+){1,3}$') { throw "Invalid numeric version: $VersionInfo" }
+
+switch ($Runtime) {
+    'win-x64' { $Architecture = 'x64compatible'; $Suffix = 'win-x64' }
+    'win-arm64' { $Architecture = 'arm64'; $Suffix = 'win-arm64' }
+    default { throw "Unsupported runtime '$Runtime'; use win-x64 or win-arm64." }
+}
 
 function Invoke-Step([string]$Title, [scriptblock]$Action) {
     Write-Host "==> $Title" -ForegroundColor Cyan
@@ -69,10 +80,13 @@ if (!$SkipPublish) {
     Write-Host ("    payload trimmed: {0:N1} MB of symbols and {1} reference folders removed" -f ($symbolBytes / 1MB), $references.Count)
     if (!(Test-Path (Join-Path $payload 'allagent.exe'))) { throw "Publish output is missing allagent.exe." }
     # Every worker lives in the same directory as the host so one self-contained runtime is shared.
-    foreach ($required in @('web\index.html', 'AllAgent.NET.Gui.exe', 'AllAgent.NET.Sandbox.exe', 'AllAgent.NET.PowerShell.exe', 'AllAgent.NET.Browser.exe', 'AllAgent.NET.ComputerUse.exe', 'builtin-plugins\AllAgent.NET.CommandCode\allagent-plugin.json')) {
+    foreach ($required in @('web\index.html', 'AllAgent.NET.Gui.exe', 'AllAgent.NET.Sandbox.exe', 'AllAgent.NET.PowerShell.exe', 'AllAgent.NET.Browser.exe', 'AllAgent.NET.ComputerUse.exe', 'builtin-plugins\AllAgent.NET.CommandCode\allagent-plugin.json', 'builtin-plugins\AllAgent.NET.Qoder\allagent-plugin.json')) {
         if (!(Test-Path (Join-Path $payload $required))) { throw "Publish output is missing $required." }
     }
+
 }
+
+if (!(Test-Path $payload)) { throw "Publish payload is missing: $payload" }
 
 if (!$IsccPath) {
     $candidatePaths = @()
@@ -84,13 +98,17 @@ if (!$IsccPath) {
 }
 
 Invoke-Step "Compile installer (Inno Setup)" {
-    & $IsccPath "/DAppVersion=$Version" "/DPayloadDir=$payload" "/DOutputDir=$OutputDirectory" $script
+    & $IsccPath "/DAppVersion=$Version" "/DVersionInfo=$VersionInfo" "/DArchitecture=$Architecture" "/DOutputSuffix=$Suffix" "/DPayloadDir=$payload" "/DOutputDir=$OutputDirectory" $script
 }
 
-$setup = Join-Path $OutputDirectory "AllAgent.NET-$Version-$Runtime-setup.exe"
+$setup = Join-Path $OutputDirectory "AllAgent.NET-$Version-$Suffix-setup.exe"
 if (!(Test-Path $setup)) { throw "Installer was not produced: $setup" }
 $hash = (Get-FileHash $setup -Algorithm SHA256).Hash
-"$hash *$(Split-Path -Leaf $setup)" | Set-Content (Join-Path $OutputDirectory 'SHA256SUMS.txt') -Encoding ascii
+$line = "$hash *$(Split-Path -Leaf $setup)"
+$line | Set-Content (Join-Path $OutputDirectory "SHA256SUMS.$Suffix.txt") -Encoding ascii
+if ($Suffix -eq 'win-x64') {
+    $line | Set-Content (Join-Path $OutputDirectory 'SHA256SUMS.txt') -Encoding ascii
+}
 ""
 Write-Host ("Installer : {0}" -f $setup)
 Write-Host ("Size      : {0:N1} MB" -f ((Get-Item $setup).Length / 1MB))

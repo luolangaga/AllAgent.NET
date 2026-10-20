@@ -29,9 +29,9 @@ public sealed record PluginWebContributions(
 }
 
 public sealed record PluginWebPage(string Id, string Title, string Entry, string? Icon = null, int Order = 50);
-public sealed record PluginWebPanel(string Id, string Title, string Entry, int Order = 50);
+public sealed record PluginWebPanel(string Id, string Title, string Entry, string? Icon = null, int Order = 50);
 public sealed record PluginWebToolCard(string Tool, string Entry);
-public sealed record PluginWebCommand(string Id, string Title, string? Page = null);
+public sealed record PluginWebCommand(string Id, string Title, string? Page = null, string? Panel = null);
 public sealed record PluginWebSettingsSection(string Id, string Title, IReadOnlyList<PluginWebSettingField>? Fields = null, string? Entry = null);
 public sealed record PluginWebSettingField(string Key, string Label, string Type = "text", IReadOnlyList<string>? Options = null, string? Default = null, string? Description = null, string? Placeholder = null);
 public sealed record PluginWebComposerAction(string Id, string Title, string? Page = null, string? Icon = null);
@@ -103,9 +103,9 @@ internal static class PluginWebValidation
     {
         source ??= new();
         var pages = (source.Pages ?? []).Select(page => new PluginWebPage(page.Id, string.IsNullOrWhiteSpace(page.Title) ? page.Id : page.Title, ResolveEntry(page.Entry, installDirectory, webRoot, "页面"), page.Icon, page.Order)).ToArray();
-        var panels = (source.Panels ?? []).Select(panel => new PluginWebPanel(panel.Id, string.IsNullOrWhiteSpace(panel.Title) ? panel.Id : panel.Title, ResolveEntry(panel.Entry, installDirectory, webRoot, "面板"), panel.Order)).ToArray();
+        var panels = (source.Panels ?? []).Select(panel => new PluginWebPanel(panel.Id, string.IsNullOrWhiteSpace(panel.Title) ? panel.Id : panel.Title, ResolveEntry(panel.Entry, installDirectory, webRoot, "面板"), panel.Icon, panel.Order)).ToArray();
         var toolCards = (source.ToolCards ?? []).Select(card => new PluginWebToolCard(card.Tool, ResolveEntry(card.Entry, installDirectory, webRoot, "工具卡"))).ToArray();
-        var commands = (source.Commands ?? []).Select(command => new PluginWebCommand(command.Id, string.IsNullOrWhiteSpace(command.Title) ? command.Id : command.Title, command.Page)).ToArray();
+        var commands = (source.Commands ?? []).Select(command => new PluginWebCommand(command.Id, string.IsNullOrWhiteSpace(command.Title) ? command.Id : command.Title, command.Page, command.Panel)).ToArray();
         var settings = (source.Settings ?? []).Select(section =>
         {
             var fields = (section.Fields ?? []).Select(field =>

@@ -13,7 +13,7 @@ CodeAct · Windows Computer Use · bundled PowerShell 7.6 · TUI + GUI
 [![NuGet downloads](https://img.shields.io/nuget/dt/AllAgent.NET.Terminal?style=for-the-badge&labelColor=1f2937&color=8b5cf6&logo=nuget&logoColor=white)](https://www.nuget.org/packages/AllAgent.NET.Terminal)
 [![Stars](https://img.shields.io/github/stars/luolangaga/AllAgent.NET?style=for-the-badge&labelColor=1f2937&color=f59e0b&logo=github&logoColor=white)](https://github.com/luolangaga/AllAgent.NET/stargazers)
 [![Issues](https://img.shields.io/github/issues/luolangaga/AllAgent.NET?style=for-the-badge&labelColor=1f2937&color=ef4444&logo=github&logoColor=white)](https://github.com/luolangaga/AllAgent.NET/issues)
-[![Platform](https://img.shields.io/badge/Windows-x64-0078d6?style=for-the-badge&labelColor=1f2937&logo=windows&logoColor=white)](#requirements)
+[![Platform](https://img.shields.io/badge/Windows-x64%20%7C%20ARM64-0078d6?style=for-the-badge&labelColor=1f2937&logo=windows&logoColor=white)](#requirements)
 [![.NET](https://img.shields.io/badge/.NET-10-512bd4?style=for-the-badge&labelColor=1f2937&logo=dotnet&logoColor=white)](#build-from-source)
 [![License](https://img.shields.io/badge/License-GPL--3.0--only-22c55e?style=for-the-badge&labelColor=1f2937)](LICENSE)
 [![CodeAct](https://img.shields.io/badge/CodeAct-Python%20orchestration-0ea5e9?style=for-the-badge&labelColor=1f2937)](#the-comparison)
@@ -127,7 +127,7 @@ Plugins are .NET packages, not a separate scripting layer:
 - Register tools with `[AgentTool]` and `[Description]`.
 - Extend the Web workbench through the plugin `web` block: pages, custom tool cards, and command-palette entries in a sandboxed iframe.
 - Publish plugins to NuGet or install them from the plugin manager.
-- Built-in examples include CommandCode, GitHub, WorkBuddy, and CodeGraph.
+- Built-in examples include CommandCode, GitHub, WorkBuddy, CodeGraph, and Qoder.
 
 ## Why .NET, not Electron or Node
 
@@ -178,7 +178,7 @@ flowchart LR
 
 ![AllAgent.NET TUI](docs/screenshots/tui.png)
 
-*TUI command overview, organized from the actual `allagent --help` commands. Chat, approvals, plans, and background sessions all live in the same terminal.*
+*Full-screen TUI: welcome screen, recent conversations, extension status, and the composer in one terminal. Chat, approvals, plans, and background sessions stay in the same view.*
 
 ### GUI workbench
 
@@ -192,7 +192,7 @@ flowchart LR
 
 *Git management (demo data): staging, commits, branches, commit graph, stash, push/pull, and AI-generated commit messages.*
 
-> The screenshots show the current Chinese UI. "Demo data" means the page is rendered through the built-in mock transport to show layout and interaction; connect a local host to see real workspace data. The TUI image is organized from the actual `allagent --help` commands.
+> The screenshots show the current Chinese UI. "Demo data" means the page is rendered through the built-in mock transport to show layout and interaction; connect a local host to see real workspace data. The TUI image shows the actual running interface.
 
 ## Quick start
 
@@ -200,9 +200,9 @@ flowchart LR
 
 | Item | Requirement |
 |---|---|
-| OS | Windows x64 (agent execution currently supports Windows x64 only) |
+| OS | Windows x64 / ARM64 (agent execution is Windows-only; ARM64 falls back to Monty when Hyperlight is unavailable) |
 | .NET | .NET 10 SDK for source builds; .NET 10 or newer at runtime |
-| Python | 3.10–3.14, executable; winget can install Python 3.13 when missing or mismatched |
+| Python | Optional; only the Monty fallback sandbox needs 3.10–3.14 for its first setup, and Hyperlight needs none |
 | Virtualization | Hyperlight needs hardware virtualization and Windows Hypervisor Platform; without it, Monty is used automatically |
 | PowerShell | Not required separately; PowerShell SDK 7.6.x is bundled and runs in its own worker |
 | ripgrep | Required for content search; `allagent doctor --install` can install it |
@@ -211,12 +211,17 @@ flowchart LR
 
 ### Install
 
-**Windows installer (recommended)**: download `AllAgent.NET-<version>-win-x64-setup.exe` from [Releases](https://github.com/luolangaga/AllAgent.NET/releases). The installer can create "Terminal" and "Desktop" shortcuts and install WebView2, Python 3.13, and ripgrep. It is self-contained; no .NET runtime is required. See [Windows installer](docs/windows-installer.zh-CN.md).
+**Windows installer (recommended)**: download the installer for your architecture from [Releases](https://github.com/luolangaga/AllAgent.NET/releases): `AllAgent.NET-<version>-win-x64-setup.exe` or `AllAgent.NET-<version>-win-arm64-setup.exe`. The installer can create "Terminal" and "Desktop" shortcuts and install WebView2 and ripgrep. It is self-contained; no .NET runtime is required. See [Windows installer](docs/windows-installer.zh-CN.md).
 
 **Install as a .NET Tool**:
 
 ```powershell
+# Windows x64
 dotnet tool install --global AllAgent.NET.Terminal
+
+# Windows on ARM (the command is still allagent)
+dotnet tool install --global AllAgent.NET.Terminal.arm64
+
 allagent --help
 allagent doctor
 ```
@@ -226,6 +231,17 @@ Upgrade or uninstall:
 ```powershell
 dotnet tool update --global AllAgent.NET.Terminal
 dotnet tool uninstall --global AllAgent.NET.Terminal
+
+# Windows on ARM
+dotnet tool update --global AllAgent.NET.Terminal.arm64
+dotnet tool uninstall --global AllAgent.NET.Terminal.arm64
+```
+
+The built-in updater works for tool installs too:
+
+```powershell
+allagent update --check
+allagent update
 ```
 
 For local NuGet packaging and installation, see [.NET Tool packaging](docs/nuget-tool.zh-CN.md). For building the EXE installer locally, see [Windows installer](docs/windows-installer.zh-CN.md).
@@ -236,7 +252,7 @@ For local NuGet packaging and installation, see [.NET Tool packaging](docs/nuget
 allagent chat --workspace C:\Projects\MyProject
 ```
 
-The first chat initializes the environment: the bundled PowerShell SDK worker starts and self-checks, ripgrep and the host Python version are checked, and missing pieces produce winget commands with a restart prompt after installation. Model and extension management do not start the sandbox; the execution environment is validated on the first task. Use `--no-initialize` when offline or when you only want to change configuration.
+The first chat initializes the environment: the bundled PowerShell SDK worker and ripgrep are checked, and host Python is no longer required up front — it is resolved only when the Monty fallback sandbox is used. Model and extension management do not start the sandbox; the execution environment is validated on the first task. Use `--no-initialize` when offline or when you only want to change configuration.
 
 ### Configure a model
 
@@ -279,7 +295,7 @@ The window is a bundled WPF + WebView2 shell (`AllAgent.NET.Gui.exe`), with one 
 | **restricted (default)** | File reads/writes inside the workspace and trusted shell aliases (`git`, `rg`, `dotnet`, `node`, `npm`, and more via `--allow-shell`) run directly. Paths outside the workspace, untrusted programs, and MCP / desktop / plugin tools still require per-call approval |
 | **full** | Host tools generally no longer require per-call approval and may access paths outside the workspace. Sandbox isolation still applies; administrator rights are never granted |
 | **ask** | Per-call approval, including writes inside the workspace. The approval card defaults to "allow this time": `Enter` confirms, `Y` allows, `N` or `Esc` rejects, and `A` remembers the directory |
-| **plan** | Read-only investigation. The model submits a Markdown plan through `plan_propose`; the TUI shows Markdown and the Web shows an HTML approval card. Approval switches to full access and starts execution in the same turn; rejection continues revision |
+| **plan** | Read-only investigation. The model submits a Markdown plan through `plan_propose`; the TUI shows Markdown and the Web shows an HTML approval card. The card accepts a comment or suggested change: submitting it keeps plan mode and the model revises the plan, while an approved plan carries the comment into execution. Plan text follows the interface language. Approval switches to full access and starts execution in the same turn; rejection continues revision |
 | **simple** | Only `powershell_script`, `file_read`, and `file_edit` remain. Skills, MCP, sub-agents, plugins, browser, and desktop tools are disabled; creating files/directories and executing are delegated to PowerShell |
 
 Key boundaries:
@@ -336,6 +352,7 @@ Key boundaries:
 | Workspace-to-data-directory mapping | `allagent-projects.json` in the program directory |
 | Plugins, OAuth credentials, user skills, shared runtime | `%APPDATA%\AllAgent.NET` (or the explicit `--data-dir`) |
 | Logs | `%APPDATA%\AllAgent.NET\allagent.log` |
+| Crash reports, log tail, and memory dumps | `%APPDATA%\AllAgent.NET\crashes\` |
 
 External user skills are scanned only from `~/.agents/skills/`; AllAgent.NET's own skill directory and project skills follow the existing rules.
 
@@ -379,8 +396,13 @@ npm test           # vitest run
 ```powershell
 dotnet test tests/AllAgent.NET.Tests
 
-# Publish a self-contained Windows x64 build
+# Publish self-contained Windows x64 / ARM64 builds
 dotnet publish src/AllAgent.NET.Terminal -c Release -r win-x64 --self-contained true -o artifacts/allagent-win-x64
+dotnet publish src/AllAgent.NET.Terminal -c Release -r win-arm64 --self-contained true -o artifacts/allagent-win-arm64
+
+# NuGet tool packages (separate package IDs for x64 and ARM64)
+tools\build-nuget.ps1 -Version 1.0.7 -Runtime win-x64
+tools\build-nuget.ps1 -Version 1.0.7 -Runtime win-arm64
 ```
 
 Keep the entire output directory after publishing: the terminal host and all workers (`AllAgent.NET.Gui.exe`, `AllAgent.NET.Browser.exe`, `AllAgent.NET.ComputerUse.exe`, `AllAgent.NET.Sandbox.exe`, `AllAgent.NET.PowerShell.exe`) share one runtime in the same directory, alongside `Modules/`, `web/`, `everything/`, and `builtin-plugins/`. `AllAgent.NET.Core` can be embedded in other .NET applications; register extension tools with `[AgentTool]` and `[Description]`, and the generator emits `IAgentToolSet`.
@@ -406,11 +428,12 @@ Keep the entire output directory after publishing: the terminal host and all wor
 |---|---|
 | Not sure what is missing | Run `allagent doctor` (or `/doctor` in chat); `doctor --install` installs dependencies after confirmation |
 | Content search unavailable | Install ripgrep: `winget install --id BurntSushi.ripgrep.MSVC` |
-| Host Python missing or mismatched | Requires 3.10–3.14; install Python 3.13 with winget as prompted and restart the app |
+| Host Python missing | Only needed when Hyperlight is unavailable and the Monty fallback is used; install Python 3.10–3.14, or run `allagent doctor --install` |
 | Sandbox fails to start | `/sandbox status` shows the effective backend and fallback reason; use `/sandbox monty` when virtualization is unavailable |
 | PowerShell tool reports a missing worker | The worker is bundled; a missing worker means a damaged install — reinstall AllAgent.NET |
 | Cannot connect to a model | `/login status` for account and connection state; `/providers show <name>` for the redacted configuration |
 | Need logs | `%APPDATA%\AllAgent.NET\allagent.log`, including `[Gui]`, `[GuiHost]`, and bridge call records |
+| The app crashed or exited unexpectedly | The next launch points at the report; use `allagent crash list`, `show`, and `open` to inspect it and submit it with `report.md` attached |
 
 ## More documentation
 
@@ -426,6 +449,9 @@ Keep the entire output directory after publishing: the terminal host and all wor
 - [PowerShell persistent sessions](docs/powershell-session.zh-CN.md) · [PowerShell capability store](docs/powershell-store.zh-CN.md)
 - [Sub-agent configuration](docs/subagent-configuration.zh-CN.md) · [Custom agent role examples](docs/agent-roles.example.json)
 - [Web workbench: files, Git, and integrated terminal](docs/webui-files-git-terminal.zh-CN.md)
+- [Crash reports and diagnostics](docs/crash-reporting.zh-CN.md)
+- [Auto-update: NuGet / GitCode / GitHub](docs/auto-update.zh-CN.md)
+- [CI and release pipeline: x64 / ARM64, NuGet, GitCode](docs/release-ci.zh-CN.md)
 - [.NET Tool packaging and installation](docs/nuget-tool.zh-CN.md)
 - [Plugin development guide](docs/plugins.zh-CN.md) · [Plugin development for beginners](docs/plugin-development-beginner.zh-CN.md) · [Plugin web UI extensions](docs/plugin-web-ui.zh-CN.md)
 
@@ -445,6 +471,6 @@ Report issues or suggest improvements through [Issues](https://github.com/luolan
 
 **If this is useful, give it a star.**
 
-<sub>Windows x64 · .NET 10 · GPL-3.0-only</sub>
+<sub>Windows x64 · ARM64 · .NET 10 · GPL-3.0-only</sub>
 
 </div>

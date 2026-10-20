@@ -32,6 +32,10 @@ public class MultiTerminalStorageTests
         Assert.All(reader.Conversations, conversation => Assert.Equal(10, conversation.Messages.Count));
         Assert.Equal(40, Assert.Single(reader.GetTokenUsageStats()).Requests);
         Assert.Equal(200, Assert.Single(reader.GetTokenUsageStats()).TotalTokens);
+        var daily = Assert.Single(reader.GetDailyUsageStats());
+        Assert.Equal(DateTime.Now.ToString("yyyy-MM-dd"), daily.Date);
+        Assert.Equal(40, daily.Requests);
+        Assert.Equal(200, daily.InputTokens + daily.OutputTokens);
         for (var worker = 0; worker < 4; worker++) Assert.Equal("9", reader.GetSetting("worker-" + worker));
     }
 

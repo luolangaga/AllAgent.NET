@@ -89,10 +89,9 @@ export async function runCommand(raw: string, host: CommandHost, context: Comman
     switch (name) {
       case '/help': host.openPalette(); return true
       case '/new': case '/clear': {
-        const conversations = useConversationsStore()
-        await conversations.createConversation()
+        useConversationsStore().newConversation()
         host.go('chat')
-        notices.notify('已创建新对话', undefined, 'success')
+        notices.notify('已开始新对话', undefined, 'success')
         return true
       }
       case '/session': case '/sessions': case '/resume':
@@ -166,7 +165,7 @@ export async function runCommand(raw: string, host: CommandHost, context: Comman
         return true
       }
       case '/thinking':
-        notices.notify('思考等级', '在输入框的「思考等级」中选择标准回答、深度思考或具体等级；按消息生效。')
+        notices.notify('思考等级', '在输入框的「思考等级」中选择模型原生等级（标准回答、low/high/max 等）；「跟随配置」使用模型配置里的默认值，按消息生效。')
         return true
       case '/details':
         notices.notify('工具详情', '点击对话中的工具卡片即可展开参数与输出。')

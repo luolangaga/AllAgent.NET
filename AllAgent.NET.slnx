@@ -5,6 +5,7 @@
     <Project Path="plugins/AllAgent.NET.CommandCode/AllAgent.NET.CommandCode.csproj" />
     <Project Path="plugins/AllAgent.NET.WorkBuddy/AllAgent.NET.WorkBuddy.csproj" />
     <Project Path="plugins/AllAgent.NET.CodeGraph/AllAgent.NET.CodeGraph.csproj" />
+    <Project Path="plugins/AllAgent.NET.Qoder/AllAgent.NET.Qoder.csproj" />
   </Folder>
   <Folder Name="/samples/">
     <Project Path="samples/AllAgent.NET.SamplePlugin/AllAgent.NET.SamplePlugin.csproj" />

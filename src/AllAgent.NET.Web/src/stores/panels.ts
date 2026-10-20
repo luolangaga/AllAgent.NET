@@ -1,7 +1,7 @@
 import { defineStore, ref } from '@/lib/store'
 
-/** The three floating bubbles the topbar opens: workspace files, Git and the terminal. */
-export type PanelId = 'files' | 'git' | 'terminal'
+/** Floating bubbles the topbar opens: the three host bubbles plus any plugin panel key. */
+export type PanelId = string
 
 const OPEN_KEY = 'allagent.panels.open'
 
@@ -9,8 +9,10 @@ const DEFAULT_OPEN: Record<PanelId, boolean> = { files: false, git: false, termi
 
 function readOpen(): Record<PanelId, boolean> {
   try {
-    const stored = JSON.parse(localStorage.getItem(OPEN_KEY) ?? '{}') as Partial<Record<PanelId, boolean>>
-    return { files: stored.files ?? false, git: stored.git ?? false, terminal: stored.terminal ?? false }
+    const stored = JSON.parse(localStorage.getItem(OPEN_KEY) ?? '{}') as Record<string, unknown>
+    const values: Record<string, boolean> = {}
+    for (const [key, value] of Object.entries(stored)) if (typeof value === 'boolean') values[key] = value
+    return { ...DEFAULT_OPEN, ...values }
   } catch {
     return { ...DEFAULT_OPEN }
   }

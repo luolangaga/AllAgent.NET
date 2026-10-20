@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AllAgent.NET.Core.Localization;
 using AllAgent.NET.Core.Runtime;
 using AllAgent.NET.Core.Services.AI;
 using AllAgent.NET.Core.Tools;
@@ -151,7 +152,7 @@ public sealed class CodeActProvider(ToolRegistry registry, PythonCodeValidator v
             _ => "CURRENT HOST MODE: ASK. Writes, external-directory access and untrusted commands require host approval. Python remains isolated; the guest runtime determines supported syntax and functions."
         });
         if (names.Contains("plan_propose"))
-            dynamic.Add("## Plan approval\nWhen the research is complete, call call_tool(\"plan_propose\", title=..., markdown=...) exactly once. The Markdown plan must contain the goal, relevant context, affected files, ordered steps, risks and verification. The call blocks until the human approves or rejects it. If approved, full auto-approval is active: execute the approved plan immediately in subsequent execute_code calls and do not propose the same plan again. If rejected, revise the plan from the feedback and propose it again. Do not print a duplicate plan as ordinary text.");
+            dynamic.Add("## Plan approval\nWhen the research is complete, call call_tool(\"plan_propose\", title=..., markdown=...) exactly once. The Markdown plan must contain the goal, relevant context, affected files, ordered steps, risks and verification. Write the plan title and Markdown in " + (HostText.Language == UiLanguage.Zh ? "Simplified Chinese" : "English") + ", matching the interface language, unless the current user explicitly requested another language. The call blocks until the human approves or rejects it. The decision may include a human comment: if rejected, revise the plan from that comment and propose it again; if approved, follow the comment while executing. If approved, full auto-approval is active: execute the approved plan immediately in subsequent execute_code calls and do not propose the same plan again. Do not print a duplicate plan as ordinary text.");
         if (ReadOnlyProvider?.Invoke() == true) dynamic.Add("CURRENT ROLE RESTRICTION: READ ONLY. Only the disclosed read tools are allowed. No edits, process execution or delegation. If plan_propose is listed, finish the research, submit the plan through it, and wait for the human decision; after approval the host enables full access and you must execute the plan.");
         if (!simple && names.Contains("run_shell")) dynamic.Add("Trusted shell aliases: " + JsonSerializer.Serialize(shellAllowlist?.Keys.Order(StringComparer.Ordinal).ToArray() ?? [], ToolResult.JsonOptions));
         dynamic.Add("Verified host environment: " + (runtimeContext ?? "Use workspace-relative paths; host context was not supplied."));

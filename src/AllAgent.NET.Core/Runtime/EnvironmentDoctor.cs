@@ -6,7 +6,7 @@ namespace AllAgent.NET.Core.Runtime;
 
 public sealed record RuntimeEnvironment(string? Python, string? PowerShell, IReadOnlyList<string> Problems)
 {
-    public bool Ready => Python != null && PowerShell != null;
+    public bool Ready => PowerShell != null;
 }
 
 public sealed class EnvironmentRestartRequiredException(string message) : InvalidOperationException(message);
@@ -20,13 +20,24 @@ public sealed class EnvironmentDoctor
     internal EnvironmentDoctor(Func<string, string?> find, Func<ProcessStartInfo, TimeSpan, CancellationToken, Task<ProcessOutput>> run)
     { _find = find; _run = run; }
 
-    public async Task<RuntimeEnvironment> CheckAsync(string? python = null, string? pwsh = null, CancellationToken ct = default)
+    /// <summary>Startup check: the bundled PowerShell SDK worker is the only required component.
+    /// Python is resolved on demand by the Monty fallback sandbox.</summary>
+    public Task<RuntimeEnvironment> CheckAsync(string? pwsh = null, CancellationToken ct = default)
     {
         var problems = new List<string>();
-        string? pythonPath = null;
+        var powershell = pwsh ?? Path.Combine(AppContext.BaseDirectory, "AllAgent.NET.PowerShell.exe");
+        string? powershellPath = File.Exists(powershell) ? Path.GetFullPath(powershell) : null;
+        if (powershellPath == null) problems.Add("随包 PowerShell SDK worker 缺失，请修复或重新安装 AllAgent；无需安装系统 PowerShell。");
+        return Task.FromResult(new RuntimeEnvironment(null, powershellPath, problems));
+    }
+
+    /// <summary>Find a supported host Python for the Monty fallback sandbox. Never installs.</summary>
+    public async Task<string?> ResolvePythonAsync(string? python = null, CancellationToken ct = default)
+    {
         var candidates = (python != null ? new[] { python } : new[] { _find("python.exe"), _find("python3.exe"), _find("py.exe") }).Where(path => path != null).Distinct();
         foreach (var candidate in candidates)
         {
+            ct.ThrowIfCancellationRequested();
             try
             {
                 var args = new List<string>();
@@ -37,47 +48,27 @@ public sealed class EnvironmentDoctor
                 var output = await _run(info, TimeSpan.FromSeconds(10), ct);
                 using var json = JsonDocument.Parse(output.Stdout);
                 if (output.ExitCode == 0 && json.RootElement.GetProperty("major").GetInt32() == 3 && json.RootElement.GetProperty("minor").GetInt32() is >= 10 and <= 14)
-                {
-                    pythonPath = json.RootElement.GetProperty("exe").GetString();
-                    break;
-                }
+                    return json.RootElement.GetProperty("exe").GetString();
             }
             catch (Exception ex) when (ex is not OperationCanceledException) { }
         }
-        if (pythonPath == null) problems.Add("共享 pip 库需要可执行的 Python 3.10–3.14；缺少或版本不符时将通过 winget 安装 Python 3.13。");
-        var powershell = pwsh ?? Path.Combine(AppContext.BaseDirectory, "AllAgent.NET.PowerShell.exe");
-        string? powershellPath = null;
-        try
-        {
-            var output = await _run(BoundedProcess.StartInfo(powershell, ["--probe"]), TimeSpan.FromSeconds(30), ct);
-            using var probe = JsonDocument.Parse(output.Stdout);
-            if (output.ExitCode == 0 && probe.RootElement.GetProperty("runtime").GetString() == "AllAgent.NET.PowerShell.SDK")
-                powershellPath = Path.GetFullPath(powershell);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException) { }
-        if (powershellPath == null) problems.Add("随包 PowerShell SDK worker 不可用，请修复或重新安装 AllAgent；无需安装系统 PowerShell。");
-        return new(pythonPath, powershellPath, problems);
+        return null;
     }
 
-    public async Task<RuntimeEnvironment> EnsureAsync(Func<string, CancellationToken, ValueTask<bool>> confirmInstall,
-        string? python = null, string? pwsh = null, CancellationToken ct = default)
+    /// <summary>Explicit repair action: install Python through winget when the operator asked for it.</summary>
+    public async Task<string> EnsurePythonAsync(Func<string, CancellationToken, ValueTask<bool>> confirmInstall,
+        string? python = null, CancellationToken ct = default)
     {
-        var environment = await CheckAsync(python, pwsh, ct);
-        if (environment.Ready) return environment;
-        if (environment.PowerShell == null) throw new InvalidOperationException(string.Join("; ", environment.Problems));
-        var installed = new List<string>();
-        foreach (var package in new[] { environment.Python == null ? "Python.Python.3.13" : null }.Where(package => package != null))
-        {
-            var name = "Python 3.13";
-            if (!await confirmInstall($"将安装 {name}，并通过 winget 安装，安装完成之后请关闭并重新启动 AllAgent。", ct))
-                throw new InvalidOperationException("安装未获同意，Agent 保持停用。");
-            var winget = _find("winget.exe") ?? throw new InvalidOperationException("未找到 winget。请安装 App Installer 后重试。");
-            var installArgs = new List<string> { "install", "--id", package!, "--exact", "--source", "winget", "--silent", "--accept-source-agreements", "--accept-package-agreements" };
-            var result = await _run(BoundedProcess.StartInfo(winget, installArgs), TimeSpan.FromMinutes(10), ct);
-            if (result.ExitCode != 0) throw new InvalidOperationException($"winget 安装 {name} 失败：{ToolResult.Clip(result.Stderr + result.Stdout)}");
-            installed.Add(name);
-        }
-        throw new EnvironmentRestartRequiredException(string.Join("、", installed) + " 已通过 winget 安装完成。请关闭并重新启动 AllAgent（终端），重启后将继续初始化。");
+        if (await ResolvePythonAsync(python, ct) is { } resolved) return resolved;
+        if (python != null) throw new InvalidOperationException($"指定的 Python 不可用：{python}");
+        const string name = "Python 3.13";
+        if (!await confirmInstall($"将安装 {name}（仅用于 Monty 备用沙箱初始化），通过 winget 安装，安装完成之后请关闭并重新启动 AllAgent。", ct))
+            throw new InvalidOperationException("安装未获同意，Agent 保持停用。");
+        var winget = _find("winget.exe") ?? throw new InvalidOperationException("未找到 winget。请安装 App Installer 后重试。");
+        var installArgs = new List<string> { "install", "--id", "Python.Python.3.13", "--exact", "--source", "winget", "--silent", "--accept-source-agreements", "--accept-package-agreements" };
+        var result = await _run(BoundedProcess.StartInfo(winget, installArgs), TimeSpan.FromMinutes(10), ct);
+        if (result.ExitCode != 0) throw new InvalidOperationException($"winget 安装 {name} 失败：{ToolResult.Clip(result.Stderr + result.Stdout)}");
+        throw new EnvironmentRestartRequiredException($"{name} 已通过 winget 安装完成。请关闭并重新启动 AllAgent（终端），重启后将继续初始化。");
     }
 
     public static string? FindExecutable(string name)

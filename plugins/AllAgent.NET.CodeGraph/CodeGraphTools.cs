@@ -9,7 +9,7 @@ namespace AllAgent.NET.CodeGraph;
 /// stay hidden until the model loads it.</summary>
 public partial class CodeGraphTools(CodeGraphService service) : IAgentToolPreflight
 {
-    [AgentTool("codegraph_explore"), Description("Answer architecture, call-flow, where-is-X or impact questions from the built-in CodeGraph index in one read-only call. The index is built and refreshed in-process on demand. Returns verbatim source, call paths and blast radius. Load the code-graph skill first.")]
+    [AgentTool("codegraph_explore"), Description("Answer architecture, call-flow, where-is-X or impact questions from the built-in CodeGraph index in one read-only call. The index is built and refreshed in-process on demand. Returns ToolResult.data with `output` (the CodeGraph text), `truncated`, `workspace` and `syncedAt`; read `data.output`, not stdout/stderr. Load the code-graph skill first.")]
     public async Task<ToolResult> ExploreAsync(
         [Description("Natural-language question or a set of symbol/file names; not a shell command")] string query,
         CancellationToken ct = default)
@@ -34,7 +34,7 @@ public partial class CodeGraphTools(CodeGraphService service) : IAgentToolPrefli
         return ToolResult.Success(new { workspace, output, truncated, syncedAt = result.SyncedAt }, truncated) with { Card = card };
     }
 
-    [AgentTool("codegraph_status"), Description("Report whether the current workspace has a CodeGraph index and show its statistics. The index is built in-process; no external installation is involved. Read-only. Load the code-graph skill first.")]
+    [AgentTool("codegraph_status"), Description("Report whether the current workspace has a CodeGraph index and show its statistics. Returns ToolResult.data with `indexed`, `files`, `symbols`, `references`, `indexPath`, `indexBytes`, `indexUpdatedAt`, `detail` and `error`. The index is built in-process; no external installation is involved. Read-only. Load the code-graph skill first.")]
     public async Task<ToolResult> StatusAsync(CancellationToken ct = default)
     {
         var status = await service.StatusAsync(Workspace(), ct);

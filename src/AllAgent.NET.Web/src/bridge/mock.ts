@@ -247,6 +247,50 @@ const settings: AppSettings = {
 
 const reply = '收到。我先把任务拆成三步执行：\n\n1. 读取当前实现，确认渲染路径与状态来源；\n2. 在沙箱里跑一次端到端脚本并收集输出；\n3. 汇总结果，给出可复用的结论。\n\n这是**演示传输**，接入桌面端或 `/web-ui` 后会执行真实任务。'
 
+function demoUsageStats() {
+  const providers = [
+    { providerId: 'openai', modelId: 'gpt-5.1', weight: 0.5 },
+    { providerId: 'anthropic', modelId: 'claude-sonnet-4.5', weight: 0.32 },
+    { providerId: 'google', modelId: 'gemini-2.5-pro', weight: 0.18 },
+  ]
+  const models = providers.map(item => ({ providerId: item.providerId, modelId: item.modelId, inputTokens: 0, outputTokens: 0, requests: 0, requestsWithUsage: 0 }))
+  const days = []
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  for (let offset = 119; offset >= 0; offset -= 1) {
+    const date = new Date(today)
+    date.setDate(date.getDate() - offset)
+    const month = String(date.getMonth() + 1).padStart(2, '0')
+    const day = String(date.getDate()).padStart(2, '0')
+    const weekend = date.getDay() === 0 || date.getDay() === 6
+    const wave = 1 + Math.sin(offset / 5) * 0.34 + Math.cos(offset / 11) * 0.16
+    const total = Math.max(0, Math.round((weekend ? 19000 : 64000) * wave))
+    const inputTokens = Math.round(total * 0.78)
+    const outputTokens = total - inputTokens
+    const requests = Math.max(1, Math.round(total / 1900))
+    days.push({ date: `${date.getFullYear()}-${month}-${day}`, inputTokens, outputTokens, requests, requestsWithUsage: requests })
+    for (const model of models) {
+      const weight = providers.find(item => item.modelId === model.modelId)!.weight
+      model.inputTokens += Math.round(inputTokens * weight)
+      model.outputTokens += Math.round(outputTokens * weight)
+      model.requests += Math.max(0, Math.round(requests * weight))
+      model.requestsWithUsage += Math.max(0, Math.round(requests * weight))
+    }
+  }
+  return {
+    models,
+    days,
+    totals: {
+      inputTokens: models.reduce((sum, model) => sum + model.inputTokens, 0),
+      outputTokens: models.reduce((sum, model) => sum + model.outputTokens, 0),
+      requests: models.reduce((sum, model) => sum + model.requests, 0),
+      requestsWithUsage: models.reduce((sum, model) => sum + model.requestsWithUsage, 0),
+      activeDays: days.filter(item => item.requests > 0).length,
+    },
+  }
+}
+
+
 export function createMockTransport(deliver: Deliver) {
   let streamTimer: number | undefined
   let cancelled = false
@@ -419,12 +463,25 @@ export function createMockTransport(deliver: Deliver) {
           .filter(entry => entry.path.toLowerCase().startsWith(query) || entry.name.toLowerCase().startsWith(query))
           .slice(0, 40))
       }
+      case 'webui.network.get': return {
+        lan: false,
+        port: 5173,
+        url: location.origin + '/',
+        localUrl: location.origin + '/',
+        urls: [],
+        authenticationRequired: false,
+        passwordConfigured: false,
+        accessUrl: null,
+        qrDataUrl: null,
+      }
+      // ── 设置 · 模型用量 ────────────────────────────────────────────────────
+      case 'usage.stats': return demoUsageStats()
       // ── 文件气泡（只读预览） ───────────────────────────────────────────────
       case 'workspace.tree': {
         const requested = String((params as { path?: string }).path ?? '.').replace(/\\/g, '/')
         const directory = requested === '' ? '.' : requested
         if (!(directory in demoTree)) throw new Error('目录不存在：' + directory)
-        return structuredClone(demoTree[directory])
+        return { path: directory, entries: structuredClone(demoTree[directory]), truncated: false }
       }
       case 'workspace.readFile': {
         const path = String((params as { path?: string }).path ?? '').replace(/\\/g, '/')

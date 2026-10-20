@@ -81,8 +81,8 @@ export const useApprovalsStore = defineStore('approvals', () => {
     questions.value = questions.value.filter(item => item.id !== id)
   }
 
-  async function respondPlan(id: string, approved: boolean) {
-    await invoke('plan.respond', { planId: id, approved })
+  async function respondPlan(id: string, approved: boolean, feedback?: string) {
+    await invoke('plan.respond', { planId: id, approved, feedback: feedback ?? null })
     revision++
     plans.value = plans.value.filter(item => item.id !== id)
   }

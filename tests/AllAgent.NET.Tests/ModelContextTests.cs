@@ -21,6 +21,28 @@ public sealed class ModelContextTests
         config.ModelContextWindows[config.DefaultModel] = 500000;
         Assert.Equal(500000, ModelContext.Capacity(config));
     }
+    [Fact]
+    public void WorkBuddyDefaultsTo300kAndEscapesTheLegacy100kFactoryValue()
+    {
+        var config = new ApiConfig { ProviderId = "workbuddy", DefaultModel = "deepseek-v4-flash" };
+        Assert.Equal(300000, ModelContext.Capacity(config));
+        config.ContextWindowTokens = 100000;
+        Assert.Equal(300000, ModelContext.Capacity(config));
+        // A value typed in the old GUI is explicit and must keep working.
+        config.ContextWindowTokens = 256000;
+        Assert.Equal(256000, ModelContext.Capacity(config));
+        // Per-model overrides from the composer or /context win over everything.
+        config.ModelContextWindows["deepseek-v4-flash"] = 400000;
+        Assert.Equal(400000, ModelContext.Capacity(config));
+        Assert.Equal(400000, ModelContext.Capacity(config, "deepseek-v4-flash"));
+        config.ModelContextWindows.Remove("deepseek-v4-flash");
+        // A window declared by the authenticated endpoint is authoritative too.
+        config.ModelLimits["deepseek-v4-flash"] = new(1000000, 128000);
+        Assert.Equal(1000000, ModelContext.Capacity(config));
+        config.ModelContextWindows["other-model"] = 512000;
+        Assert.Equal(512000, ModelContext.Capacity(config, "other-model"));
+        Assert.Equal(300000, ModelContext.Capacity(new ApiConfig { ProviderId = "workbuddy-intl", DefaultModel = "glm-5.2" }));
+    }
     [Theory]
     [InlineData("100k", 100000)]
     [InlineData("200k", 200000)]

@@ -13,7 +13,7 @@ CodeAct · Windows Computer Use · 随包 PowerShell 7.6 · TUI + GUI
 [![NuGet downloads](https://img.shields.io/nuget/dt/AllAgent.NET.Terminal?style=for-the-badge&labelColor=1f2937&color=8b5cf6&logo=nuget&logoColor=white)](https://www.nuget.org/packages/AllAgent.NET.Terminal)
 [![Stars](https://img.shields.io/github/stars/luolangaga/AllAgent.NET?style=for-the-badge&labelColor=1f2937&color=f59e0b&logo=github&logoColor=white)](https://github.com/luolangaga/AllAgent.NET/stargazers)
 [![Issues](https://img.shields.io/github/issues/luolangaga/AllAgent.NET?style=for-the-badge&labelColor=1f2937&color=ef4444&logo=github&logoColor=white)](https://github.com/luolangaga/AllAgent.NET/issues)
-[![Platform](https://img.shields.io/badge/Windows-x64-0078d6?style=for-the-badge&labelColor=1f2937&logo=windows&logoColor=white)](#环境要求)
+[![Platform](https://img.shields.io/badge/Windows-x64%20%7C%20ARM64-0078d6?style=for-the-badge&labelColor=1f2937&logo=windows&logoColor=white)](#环境要求)
 [![.NET](https://img.shields.io/badge/.NET-10-512bd4?style=for-the-badge&labelColor=1f2937&logo=dotnet&logoColor=white)](#从源码构建)
 [![License](https://img.shields.io/badge/License-GPL--3.0--only-22c55e?style=for-the-badge&labelColor=1f2937)](LICENSE)
 [![CodeAct](https://img.shields.io/badge/CodeAct-Python%20orchestration-0ea5e9?style=for-the-badge&labelColor=1f2937)](#对比)
@@ -127,7 +127,7 @@ GUI/Web 工作台不只是聊天页：
 - 用 `[AgentTool]` 和 `[Description]` 注册工具。
 - 通过插件的 `web` 块扩展 Web 工作台：页面、自定义工具卡、命令面板入口，运行在沙箱 iframe 里。
 - 发布到 NuGet，或从插件管理器安装。
-- 内置示例包括 CommandCode、GitHub、WorkBuddy、CodeGraph。
+- 内置示例包括 CommandCode、GitHub、WorkBuddy、CodeGraph、Qoder。
 
 ## 为什么选 .NET，而不是 Electron 或 Node
 
@@ -178,7 +178,7 @@ flowchart LR
 
 ![AllAgent.NET TUI](docs/screenshots/tui.png)
 
-*TUI 命令总览（按 `allagent --help` 的实际命令整理）。全屏聊天、审批、计划、后台会话都在同一个终端里完成。*
+*全屏 TUI：欢迎页、最近会话、扩展状态和输入区集中在同一个终端里；聊天、审批、计划、后台会话都不会离开这个界面。*
 
 ### GUI 工作台
 
@@ -192,7 +192,7 @@ flowchart LR
 
 *Git 管理（演示数据）：暂存、提交、分支、提交图、贮藏、推送/拉取，以及 AI 生成提交信息。*
 
-> 截图展示当前中文界面。“演示数据”表示 GUI 页面通过内置 mock 传输渲染，用于展示布局和交互；连接本地宿主后显示真实工作区数据。TUI 图按实际 `allagent --help` 的命令整理。
+> 截图展示当前中文界面。“演示数据”表示 GUI 页面通过内置 mock 传输渲染，用于展示布局和交互；连接本地宿主后显示真实工作区数据。TUI 图为实际运行界面。
 
 ## 快速开始
 
@@ -200,9 +200,9 @@ flowchart LR
 
 | 项目 | 要求 |
 |---|---|
-| 系统 | Windows x64（Agent 执行目前只支持 Windows x64） |
+| 系统 | Windows x64 / ARM64（Agent 执行仅支持 Windows；ARM64 在 Hyperlight 不可用时自动回退 Monty） |
 | .NET | 源码构建需要 .NET 10 SDK；运行时要求 .NET 10 或更高 |
-| Python | 3.10–3.14，需可执行；缺失或版本不符时按提示用 winget 安装 Python 3.13 |
+| Python | 可选；只有 Monty 备用沙箱首次初始化需要 3.10–3.14，Hyperlight 可用时无需安装 |
 | 虚拟化 | Hyperlight 需要硬件虚拟化与 Windows Hypervisor Platform；没有时自动使用 Monty |
 | PowerShell | 无需单独安装，随包嵌入 PowerShell SDK 7.6.x，由独立 worker 运行 |
 | ripgrep | 内容搜索依赖它，`allagent doctor --install` 可补齐 |
@@ -211,12 +211,17 @@ flowchart LR
 
 ### 安装
 
-**Windows 安装包（推荐）**：从 [Releases](https://github.com/luolangaga/AllAgent.NET/releases) 下载 `AllAgent.NET-<版本>-win-x64-setup.exe`。安装时可以选择创建「终端」和「桌面端」两个快捷方式，并自动补齐 WebView2 运行时、Python 3.13 与 ripgrep；自包含发布，无需预装 .NET 运行时。详见 [Windows 安装包](docs/windows-installer.zh-CN.md)。
+**Windows 安装包（推荐）**：从 [Releases](https://github.com/luolangaga/AllAgent.NET/releases) 下载对应架构的安装包：`AllAgent.NET-<版本>-win-x64-setup.exe` 或 `AllAgent.NET-<版本>-win-arm64-setup.exe`。安装时可以选择创建「终端」和「桌面端」两个快捷方式，并自动补齐 WebView2 运行时与 ripgrep；自包含发布，无需预装 .NET 运行时。详见 [Windows 安装包](docs/windows-installer.zh-CN.md)。
 
 **通过 .NET Tool 安装**：
 
 ```powershell
+# Windows x64
 dotnet tool install --global AllAgent.NET.Terminal
+
+# Windows on ARM（命令名同样是 allagent）
+dotnet tool install --global AllAgent.NET.Terminal.arm64
+
 allagent --help
 allagent doctor
 ```
@@ -226,6 +231,17 @@ allagent doctor
 ```powershell
 dotnet tool update --global AllAgent.NET.Terminal
 dotnet tool uninstall --global AllAgent.NET.Terminal
+
+# Windows on ARM
+dotnet tool update --global AllAgent.NET.Terminal.arm64
+dotnet tool uninstall --global AllAgent.NET.Terminal.arm64
+```
+
+工具安装也可以直接使用内置更新器：
+
+```powershell
+allagent update --check
+allagent update
 ```
 
 从源码打包并用本地 NuGet 源安装的流程见 [.NET Tool 打包与安装](docs/nuget-tool.zh-CN.md)，本地构建 exe 安装包的流程见 [Windows 安装包](docs/windows-installer.zh-CN.md)。
@@ -236,7 +252,7 @@ dotnet tool uninstall --global AllAgent.NET.Terminal
 allagent chat --workspace C:\Projects\MyProject
 ```
 
-第一次进入聊天会初始化环境：内嵌 PowerShell SDK worker 实际启动自检，检查 ripgrep 与宿主 Python 版本，缺失时给出 winget 命令并在安装后提示重启。模型与扩展管理不需要启动沙箱，首次执行任务时才校验执行环境。离线或只改配置时可用 `--no-initialize` 跳过初始化。
+第一次进入聊天会初始化环境：检查随包 PowerShell SDK worker 与 ripgrep，不再要求宿主 Python；只有回退到 Monty 沙箱时才按需查找 Python。模型与扩展管理不需要启动沙箱，首次执行任务时才校验执行环境。离线或只改配置时可用 `--no-initialize` 跳过初始化。
 
 ### 配置模型
 
@@ -279,7 +295,7 @@ allagent web-ui --no-lan
 | **restricted（默认）** | 工作区内的文件读写和可信 Shell 别名（`git`、`rg`、`dotnet`、`node`、`npm` 等，可用 `--allow-shell` 扩展）直接执行；工作区外的路径、未信任的程序以及 MCP / 桌面 / 插件工具仍逐次授权 |
 | **full** | 宿主工具通常不再逐次审批，允许工作区外路径；沙箱隔离仍然生效，且不授予管理员权限 |
 | **ask** | 逐次审批，工作区内的写入也要询问。审批卡片默认选中「允许这一次」，`Enter` 确认、`Y` 允许、`N` 或 `Esc` 拒绝、`A` 记住该目录 |
-| **plan** | 只做只读调研；模型通过 `plan_propose` 提交 Markdown 计划，TUI 以 Markdown、Web 以 HTML 审批卡片显示。批准后自动切换到完全访问并在同一回合开始执行，拒绝则继续修订 |
+| **plan** | 只做只读调研；模型通过 `plan_propose` 提交 Markdown 计划，TUI 以 Markdown、Web 以 HTML 审批卡片显示。审批卡片可以直接填写评论/修改建议：提交建议保持计划模式并由模型据此修订，批准时评论作为执行要求；计划正文跟随界面语言。批准后自动切换到完全访问并在同一回合开始执行，拒绝则继续修订 |
 | **simple** | 只保留 `powershell_script`、`file_read`、`file_edit` 三个宿主工具；技能、MCP、子代理、插件、浏览器与桌面工具停用 |
 
 关键边界：
@@ -336,6 +352,7 @@ allagent web-ui --no-lan
 | 工作区到数据目录的映射 | 程序目录下的 `allagent-projects.json` |
 | 插件、OAuth 凭据、用户技能、共享运行时 | `%APPDATA%\AllAgent.NET`（显式指定 `--data-dir` 时改用该目录） |
 | 日志 | `%APPDATA%\AllAgent.NET\allagent.log` |
+| 崩溃报告、日志尾部与内存转储 | `%APPDATA%\AllAgent.NET\crashes\` |
 
 用户目录下的外部技能只自动扫描 `~/.agents/skills/`；AllAgent.NET 自身技能目录和项目级技能按原规则加载。
 
@@ -379,8 +396,13 @@ npm test           # vitest run
 ```powershell
 dotnet test tests/AllAgent.NET.Tests
 
-# 发布 Windows x64 自包含版本
+# 发布 Windows x64 / ARM64 自包含版本
 dotnet publish src/AllAgent.NET.Terminal -c Release -r win-x64 --self-contained true -o artifacts/allagent-win-x64
+dotnet publish src/AllAgent.NET.Terminal -c Release -r win-arm64 --self-contained true -o artifacts/allagent-win-arm64
+
+# NuGet 工具包（x64 / ARM64 两个包 ID）
+tools\build-nuget.ps1 -Version 1.0.7 -Runtime win-x64
+tools\build-nuget.ps1 -Version 1.0.7 -Runtime win-arm64
 ```
 
 发布后请保留整个输出目录：终端宿主与各 worker（`AllAgent.NET.Gui.exe`、`AllAgent.NET.Browser.exe`、`AllAgent.NET.ComputerUse.exe`、`AllAgent.NET.Sandbox.exe`、`AllAgent.NET.PowerShell.exe`）同目录共享一份运行时，另有 `Modules/`、`web/`、`everything/` 与 `builtin-plugins/`；缺少 `AllAgent.NET.PowerShell.exe` 或 `Modules/` 时需重新安装或修复工具包。`AllAgent.NET.Core` 可嵌入其他 .NET 应用，扩展工具用 `[AgentTool]` 和 `[Description]` 注册，生成器产出 `IAgentToolSet`。
@@ -406,11 +428,12 @@ dotnet publish src/AllAgent.NET.Terminal -c Release -r win-x64 --self-contained 
 |---|---|
 | 不确定缺什么环境 | `allagent doctor`（聊天内 `/doctor`）看检查表；`doctor --install` 在确认后装依赖 |
 | 内容搜索不可用 | 安装 ripgrep：`winget install --id BurntSushi.ripgrep.MSVC` |
-| 提示宿主 Python 缺失或版本不符 | 需要 3.10–3.14；按提示用 winget 安装 Python 3.13，安装后重启软件 |
+| 提示宿主 Python 缺失 | Hyperlight 不可用且需要 Monty 备份时才会用到；按需安装 Python 3.10–3.14 后重试，或运行 `allagent doctor --install` |
 | 沙箱启动失败 | `/sandbox status` 查看实际后端与兜底原因；没有虚拟化时用 `/sandbox monty` |
 | PowerShell 工具报 worker 缺失 | worker 随包分发，报缺失说明安装损坏，重新安装 AllAgent.NET |
 | 模型连不上 | `/login status` 查看账号与连接状态，`/providers show 配置名` 查看脱敏配置 |
 | 需要查看日志 | `%APPDATA%\AllAgent.NET\allagent.log`，其中包含 `[Gui]`、`[GuiHost]` 与桥接调用记录 |
+| 程序崩溃或上次异常退出 | 下次启动会提示；`allagent crash list` 查看报告，`show` 阅读，`open` 打开 GitHub 提交页并把 `report.md` 一起附上 |
 
 ## 更多文档
 
@@ -424,6 +447,9 @@ dotnet publish src/AllAgent.NET.Terminal -c Release -r win-x64 --self-contained 
 - [PowerShell 持久会话](docs/powershell-session.zh-CN.md) · [PowerShell 能力商店](docs/powershell-store.zh-CN.md)
 - [子代理独立配置](docs/subagent-configuration.zh-CN.md) · [自定义代理角色示例](docs/agent-roles.example.json)
 - [Web 工作台：文件浏览、Git 管理与集成终端](docs/webui-files-git-terminal.zh-CN.md)
+- [崩溃报告与诊断](docs/crash-reporting.zh-CN.md)
+- [自动更新：NuGet / GitCode / GitHub](docs/auto-update.zh-CN.md)
+- [CI 与发布流水线：x64 / ARM64、NuGet、GitCode](docs/release-ci.zh-CN.md)
 - [.NET Tool 打包与安装](docs/nuget-tool.zh-CN.md)
 - [插件开发指南](docs/plugins.zh-CN.md) · [插件开发入门](docs/plugin-development-beginner.zh-CN.md) · [插件 Web 前端扩展](docs/plugin-web-ui.zh-CN.md)
 
@@ -443,6 +469,6 @@ dotnet publish src/AllAgent.NET.Terminal -c Release -r win-x64 --self-contained 
 
 **如果觉得有用，给个 Star 吧！**
 
-<sub>Windows x64 · .NET 10 · GPL-3.0-only</sub>
+<sub>Windows x64 · ARM64 · .NET 10 · GPL-3.0-only</sub>
 
 </div>

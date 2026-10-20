@@ -11,17 +11,19 @@ internal readonly record struct TerminalInput(ConsoleKeyInfo Key, string? Paste 
 internal sealed class TerminalKeyReader
 {
     private readonly Queue<TerminalInput> _pending = new();
+    private readonly Queue<ConsoleKeyInfo> _replay = new();
     private readonly Func<bool> _available;
     private readonly Func<ConsoleKeyInfo> _read;
     private readonly Func<string?> _clipboard;
     private readonly bool _native;
+    private readonly bool _burst;
     private TerminalInput? _deferred;
     private bool _discardMouseTail;
     public bool HasInput
     {
         get
         {
-            if (_deferred != null || _pending.Count > 0) return true;
+            if (_deferred != null || _pending.Count > 0 || _replay.Count > 0) return true;
             if (_native && ConsoleModes.ReadPointer() is { } mouse)
             {
                 // Collapse a burst of native wheel records into one viewport update, without eating keys or selection events.
@@ -38,8 +40,18 @@ internal sealed class TerminalKeyReader
             return _available();
         }
     }
-    public TerminalKeyReader(Func<bool>? available = null, Func<ConsoleKeyInfo>? read = null, Func<string?>? clipboard = null)
-    { _native = available == null; _available = available ?? (() => Console.KeyAvailable); _read = read ?? (() => Console.ReadKey(true)); _clipboard = clipboard ?? ClipboardText.Read; }
+    public TerminalKeyReader(Func<bool>? available = null, Func<ConsoleKeyInfo>? read = null, Func<string?>? clipboard = null, bool? detectPastes = null)
+    {
+        _native = available == null;
+        _available = available ?? (() => Console.KeyAvailable);
+        _read = read ?? (() => Console.ReadKey(true));
+        _clipboard = clipboard ?? ClipboardText.Read;
+        // Bracketed paste only exists in modern terminals. Classic conhost delivers a paste
+        // as one fast block of ordinary key records, so the native reader recognizes that
+        // block itself; injected readers stay deterministic unless a test opts in.
+        _burst = detectPastes ?? _native;
+    }
+    private bool Available() => _replay.Count > 0 || _available();
     private async Task<TerminalInput> KeyInput(ConsoleKeyInfo key, CancellationToken ct)
     {
         if (key.Modifiers.HasFlag(ConsoleModifiers.Control) && key.Key == ConsoleKey.V || key.Modifiers.HasFlag(ConsoleModifiers.Shift) && key.Key == ConsoleKey.Insert)
@@ -52,7 +64,7 @@ internal sealed class TerminalKeyReader
     internal string? ReadClipboard() => (_native ? ClipboardText.ReadImageReference() : null) ?? _clipboard();
     private ConsoleKeyInfo ReadKey()
     {
-        var key = _read();
+        var key = _replay.Count > 0 ? _replay.Dequeue() : _read();
         if (key.Key != (ConsoleKey)0) return key;
         var character = key.KeyChar;
         var mapped = character switch {
@@ -113,7 +125,7 @@ internal sealed class TerminalKeyReader
         {
             while (true)
             {
-                while (!_available()) { ct.ThrowIfCancellationRequested(); await Task.Delay(2, ct); }
+                while (!Available()) { ct.ThrowIfCancellationRequested(); await Task.Delay(2, ct); }
                 var tail = ReadKey().KeyChar;
                 if (tail is 'M' or 'm') { _discardMouseTail = false; return new(default); }
                 if (!(char.IsAsciiDigit(tail) || tail is ';')) { _discardMouseTail = false; return await KeyInput(new ConsoleKeyInfo(tail, (ConsoleKey)0, false, false, false), ct); }
@@ -123,6 +135,7 @@ internal sealed class TerminalKeyReader
         while (!HasInput) { ct.ThrowIfCancellationRequested(); await Task.Delay(16, ct); }
         if (_pending.TryDequeue(out var mouse)) return mouse;
         var key = ReadKey();
+        if (await PasteBurstAsync(key, ct) is { } burst) return burst;
         // Windows Console.ReadKey folds ESC+[ into an Alt+[ key in VT input mode.
         var altBracket = key.KeyChar == '[' && key.Modifiers.HasFlag(ConsoleModifiers.Alt);
         if (!altBracket && (key.Key != ConsoleKey.Escape || key.Modifiers.HasFlag(ConsoleModifiers.Alt))) return await KeyInput(key, ct);
@@ -132,7 +145,7 @@ internal sealed class TerminalKeyReader
         // SGR mouse events are terminal input, never text or an Escape cancellation.
         while (prefix.Length < 3 && DateTime.UtcNow < deadline)
         {
-            if (!_available()) { await Task.Delay(2, ct); continue; }
+            if (!Available()) { await Task.Delay(2, ct); continue; }
             var next = ReadKey(); consumed.Add(next); prefix.Append(next.KeyChar);
             if (prefix.Length == 2 && next.KeyChar is '[' or 'O') deadline = DateTime.UtcNow.AddMilliseconds(1500);
             if (prefix.Length == 2 && next.KeyChar is not ('[' or 'O')) break;
@@ -153,7 +166,7 @@ internal sealed class TerminalKeyReader
             _discardMouseTail = true;
             while (prefix.Length < 40 && DateTime.UtcNow < deadline)
             {
-                if (!_available()) { await Task.Delay(2, ct); continue; }
+                if (!Available()) { await Task.Delay(2, ct); continue; }
                 var next = ReadKey(); consumed.Add(next); prefix.Append(next.KeyChar);
                 if (next.KeyChar is 'M' or 'm')
                 {
@@ -174,7 +187,7 @@ internal sealed class TerminalKeyReader
         }
         while (prefix.Length >= 3 && prefix.Length < 32 && prefix[^1] is not (>= '@' and <= '~') && DateTime.UtcNow < deadline)
         {
-            if (!_available()) { await Task.Delay(2, ct); continue; }
+            if (!Available()) { await Task.Delay(2, ct); continue; }
             var next = ReadKey(); consumed.Add(next); prefix.Append(next.KeyChar);
         }
         if (SequenceKey(prefix.ToString()) is { } decoded) return await KeyInput(decoded, ct);
@@ -182,7 +195,7 @@ internal sealed class TerminalKeyReader
         var buffer = new StringBuilder(); var suffix = ""; var truncated = false;
         while (true)
         {
-            while (!_available()) { ct.ThrowIfCancellationRequested(); await Task.Delay(4, ct); }
+            while (!Available()) { ct.ThrowIfCancellationRequested(); await Task.Delay(4, ct); }
             var next = ReadKey(); var character = next.Key == ConsoleKey.Escape ? '\u001b' : next.Key == ConsoleKey.Enter ? '\n' : next.KeyChar;
             var sequence = next.KeyChar == '[' && next.Modifiers.HasFlag(ConsoleModifiers.Alt) ? "\u001b[" : character.ToString();
             if (suffix.Length > 0 || sequence[0] == '\u001b')
@@ -195,6 +208,50 @@ internal sealed class TerminalKeyReader
             }
             if (buffer.Length < 32000) buffer.Append(character); else truncated = true;
         }
+    }
+    // Classic conhost has no bracketed paste: a pasted block arrives as a burst of ordinary
+    // key records, including Enter for every newline. Recognizing that burst keeps newlines
+    // inside the draft and inserts the text in one step instead of one render per character.
+    private const int BurstLookaheadMilliseconds = 30;
+    private const int BurstQuietMilliseconds = 12;
+    private static bool IsPasteText(ConsoleKeyInfo key) =>
+        !key.Modifiers.HasFlag(ConsoleModifiers.Control) && !key.Modifiers.HasFlag(ConsoleModifiers.Alt) &&
+        (key.Key is ConsoleKey.Enter or ConsoleKey.Tab || !char.IsControl(key.KeyChar));
+    private static bool IsPastePrint(ConsoleKeyInfo key) =>
+        IsPasteText(key) && key.Key is not (ConsoleKey.Enter or ConsoleKey.Tab) && key.KeyChar >= ' ';
+    private static char PasteCharacter(ConsoleKeyInfo key) => key.Key == ConsoleKey.Enter ? '\n' : key.Key == ConsoleKey.Tab ? '\t' : key.KeyChar;
+    private async Task<TerminalInput?> PasteBurstAsync(ConsoleKeyInfo first, CancellationToken ct)
+    {
+        if (!_burst || first.Key == ConsoleKey.Escape || !IsPasteText(first) || !Available()) return null;
+        var lookahead = new List<ConsoleKeyInfo> { first };
+        // A typed key is never followed by two more buffered keys; a pasted block is.
+        // Newlines only join the burst once enough printable text proves it is a paste.
+        var deadline = Environment.TickCount64 + BurstLookaheadMilliseconds;
+        while (lookahead.Count < 3 && Available() && Environment.TickCount64 < deadline) lookahead.Add(ReadKey());
+        if (lookahead.Count(IsPastePrint) < 2) { foreach (var key in lookahead.Skip(1)) _replay.Enqueue(key); return null; }
+        var buffer = new StringBuilder(); var truncated = false; var multiline = false; var index = 0;
+        var quiet = Environment.TickCount64 + BurstQuietMilliseconds;
+        while (true)
+        {
+            ConsoleKeyInfo next;
+            if (index < lookahead.Count) next = lookahead[index++];
+            else if (Available()) next = ReadKey();
+            else if (Environment.TickCount64 < quiet) { await Task.Delay(2, ct); continue; }
+            else break;
+            if (next.Key == ConsoleKey.Enter && next.Modifiers == 0 && !multiline)
+            {
+                // A trailing Enter after a single line is the user's submit (including scripted
+                // input). Inside multiline text it is paste data and must never send the draft.
+                var wait = Environment.TickCount64 + BurstQuietMilliseconds;
+                while (index >= lookahead.Count && !Available() && Environment.TickCount64 < wait) await Task.Delay(2, ct);
+                if (index >= lookahead.Count && !Available()) { _replay.Enqueue(next); break; }
+            }
+            if (!IsPasteText(next)) { _replay.Enqueue(next); break; }
+            var character = PasteCharacter(next); multiline |= character == '\n';
+            if (buffer.Length < PasteCapacity) buffer.Append(character); else truncated = true;
+            quiet = Environment.TickCount64 + BurstQuietMilliseconds;
+        }
+        return new(first, FinishPaste(buffer, truncated, null));
     }
     // Silent truncation looked like a lost paste; the marker makes the loss visible in the draft.
     private const int PasteCapacity = 32000;

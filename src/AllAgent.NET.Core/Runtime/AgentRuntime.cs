@@ -5,7 +5,6 @@ namespace AllAgent.NET.Core.Runtime;
 
 public sealed class AgentRuntime : IAsyncDisposable
 {
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (RuntimeEnvironment Environment, DateTime Expires)> EnvironmentCache = new();
     private bool _disposed;
     public AgentOptions Options { get; private set; }
     public RuntimeEnvironment Environment { get; }
@@ -53,10 +52,10 @@ public sealed class AgentRuntime : IAsyncDisposable
         Tools.Register(new BrowserSkillTools(_browser));
         if (options.Skills != null) Tools.Register(new SkillTools(options.Skills));
         Tools.Register(new WebTools(_browser));
-        _sandbox = new FallbackCodeSandbox(options with { PythonPath = environment.Python });
+        _sandbox = new FallbackCodeSandbox(options with { PythonPath = options.PythonPath ?? environment.Python });
         var surface = options.ToolSurface ?? new ToolSurface();
-        CodeAct = new CodeActProvider(Tools, new PythonCodeValidator(environment.Python!), _sandbox, options.ShellAllowlist, options.CurrentPermission,
-            System.Text.Json.JsonSerializer.Serialize(new { workspaceRoot = Path.GetFullPath(options.WorkspaceRoot), python = environment.Python, shellRuntime = "Embedded PowerShell SDK; internal worker, not a pwsh CLI. Use powershell_script for PowerShell code in a persistent session; use powershell_invoke for one verified module command; use run_shell for external programs or delivered .ps1 files.", operatingSystem = System.Runtime.InteropServices.RuntimeInformation.OSDescription, fileReadMaxBytes = options.FileReadMaxBytes, fileReadMaxLines = options.FileReadMaxLines, toolResultMaxCharacters = options.MaxToolResultCharacters, guestStdoutMaxCharacters = ToolResult.MaxOutputCharacters, sourceCharacters = options.MaxCodeCharacters }, ToolResult.JsonOptions),
+        CodeAct = new CodeActProvider(Tools, new PythonCodeValidator(options.PythonPath ?? environment.Python ?? ""), _sandbox, options.ShellAllowlist, options.CurrentPermission,
+            System.Text.Json.JsonSerializer.Serialize(new { workspaceRoot = Path.GetFullPath(options.WorkspaceRoot), python = options.PythonPath ?? environment.Python, shellRuntime = "Embedded PowerShell SDK; internal worker, not a pwsh CLI. Use powershell_script for PowerShell code in a persistent session; use powershell_invoke for one verified module command; use run_shell for external programs or delivered .ps1 files.", operatingSystem = System.Runtime.InteropServices.RuntimeInformation.OSDescription, fileReadMaxBytes = options.FileReadMaxBytes, fileReadMaxLines = options.FileReadMaxLines, toolResultMaxCharacters = options.MaxToolResultCharacters, guestStdoutMaxCharacters = ToolResult.MaxOutputCharacters, sourceCharacters = options.MaxCodeCharacters }, ToolResult.JsonOptions),
             null, options.MaxCodeCharacters, surface, options.Skills);
         // Declare on-demand capabilities once the registry knows which tool families exist.
         surface.Sync(ToolSurface.Discover(options.Skills, Tools.Definitions));
@@ -120,14 +119,8 @@ public sealed class AgentRuntime : IAsyncDisposable
     public static async Task<AgentRuntime> CreateAsync(AgentOptions options, CancellationToken ct = default)
     {
         options.Validate();
-        var doctor = new EnvironmentDoctor();
-        var environmentKey = (options.PythonPath ?? System.Environment.GetEnvironmentVariable("PATH")) + "|" + (options.PowerShellPath ?? AppContext.BaseDirectory);
-        var environment = EnvironmentCache.TryGetValue(environmentKey, out var cached) && cached.Expires > DateTime.UtcNow && File.Exists(cached.Environment.Python) && File.Exists(cached.Environment.PowerShell)
-            ? cached.Environment : options.InstallationApprover == null
-            ? await doctor.CheckAsync(options.PythonPath, options.PowerShellPath, ct)
-            : await doctor.EnsureAsync(options.InstallationApprover, options.PythonPath, options.PowerShellPath, ct);
-        if (!environment.Ready) throw new InvalidOperationException(string.Join("\n", environment.Problems) + " 请运行 allagent doctor --install。");
-        EnvironmentCache[environmentKey] = (environment, DateTime.UtcNow.AddMinutes(5));
+        var environment = await new EnvironmentDoctor().CheckAsync(options.PowerShellPath, ct);
+        if (!environment.Ready) throw new InvalidOperationException(string.Join("\n", environment.Problems));
         var runtime = new AgentRuntime(options, environment);
         try { await runtime.PowerShellModules.ExecuteAsync("list", ct: ct); }
         catch { await runtime.DisposeAsync(); throw; }

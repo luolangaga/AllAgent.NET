@@ -54,6 +54,25 @@ export const useWorkspaceBrowserStore = defineStore('workspace-browser', () => {
     expanded.value = [...expanded.value, path]
   }
 
+  /** Syncs the Iconiq tree's controlled expansion with the lazily loaded directory cache. */
+  function setDirectoryExpanded(path: string, isExpanded: boolean): void {
+    if (!isExpanded) {
+      expanded.value = expanded.value.filter(item => item !== path)
+      return
+    }
+    if (!expanded.value.includes(path)) expanded.value = [...expanded.value, path]
+    if (!trees.value[path] && !loadingDirs.value.includes(path)) void loadTree(path)
+  }
+
+  /** Expands every directory that has already been read; unloaded branches stay lazy. */
+  function expandLoaded(): void {
+    expanded.value = ['.', ...Object.keys(trees.value).filter(path => path !== '.')]
+  }
+
+  function collapseAll(): void {
+    expanded.value = ['.']
+  }
+
   /** Opens the preview pane and asks the host for the file; failures land in fileError. */
   async function openFile(path: string): Promise<void> {
     fileLoading.value = true
@@ -108,6 +127,7 @@ export const useWorkspaceBrowserStore = defineStore('workspace-browser', () => {
 
   return {
     loaded, hideIgnored, trees, truncated, errors, expanded, loadingDirs, query, matches, searching,
-    file, fileLoading, fileError, loadTree, toggleDirectory, openFile, closeFile, search, refresh, reset,
+    file, fileLoading, fileError, loadTree, toggleDirectory, setDirectoryExpanded, expandLoaded, collapseAll,
+    openFile, closeFile, search, refresh, reset,
   }
 })

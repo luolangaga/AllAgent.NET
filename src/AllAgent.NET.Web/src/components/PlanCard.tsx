@@ -46,7 +46,7 @@ export function PlanPanel({ plan }: { plan: PlanDocument }) {
         <Chevron aria-hidden className="plan-panel-chevron" size={14} />
       </button>
       {open ? <PlanBody className="plan-panel-body" markdown={plan.markdown} /> : null}
-      {plan.feedback ? <p className="plan-feedback">{plan.feedback}</p> : null}
+      {plan.feedback ? <p className="plan-feedback">{tr('评论：', 'Comment: ')}{plan.feedback}</p> : null}
     </section>
   </div>
 }
@@ -54,15 +54,17 @@ export function PlanPanel({ plan }: { plan: PlanDocument }) {
 /** Blocking approval dialog. The run stays paused until the person answers, so Esc does nothing. */
 export function PlanDialog({ request, onRespond }: {
   request: PlanProposalRequest
-  onRespond: (id: string, approved: boolean) => Promise<void>
+  onRespond: (id: string, approved: boolean, feedback?: string) => Promise<void>
 }) {
   const tr = useT()
   const [busy, setBusy] = useState(false)
+  const [feedback, setFeedback] = useState('')
   const [error, setError] = useState('')
-  const respond = async (approved: boolean) => {
+  const comment = feedback.trim()
+  const respond = async (approved: boolean, note = comment) => {
     setBusy(true)
     try {
-      await onRespond(request.id, approved)
+      await onRespond(request.id, approved, note || undefined)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
@@ -74,15 +76,36 @@ export function PlanDialog({ request, onRespond }: {
       <DialogHeader>
         <DialogTitle>{tr('计划审批', 'Plan approval')} · {request.title}</DialogTitle>
         <DialogDescription>
-          {tr('批准后将切换到完全访问（写文件、执行命令、访问工作区外），并立即开始执行。拒绝则保持计划模式，AI 会继续修订计划。', 'Approval switches to full access (write files, run commands, access outside the workspace) and starts execution immediately. Rejecting keeps plan mode, and the AI will revise the plan.')}
+          {tr('批准后将切换到完全访问（写文件、执行命令、访问工作区外）并立即开始执行。提交评论则保持计划模式，AI 会按建议修订并重新提交计划。', 'Approval switches to full access (write files, run commands, access outside the workspace) and starts execution immediately. Submitting a comment keeps plan mode, and the AI revises and resubmits the plan from it.')}
         </DialogDescription>
       </DialogHeader>
       <PlanBody className="plan-dialog-body" markdown={request.markdown} />
+      <label className="plan-comment">
+        <span>{tr('评论 / 修改建议', 'Comment / suggested change')}</span>
+        <textarea
+          aria-label={tr('计划评论', 'Plan comment')}
+          className="plan-comment-input"
+          disabled={busy}
+          onChange={event => setFeedback(event.target.value)}
+          onKeyDown={event => {
+            if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && comment) {
+              event.preventDefault()
+              void respond(false)
+            }
+          }}
+          placeholder={tr('例如：第 3 步先补测试；不要修改数据库结构。', 'For example: add tests before step 3; do not change the database schema.')}
+          rows={3}
+          value={feedback}
+        />
+        <small>{tr('评论会随计划保存；批准时作为执行要求，提交建议时 AI 会据此继续修订计划。', 'The comment is stored with the plan: on approval it becomes an execution requirement; when submitted as feedback the AI revises the plan from it.')}</small>
+      </label>
       {error ? <p className="text-destructive text-sm" role="alert">{error}</p> : null}
       <DialogFooter>
-        <Button disabled={busy} onClick={() => void respond(false)} variant="ghost">{tr('拒绝，继续规划', 'Reject and keep planning')}</Button>
+        <Button disabled={busy} onClick={() => void respond(false)} variant="ghost">
+          {comment ? tr('提交建议，继续规划', 'Submit feedback and keep planning') : tr('拒绝，继续规划', 'Reject and keep planning')}
+        </Button>
         <Button disabled={busy} onClick={() => void respond(true)}>
-          {busy ? tr('处理中…', 'Working…') : tr('批准并自动执行', 'Approve and execute')}
+          {busy ? tr('处理中…', 'Working…') : comment ? tr('批准并执行', 'Approve and execute') : tr('批准并自动执行', 'Approve and execute')}
         </Button>
       </DialogFooter>
     </DialogContent>

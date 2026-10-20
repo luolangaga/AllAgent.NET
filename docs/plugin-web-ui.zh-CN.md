@@ -8,7 +8,7 @@
 
 | 档位 | 形态 | 由谁渲染 | 自由度 | 现状 |
 |---|---|---|---|---|
-| ① 声明式贡献 | manifest `web.contributes`（页面、工具卡、命令） | 宿主（Iconiq 组件） | 中 | ✅ 已实现 |
+| ① 声明式贡献 | manifest `web.contributes`（页面、顶部弹窗、工具卡、命令） | 宿主（Iconiq 组件） | 中 | ✅ 已实现 |
 | ② 沙箱视图 | 插件自带 HTML/CSS/JS，入驻宿主的**独立源 iframe**，经 SDK 双向通信 | 插件自绘 | 极高 | ✅ 已实现 |
 | ③ 受信任原生模块 | `web.mode:"native"`，ESM 直接使用宿主 React 组件 | 插件 + 宿主组件库 | 最高 | ⏳ 规划中（设计已预留字段） |
 
@@ -108,10 +108,11 @@ public void Register(PluginContext context)
 | `capabilities` | string[] | 声明需要的宿主能力（见 §7）。未声明的能力调用会返回 `capability_denied`。 |
 | `devUrl` | string? | 本地开发服务器地址（仅 loopback http 有效，且宿主以 `ALLAGENT_PLUGIN_DEV=1` 启动时才生效，见 §11）。 |
 | `contributes.pages[]` | object[] | 导航页：`{ id, title, icon?, entry, order? }`。`icon` 取内置图标名（`gauge`、`chart`、`dashboard`、`activity`、`sparkles`、`list`、`globe`、`plug`、`terminal`、`wrench`、`rocket`、`star`、`package`、`blocks`、`wand`、`puzzle`），未知名称回退拼图图标。 |
+| `contributes.panels[]` | object[] | 顶部工具栏弹窗：`{ id, title, icon?, entry, order? }`。宿主在右上工具栏渲染图标按钮，点击打开可拖动、缩放的浮动沙箱面板；不占用侧栏导航位。 |
 | `contributes.toolCards[]` | object[] | 自定义工具卡：`{ tool, entry }`。`tool` 为工具名；命中后该工具调用在对话轨迹中由插件自绘渲染。 |
-| `contributes.commands[]` | object[] | 命令面板入口：`{ id, title, page? }`，`page` 指向本插件页面 id，点击即打开。 |
+| `contributes.commands[]` | object[] | 命令面板入口：`{ id, title, page?, panel? }`，指向本插件的页面 id 或弹窗 id，点击即打开。 |
 | `contributes.settings[]` | object[] | 通用设置区：`{ id, title, fields?, entry? }`。宿主 Settings 页渲染原生字段；`entry` 可再嵌一个插件帧显示状态/操作。字段 `key` 仅允许小写字母、数字、`_ - .`。 |
-| `contributes.panels / composerActions / statusBar` | object[] | **清单已预留**（宿主会保留字段并原样下发），当前版本暂不渲染；后续版本开放。 |
+| `contributes.composerActions / statusBar` | object[] | **清单已预留**（宿主会保留字段并原样下发），当前版本暂不渲染；后续版本开放。 |
 
 校验规则（加载时执行，失败即整体禁用该插件的 Web 部分并显示原因）：
 
@@ -157,6 +158,7 @@ context.Web.Push("tick", new { utc = DateTimeOffset.UtcNow });
 | `context` | `{ workspace, conversationId }` | 工作区或当前会话变化 |
 | `conversation.changed` | `{ workspace, conversationId }` | 当前会话切换（需订阅） |
 | `workspace.changed` | `{ workspace, dataDirectory }` | 宿主切换工作区（需订阅） |
+| `workspace.folderPicked` | `{ path, error }` | 原生目录选择结果（`host.pickFolder` 之后，需订阅） |
 | `tool.update` | 见 §6 工具卡 | 工具卡帧专用，宿主自动推送 |
 
 ## 6. 自定义工具卡
@@ -230,6 +232,8 @@ return ToolResult.Success(data) with
 | `conversation.read` | `host.conversation.messages` | `{ limit? }` → 最近的 `{ id, role, content, createdAt }[]`（limit ≤ 200，正文单条裁剪 8000 字符） |
 | `workspace.read` | `host.workspace.info` | `()` → `{ workspace, dataDirectory, sharedDirectory }` |
 | `workspace.read` | `host.workspace.files` | `{ query?, limit? }` → 工作区文件列表（`@` 补全同源） |
+| `workspace.pick` | `host.pickFolder` | `()` → `true`（打开宿主原生目录选择器；结果以 `workspace.folderPicked` 事件返回 `{ path, error }`） |
+| `markdown` | `host.markdown.render` | `{ text }` → 宿主渲染并净化的 GFM HTML |
 | `navigation` | `host.navigate` | `{ page }` → `true`（内置页 `chat`/`plugins`/… 或插件路由 `plugin:<包名>:<页面id>`） |
 | `navigation` | `host.openConversation` | `{ id }` → `true` |
 | `composer.write` | `host.composer.insertText` | `{ text }` → `true`（填入输入框草稿并切换到对话页） |
@@ -349,7 +353,7 @@ body { background: var(--ag-background); color: var(--ag-foreground); }
 
 **插件界面能改宿主全局样式吗？** 不能。iframe 与宿主不同源，样式天然隔离；列表、卡片等“宿主风格”请用 `--ag-*` 变量贴近，或使用声明式贡献。
 
-**页面路由是什么？** 插件页面的 hash 路由为 `plugin:<包名小写>:<页面id>`；`host.navigate` 与命令贡献都使用同一格式。
+**页面路由是什么？** 插件页面的 hash 路由为 `plugin:<包名小写>:<页面id>`；`host.navigate` 与命令贡献都使用同一格式。`panels` 弹窗不占路由，由右上工具栏按钮或命令面板打开，关闭后保留上次位置与尺寸。
 
 **能不能覆盖宿主已有界面？** 当前开放的是「新增页面/命令 + 覆盖工具卡片渲染」；对话、设置等核心视图不可替换。`web.mode:"native"`（第三档）在规划中，将提供与宿主组件库的原生互操作。
 

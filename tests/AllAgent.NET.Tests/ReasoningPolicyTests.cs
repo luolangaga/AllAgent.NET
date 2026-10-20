@@ -45,6 +45,20 @@ public sealed class ReasoningPolicyTests
     [InlineData("gemini", "gemini-3-pro-preview", "gemini-level", "default,low,high")]
     [InlineData("gemini", "gemini-3-flash-preview", "gemini-level", "default,minimal,low,medium,high")]
     [InlineData("dashscope", "qwen3.5-plus", "qwen", "default,none,thinking,budget")]
+    [InlineData("workbuddy", "deepseek-v4.1-flash", "workbuddy", "default,none,low,high,max")]
+    [InlineData("workbuddy", "glm-5.3", "workbuddy", "default,none,high,max")]
+    [InlineData("workbuddy", "kimi-k3", "workbuddy", "default")]
+    [InlineData("commandcode", "deepseek/deepseek-v4.1-flash", "commandcode", "default,none,low,high,max")]
+    [InlineData("commandcode", "deepseek/deepseek-v4-flash", "commandcode", "default,none,high,max")]
+    [InlineData("commandcode", "claude-sonnet-5-5", "commandcode", "default,low,medium,high,xhigh,max")]
+    [InlineData("commandcode", "gpt-6-astra", "commandcode", "default,low,medium,high,xhigh,max")]
+    [InlineData("commandcode", "gpt-5.5", "commandcode", "default,low,medium,high,xhigh")]
+    [InlineData("commandcode", "gpt-5.4-mini", "commandcode", "default,low,medium,high")]
+    [InlineData("commandcode", "google/gemini-3.8-flash", "commandcode", "default,low,medium,high")]
+    [InlineData("commandcode", "Qwen/Qwen3.8-Max", "commandcode", "default,low,medium,xhigh")]
+    [InlineData("commandcode", "zai-org/GLM-5.3", "commandcode", "default,low,high,max")]
+    [InlineData("commandcode", "xai/grok-4.6", "commandcode", "default,low,medium,high,xhigh")]
+    [InlineData("commandcode", "moonshotai/Kimi-K2.7-Code", "commandcode", "default")]
     [InlineData("xai", "grok-3-mini", "xai", "default,low,high")]
     [InlineData("xai", "grok-4", "xai", "default")]
     public void OptionsFollowNativeModelContracts(string provider, string model, string protocol, string options)
@@ -80,6 +94,33 @@ public sealed class ReasoningPolicyTests
         var routed = new ApiConfig { ProviderId = "openrouter", DefaultModel = "deepseek/deepseek-v4-pro" };
         ReasoningSettings.SetEffort(routed, "high"); var gateway = new JsonObject(); ReasoningSettings.Apply(gateway, routed);
         Assert.Equal("high", (string?)gateway["reasoning"]?["effort"]); Assert.Null(gateway["thinking"]); Assert.Null(gateway["reasoning_effort"]);
+    }
+
+    [Fact]
+    public void CommandCodeLegacyOpenAiProfileKeepsVendorFamilies()
+    {
+        var config = new ApiConfig { ProviderId = "commandcode", Protocol = "commandcode", DefaultModel = "deepseek/deepseek-v4.1-flash", ReasoningProtocol = "openai" };
+        Assert.Equal("commandcode", ReasoningSettings.Capabilities(config).Protocol);
+        Assert.Equal(new[] { "default", "none", "low", "high", "max" }, ReasoningSettings.Efforts(config));
+        ModelCatalog.Remember(config, [new("deepseek/deepseek-v4.1-flash", "fixture") { ReasoningLevels = ["none", "max"] }]);
+        Assert.Equal(new[] { "default", "none", "max" }, ReasoningSettings.Efforts(config));
+        ReasoningSettings.SetEffort(config, "none");
+        var body = new JsonObject(); ReasoningSettings.Apply(body, config);
+        Assert.Equal("off", (string?)body["reasoning_effort"]);
+    }
+
+    [Fact]
+    public void WorkBuddyLegacyNoneProtocolUpgradesToNativeEffort()
+    {
+        var config = new ApiConfig { ProviderId = "workbuddy", DefaultModel = "deepseek-v4.1-flash", ReasoningProtocol = "none" };
+        Assert.Equal("workbuddy", ReasoningSettings.Capabilities(config).Protocol);
+        Assert.Contains("max", ReasoningSettings.Efforts(config));
+        ReasoningSettings.SetEffort(config, "max");
+        var body = new JsonObject(); ReasoningSettings.Apply(body, config);
+        Assert.Equal("max", (string?)body["reasoning_effort"]);
+        ReasoningSettings.SetEffort(config, "none");
+        body = new(); ReasoningSettings.Apply(body, config);
+        Assert.Equal("none", (string?)body["reasoning_effort"]);
     }
 
     [Fact]

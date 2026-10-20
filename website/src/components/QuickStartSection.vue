@@ -59,12 +59,10 @@ const DOCTOR_BLOCKS: CommandBlock[] = [
 ]
 
 const DOCTOR_ITEMS: DoctorItem[] = [
-  { icon: 'cpu', title: '宿主 Python 3.10–3.14', detail: '宿主解释器版本区间' },
-  { icon: 'terminal', title: 'PowerShell 7.6.x', detail: '固定调度器，不回退 5.1' },
+  { icon: 'sandbox', title: '实际沙箱执行', detail: '真的跑一次 Hyperlight / Monty' },
+  { icon: 'terminal', title: '随包 PowerShell SDK worker', detail: '7.6.x，无需系统 PowerShell' },
   { icon: 'search', title: 'ripgrep', detail: '文件搜索与检索是否可用' },
-  { icon: 'layers', title: '共享库环境', detail: 'python/venv/ 与已装库版本' },
-  { icon: 'book', title: 'pip.md', detail: '按实际元数据生成并注入模型上下文' },
-  { icon: 'sandbox', title: '实际沙箱执行', detail: '真的跑一次沙箱，而不是只看版本号' },
+  { icon: 'cpu', title: '宿主 Python（可选）', detail: '只有 Monty 备用沙箱初始化时才需要' },
 ]
 
 /** ③ 环境变量方式（与 SITE-CONTENT.md 逐字一致） */

@@ -78,22 +78,23 @@ public static class ModelCatalog
         return result;
     }
     private static int? Positive(int? value) => value > 0 ? value : null;
-    private static CatalogModel? FindModel(ApiConfig config)
+    private static CatalogModel? FindModel(ApiConfig config, string model)
     {
-        if (Catalog.TryGetValue(CatalogId(config), out var provider) && provider.Models.TryGetValue(config.DefaultModel, out var exact)) return exact;
+        if (Catalog.TryGetValue(CatalogId(config), out var provider) && provider.Models.TryGetValue(model, out var exact)) return exact;
         // A custom proxy may expose native model IDs. Accept only an unambiguous exact ID.
         var matches = new[] { "openai", "anthropic", "google", "deepseek" }
-            .Where(Catalog.ContainsKey).Select(id => Catalog[id].Models.GetValueOrDefault(config.DefaultModel))
+            .Where(Catalog.ContainsKey).Select(id => Catalog[id].Models.GetValueOrDefault(model))
             .Where(m => m != null).DistinctBy(m => (m!.Context, m.Output, m.Reasoning)).ToArray();
         return matches.Length == 1 ? matches[0] : null;
     }
-    public static bool? SupportsReasoning(ApiConfig config) => FindModel(config)?.Reasoning;
-    public static ModelInfo? Resolve(ApiConfig config)
+    public static bool? SupportsReasoning(ApiConfig config) => FindModel(config, config.DefaultModel)?.Reasoning;
+    public static ModelInfo? Resolve(ApiConfig config) => Resolve(config, config.DefaultModel);
+    public static ModelInfo? Resolve(ApiConfig config, string model)
     {
-        var match = FindModel(config);
-        var known = match == null ? null : new ModelInfo(config.DefaultModel, match.Name, Positive(match.Context), Positive(match.Output));
-        if (config.ModelLimits.TryGetValue(config.DefaultModel, out var discovered))
-            return new(config.DefaultModel, known?.DisplayName ?? config.DefaultModel, Positive(discovered.ContextTokens) ?? known?.ContextTokens, Positive(discovered.OutputTokens) ?? known?.OutputTokens);
+        var match = FindModel(config, model);
+        var known = match == null ? null : new ModelInfo(model, match.Name, Positive(match.Context), Positive(match.Output));
+        if (config.ModelLimits.TryGetValue(model, out var discovered))
+            return new(model, known?.DisplayName ?? model, Positive(discovered.ContextTokens) ?? known?.ContextTokens, Positive(discovered.OutputTokens) ?? known?.OutputTokens);
         return known;
     }
     public static ModelInfo Enrich(ApiConfig config, ModelInfo model)

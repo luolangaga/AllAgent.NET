@@ -26,6 +26,7 @@ public partial class DataStore
             CopyInto(Config.Skills, source._data.Skills);
             CopyInto(Config.McpServerConfigs, source._data.McpServerConfigs);
             CopyInto(Config.TokenUsageStats, source._data.TokenUsageStats);
+            CopyInto(Config.DailyUsageStats, source._data.DailyUsageStats);
             Config.AppSettings.Clear();
             foreach (var (key, value) in source._data.AppSettings) Config.AppSettings[key] = value;
             SaveAndVerify();
@@ -85,6 +86,7 @@ public partial class DataStore
             ApiConfigs = split ? new List<ApiConfig>() : _data.ApiConfigs,
             McpServerConfigs = split ? new List<McpServerConfig>() : _data.McpServerConfigs,
             TokenUsageStats = split ? new List<ModelUsageStats>() : _data.TokenUsageStats,
+            DailyUsageStats = split ? new List<DailyUsageStats>() : _data.DailyUsageStats,
             AppSettings = split ? new Dictionary<string, string>() : _data.AppSettings
         };
     }

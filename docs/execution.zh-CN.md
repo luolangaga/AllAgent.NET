@@ -36,8 +36,10 @@ for item in r["data"]["results"]:
 | `/permissions restricted` | 限制模式（默认）；工作区内的文件读写和可信 Shell 别名直接执行，工作区外的路径、未信任的程序与 MCP / 桌面 / 插件工具逐次授权 |
 | `/permissions ask` | 逐次授权（`--ask` 启动）；工作区内的写入也要逐次审核，未信任的 Shell 程序、MCP 和插件执行操作同样单独审核 |
 | `/permissions full` | 完全访问；C# 工具不再逐次审核，可访问工作区外的普通文件并执行已安装程序或指定绝对路径的程序 |
-| `/permissions plan` | 计划模式；只读调研，模型通过 `plan_propose` 提交 Markdown 计划，批准后切换完全访问并继续执行 |
+| `/permissions plan` | 计划模式；只读调研，模型通过 `plan_propose` 提交 Markdown 计划；审批卡片可填写评论/建议，批准后切换完全访问并继续执行 |
 | `/permissions simple` | 简单模式；只保留 `powershell_script`、`file_read`、`file_edit` 三个宿主工具，技能、MCP、子代理、插件、浏览器与桌面工具停用 |
+
+计划模式下，计划正文和标题跟随界面语言（中文界面用简体中文，英文界面用英文），不取决于历史消息或工具输出使用的语言。计划审批卡（TUI 与 Web）提供评论/建议输入：提交建议会保持计划模式，模型据建议修订并重新调用 `plan_propose`；直接批准时评论随计划保存，并作为执行要求交给模型。TUI 中按 `3`（或选中第 3 项）输入评论，`Enter` 提交、`Esc` 返回；Web 审批卡片在文本框输入后点「提交建议，继续规划」或按 `Ctrl+Enter`。
 
 底栏和 `/status` 显示当前模式。模式作用于当前终端进程，新终端默认限制模式，`--full-access` 启用完全访问，`--ask` 启用逐次授权。权限模式是进程级的活状态：任务运行中也可以切换，正在运行的任务从下一次工具调用起采用新模式（审批立场与工作区边界立即变化），`plan` / `simple` 的工具面收窄从下一轮生效；沙箱模式仍需任务结束后切换。权限模式也应用于此后创建的后台任务和子 Agent，已派发的子 Agent 保持派发时的快照。plan 与 simple 是叠加模式：进入后底层的限制 / 逐次授权 / 完全访问仍然生效，退出时恢复。
 
@@ -64,7 +66,7 @@ allagent chat --full-access
 allagent run '检查项目并修复构建' --full-access --json
 ```
 
-Shell 使用随包 .NET 10 worker 内嵌的 PowerShell SDK 7.6.7，不探测或安装系统 PowerShell；worker 启动失败时阻止执行并提示修复软件。`powershell_script` 在同一 worker 上以持久会话执行 PowerShell 代码（对象/流输出、自发现与 Windows 管理），见 [PowerShell 持久会话](powershell-session.zh-CN.md)。宿主 Python 供沙箱运行支持使用，检查可执行性和 3.10–3.14 版本范围；缺少或版本不符时提示通过 winget 安装 Python 3.13，安装成功后提示重启。执行 Python 始终使用实际 Hyperlight microVM，并校验内置 guest 能力；宿主 AST 白名单已停止使用。完整访问权限由宿主工具提供。撤销覆盖工作区内可快照的文件工具修改；外部路径、Shell/MCP 和非只读子代理操作标记为外部行为，不承诺自动撤销。
+Shell 使用随包 .NET 10 worker 内嵌的 PowerShell SDK 7.6.7，不探测或安装系统 PowerShell；worker 启动失败时阻止执行并提示修复软件。`powershell_script` 在同一 worker 上以持久会话执行 PowerShell 代码（对象/流输出、自发现与 Windows 管理），见 [PowerShell 持久会话](powershell-session.zh-CN.md)。宿主 Python 只在回退到 Monty 沙箱且尚未初始化时按需查找 3.10–3.14；Hyperlight 可用时不需要宿主 Python，`/doctor --install` 可在确认后通过 winget 安装。执行 Python 始终使用实际 Hyperlight microVM，并校验内置 guest 能力；宿主 AST 白名单已停止使用。完整访问权限由宿主工具提供。撤销覆盖工作区内可快照的文件工具修改；外部路径、Shell/MCP 和非只读子代理操作标记为外部行为，不承诺自动撤销。
 
 ## Shell 与 npm
 

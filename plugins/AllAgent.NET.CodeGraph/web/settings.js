@@ -103,4 +103,9 @@ sdk.on('context', context => {
   }
 });
 
-sdk.ready.then(refresh).catch(error => show(error?.message || String(error), true));
+sdk.ready.then(() => {
+  // The host sends the initial context with `init`, after connect() has already run, so read it
+  // here rather than at module load.
+  state.workspace = sdk.context.workspace || '';
+  return refresh();
+}).catch(error => show(error?.message || String(error), true));

@@ -239,12 +239,16 @@
       <CodeGraphPluginFiles Include="../../plugins/AllAgent.NET.CodeGraph/allagent-plugin.json" />
       <CodeGraphPluginWebFiles Include="../../plugins/AllAgent.NET.CodeGraph/web/**/*" />
       <CodeGraphNativeFiles Include="../../plugins/AllAgent.NET.CodeGraph/bin/$(Configuration)/net10.0/native/win-x64/*.dll" Condition="Exists('../../plugins/AllAgent.NET.CodeGraph/bin/$(Configuration)/net10.0/native/win-x64')" />
+      <QoderPluginFiles Include="../../plugins/AllAgent.NET.Qoder/bin/$(Configuration)/net10.0/AllAgent.NET.Qoder.dll" Condition="Exists('../../plugins/AllAgent.NET.Qoder/bin/$(Configuration)/net10.0/AllAgent.NET.Qoder.dll')" />
+      <QoderPluginFiles Include="../../plugins/AllAgent.NET.Qoder/allagent-plugin.json" />
+      <QoderPluginFiles Include="../../plugins/AllAgent.NET.Qoder/README.md" Condition="Exists('../../plugins/AllAgent.NET.Qoder/README.md')" />
     </ItemGroup>
     <Error Condition="'$(CopyGuiShell)' == 'true' and !Exists('../../plugins/AllAgent.NET.CodeGraph/bin/$(Configuration)/net10.0/AllAgent.NET.CodeGraph.dll')" Text="Built-in CodeGraph plugin output is missing; build plugins/AllAgent.NET.CodeGraph before copying." />
     <Error Condition="'$(CopyGuiShell)' == 'true' and !Exists('../../plugins/AllAgent.NET.CodeGraph/bin/$(Configuration)/net10.0/native/win-x64/tree-sitter-c-sharp.dll')" Text="Built-in CodeGraph native grammars are missing; build plugins/AllAgent.NET.CodeGraph before copying." />
     <Copy SourceFiles="@(CodeGraphPluginFiles)" DestinationFolder="$(OutDir)builtin-plugins/AllAgent.NET.CodeGraph/" SkipUnchangedFiles="true" />
     <Copy SourceFiles="@(CodeGraphPluginWebFiles)" DestinationFiles="@(CodeGraphPluginWebFiles->'$(OutDir)builtin-plugins/AllAgent.NET.CodeGraph/web/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
     <Copy SourceFiles="@(CodeGraphNativeFiles)" DestinationFolder="$(OutDir)builtin-plugins/AllAgent.NET.CodeGraph/native/win-x64/" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(QoderPluginFiles)" DestinationFolder="$(OutDir)builtin-plugins/AllAgent.NET.Qoder/" SkipUnchangedFiles="true" />
   </Target>
   <Target Name="IncludeBuiltinPluginsInToolPackage" AfterTargets="ComputeFilesToPublish" Condition="'$(PackAsTool)' == 'true'">
     <ItemGroup>

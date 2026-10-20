@@ -13,7 +13,7 @@ internal enum SessionRunState { Running, AwaitingApproval, AwaitingAnswer, Await
 
 internal sealed record PendingApproval(ApprovalPreview Preview, TaskCompletionSource<bool> Completion, CancellationToken Token);
 internal sealed record PendingQuestion(AgentQuestion Question, TaskCompletionSource<string?> Completion, CancellationToken Token);
-internal sealed record PendingPlan(PlanPreview Preview, TaskCompletionSource<bool> Completion, CancellationToken Token);
+internal sealed record PendingPlan(PlanPreview Preview, TaskCompletionSource<PlanDecision> Completion, CancellationToken Token);
 
 /// <summary>
 /// One main-session turn with a life of its own: the pump that drains the engine lives here, not in
@@ -73,7 +73,7 @@ internal sealed class SessionRun(Guid conversationId, string title, string strea
     }
     public void EnqueuePlan(PendingPlan plan)
     {
-        if (_released) { plan.Completion.TrySetResult(false); return; }
+        if (_released) { plan.Completion.TrySetResult(new PlanDecision(false, "Plan approval was released because the run ended; stay in plan mode.")); return; }
         _plans.Enqueue(plan);
         if (_released) ReleasePrompts();
     }
@@ -87,7 +87,7 @@ internal sealed class SessionRun(Guid conversationId, string title, string strea
         _released = true;
         while (_approvals.TryDequeue(out var approval)) approval.Completion.TrySetResult(false);
         while (_questions.TryDequeue(out var question)) question.Completion.TrySetResult(null);
-        while (_plans.TryDequeue(out var plan)) plan.Completion.TrySetResult(false);
+        while (_plans.TryDequeue(out var plan)) plan.Completion.TrySetResult(new PlanDecision(false, "Plan approval was released because the run ended; stay in plan mode."));
     }
 }
 

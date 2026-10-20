@@ -77,6 +77,28 @@ describe('plan card', () => {
       approve?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
       await new Promise(resolve => setTimeout(resolve, 10))
     })
-    expect(respond).toHaveBeenCalledWith('plan-1', true)
+    expect(respond).toHaveBeenCalledWith('plan-1', true, undefined)
+  })
+
+  it('submits the human comment when the plan should be revised', async () => {
+    const respond = vi.fn(async () => {})
+    await act(async () => {
+      root?.render(<PlanDialog onRespond={respond} request={request} />)
+      await new Promise(resolve => setTimeout(resolve, 30))
+    })
+    const textarea = document.querySelector('textarea.plan-comment-input') as HTMLTextAreaElement
+    expect(textarea).toBeTruthy()
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
+    await act(async () => {
+      setter?.call(textarea, '先补回滚步骤')
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const submit = Array.from(document.querySelectorAll('button')).find(button => button.textContent?.includes('提交建议，继续规划'))
+    expect(submit).toBeTruthy()
+    await act(async () => {
+      submit?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await new Promise(resolve => setTimeout(resolve, 10))
+    })
+    expect(respond).toHaveBeenCalledWith('plan-1', false, '先补回滚步骤')
   })
 })

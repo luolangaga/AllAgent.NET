@@ -356,7 +356,7 @@ internal sealed class CodeExecutionBlock(string id, string code, bool reasoning 
     private IRenderable BuildContent()
     {
         var rows = new List<IRenderable>();
-        if (IsReasoning) { rows.Add(new MarkedThinkingLine(this, L.Pick("✳ 思考 ", "✳ Thinking "))); return new Rows(rows); }
+        if (IsReasoning) { rows.Add(new MarkedThinkingLine(this, L.Pick("思考 ", "Thinking "))); return new Rows(rows); }
         if (Invocations.Count == 0) rows.Add(new Text(Ok == null ? L.Pick("正在计算或准备操作…", "Computing or preparing…") : L.Pick("计算与处理已结束 · Ctrl+O 查看调度代码与结果", "Computation finished · Ctrl+O shows dispatch code and results"), TraceStyle(-1, Color.Grey)));
         if (Invocations.Count == 0 && Ok == null) rows.Add(new ToolRunningLine(L.Pick("正在执行工具…", "Running tools…")));
         foreach (var (call, index) in Invocations.Select((call, index) => (call, index)))

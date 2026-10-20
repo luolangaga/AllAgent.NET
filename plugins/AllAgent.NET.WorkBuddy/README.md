@@ -13,6 +13,8 @@ Windows 使用宿主 TokenVault（DPAPI）加密保存凭据。
 
 - `/login workbuddy`：国内版浏览器授权，自动刷新凭据并获取模型供选择。
 - `/login workbuddy-intl`：国际版。
+- 模型目录：显式声明 `contextLength` / `maxOutputTokens` / `reasoningEfforts` 时按声明保存；默认上下文为 300k，可在「模型与 API」或输入框的「上下文」菜单按模型覆盖。
+- 思考等级：`reasoning_effort`（`none` / `low` / `high` / `max`），只显示模型原生档位；接口没有宣告档位的模型不显示选择器。
 - `/ext workbuddy-quota`、`/ext workbuddy-intl-quota`：实时查询套餐剩余额度和已用额度。
 - `/ext workbuddy-status`、`/ext workbuddy-intl-status`：仅查询对应 WorkBuddy 账号状态。
 - `/logout workbuddy`：清除本地凭据并禁用关联模型。

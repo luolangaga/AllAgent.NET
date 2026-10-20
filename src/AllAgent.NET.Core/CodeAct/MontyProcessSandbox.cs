@@ -57,7 +57,11 @@ public sealed class MontyProcessSandbox(AgentOptions options) : ICodeSandbox
             if (!File.Exists(python) && !options.AllowSandboxInstallation)
                 throw new InvalidOperationException("备用 Monty 尚未安装；运行 /doctor install 联网安装，无需管理员权限或虚拟化。");
             if (!File.Exists(python))
-                await Run(options.PythonPath ?? throw new InvalidOperationException("Monty 需要宿主 Python。"), ["-I", "-m", "venv", root]);
+            {
+                var hostPython = options.PythonPath ?? await new EnvironmentDoctor().ResolvePythonAsync(ct: ct)
+                    ?? throw new InvalidOperationException("备用 Monty 需要宿主 Python 3.10–3.14；安装 Python 后重试，或运行 /doctor install。");
+                await Run(hostPython, ["-I", "-m", "venv", root]);
+            }
             var check = await BoundedProcess.RunAsync(BoundedProcess.StartInfo(python,
                 ["-I", "-c", "import importlib.metadata; import pydantic_monty; assert importlib.metadata.version('pydantic-monty') == '1.1.0'"]), TimeSpan.FromSeconds(15), ct);
             if (check.ExitCode != 0 && !options.AllowSandboxInstallation)

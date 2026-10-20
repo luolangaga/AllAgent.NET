@@ -16,6 +16,10 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3537.50" />
   </ItemGroup>
+  <!-- The shell has no Core reference by design; the crash reporter is dependency-free BCL code. -->
+  <ItemGroup>
+    <Compile Include="..\AllAgent.NET.Core\Diagnostics\CrashReporter.cs" Link="Diagnostics\CrashReporter.cs" />
+  </ItemGroup>
   <!-- Only the WPF WebView2 assembly is used; the WinForms wrapper and the
        default WinForms framework reference are never linked. -->
   <Target Name="RemoveUnusedWebViewFormsReference" BeforeTargets="ResolveAssemblyReferences">

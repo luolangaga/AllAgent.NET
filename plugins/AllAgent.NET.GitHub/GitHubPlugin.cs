@@ -44,8 +44,6 @@ public sealed class GitHubPlugin : IAllAgentPlugin
         });
         context.AddWebBridge<object?, bool>("browserLogin", (_, _) =>
         {
-            if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ALLAGENT_GITHUB_CLIENT_ID")))
-                throw new InvalidOperationException("请配置自己的 GitHub OAuth App Client ID（ALLAGENT_GITHUB_CLIENT_ID），并在 GitHub 启用 Device Flow；也可直接粘贴 Token 登录。");
             if (Interlocked.CompareExchange(ref loginPending, 1, 0) != 0) throw new InvalidOperationException("登录正在进行。");
             loginError = null;
             pending["login"] = Task.Run(async () =>
@@ -59,13 +57,18 @@ public sealed class GitHubPlugin : IAllAgentPlugin
                         using var browser = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true });
                         return Task.CompletedTask;
                     }, lifetime.Token);
+                    context.Web.Push("auth", new { loggedIn = true });
                 }
-                catch (Exception ex) { loginError = ex is OperationCanceledException ? "授权已取消或超时。" : ex.Message; }
+                catch (Exception ex)
+                {
+                    loginError = ex is OperationCanceledException ? "授权已取消或超时。" : ex.Message;
+                    context.Web.Push("auth", new { loggedIn = false, error = loginError });
+                }
                 finally { Volatile.Write(ref loginPending, 0); }
             });
             return Task.FromResult(true);
         });
-        context.AddWebBridge<object?, object>("loginProgress", (_, _) => Task.FromResult<object>(new { pending = Volatile.Read(ref loginPending) != 0, instructions = auth.LoginInstructions, error = loginError }));
+        context.AddWebBridge<object?, object>("loginProgress", (_, _) => Task.FromResult<object>(new { pending = Volatile.Read(ref loginPending) != 0, instructions = auth.LoginInstructions, userCode = auth.DeviceUserCode, verificationUri = auth.VerificationUri, error = loginError }));
         context.AddWebBridge<GitHubQuery, GitHubPage>("list", (p, ct) => api.ListAsync(p.Kind, p.Repository, p.Query, p.Page, ct));
         context.AddWebBridge<GitHubItemQuery, GitHubDetail>("detail", (p, ct) => api.DetailAsync(p.Repository, p.Number, p.Kind, ct));
         context.AddWebBridge<GitHubRead, JsonElement>("read", (p, ct) => api.MarkReadAsync(p.Id, ct));

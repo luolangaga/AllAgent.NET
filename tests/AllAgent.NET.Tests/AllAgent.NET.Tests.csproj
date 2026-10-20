@@ -19,6 +19,7 @@
     <ProjectReference Include="../../plugins/AllAgent.NET.GitHub/AllAgent.NET.GitHub.csproj" />
     <ProjectReference Include="../../plugins/AllAgent.NET.Diligence/AllAgent.NET.Diligence.csproj" />
     <ProjectReference Include="../../plugins/AllAgent.NET.CodeGraph/AllAgent.NET.CodeGraph.csproj" />
+    <ProjectReference Include="../../plugins/AllAgent.NET.Qoder/AllAgent.NET.Qoder.csproj" />
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageReference Include="xunit" Version="2.9.3" />

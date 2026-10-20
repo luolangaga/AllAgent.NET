@@ -39,6 +39,21 @@ describe('plan approvals', () => {
     expect(store.plans).toHaveLength(0)
   })
 
+  it('sends the human comment with the plan decision', async () => {
+    const requests: Request[] = []
+    handle = request => { requests.push(request); return reply(request, true) }
+    const { useApprovalsStore } = await import('../src/stores/approvals')
+    const store = useApprovalsStore()
+    push(proposal)
+
+    await store.respondPlan('plan-1', false, 'Add a rollback step')
+    expect(requests.find(request => request.method === 'plan.respond')?.params).toMatchObject({
+      planId: 'plan-1',
+      approved: false,
+      feedback: 'Add a rollback step',
+    })
+  })
+
   it('replays pending plans and clears them when another client resolves them', async () => {
     const { useApprovalsStore } = await import('../src/stores/approvals')
     const store = useApprovalsStore()

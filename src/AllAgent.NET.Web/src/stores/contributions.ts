@@ -19,7 +19,19 @@ export interface PluginWebCommandEntry {
   key: string
   title: string
   pluginName: string
-  route: string
+  route?: string
+  panel?: string
+}
+
+/** A plugin panel is a topbar toggle that opens a floating frame instead of a sidebar page. */
+export interface PluginPanelEntry {
+  key: string
+  panelId: string
+  title: string
+  icon?: string | null
+  entry: string
+  order: number
+  plugin: PluginWebInfo
 }
 
 export interface PluginToolCardEntry {
@@ -34,6 +46,10 @@ export interface PluginSettingsEntry {
 
 export function pluginPageRoute(packageId: string, pageId: string): string {
   return `plugin:${packageId.toLowerCase()}:${pageId}`
+}
+
+export function pluginPanelKey(packageId: string, panelId: string): string {
+  return pluginPageRoute(packageId, panelId)
 }
 
 export const useContributionsStore = defineStore('contributions', () => {
@@ -81,14 +97,27 @@ export const useContributionsStore = defineStore('contributions', () => {
     })))
     .sort((left, right) => left.order - right.order || left.title.localeCompare(right.title)))
 
+  const panels = computed<PluginPanelEntry[]>(() => active.value
+    .flatMap(plugin => (plugin.contributes?.panels ?? []).map(panel => ({
+      key: pluginPanelKey(plugin.packageId, panel.id),
+      panelId: panel.id,
+      title: panel.title,
+      icon: panel.icon,
+      entry: panel.entry,
+      order: panel.order ?? 50,
+      plugin,
+    })))
+    .sort((left, right) => left.order - right.order || left.title.localeCompare(right.title)))
+
   const commands = computed<PluginWebCommandEntry[]>(() => active.value.flatMap(plugin =>
     (plugin.contributes?.commands ?? [])
-      .filter(command => command.page)
+      .filter(command => command.page || command.panel)
       .map(command => ({
         key: `${plugin.packageId}:${command.id}`,
         title: command.title,
         pluginName: plugin.name,
-        route: pluginPageRoute(plugin.packageId, command.page as string),
+        route: command.page ? pluginPageRoute(plugin.packageId, command.page) : undefined,
+        panel: command.panel ? pluginPanelKey(plugin.packageId, command.panel) : undefined,
       }))))
 
   const settings = computed<PluginSettingsEntry[]>(() => active.value.flatMap(plugin =>
@@ -132,5 +161,5 @@ export const useContributionsStore = defineStore('contributions', () => {
 
   bridgeEvents.on('web.contributions.changed', () => { void loadAll() })
 
-  return { plugins, assetBaseUrl, settingsValues, loaded, available, busy, active, pages, commands, settings, loadAll, loadSettings, saveSetting, setWebEnabled, pageByRoute, toolCardFor }
+  return { plugins, assetBaseUrl, settingsValues, loaded, available, busy, active, pages, panels, commands, settings, loadAll, loadSettings, saveSetting, setWebEnabled, pageByRoute, toolCardFor }
 })

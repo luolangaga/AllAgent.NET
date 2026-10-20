@@ -1,5 +1,5 @@
 import { defineStore, ref } from '@/lib/store'
-import type { ApiConfig, ReasoningOptions } from '@/types'
+import type { ApiConfig, ModelContextInfo, ReasoningOptions } from '@/types'
 import { invoke } from '@/bridge'
 
 export type TestStatus = 'idle' | 'testing' | 'ok' | 'error'
@@ -47,6 +47,7 @@ export const useApiConfigsStore = defineStore('apiConfigs', () => {
       models: config.models ?? [],
       apiKeyEnvironmentVariable: config.apiKeyEnvironmentVariable ?? null,
       authenticationProviderId: config.authenticationProviderId ?? null,
+      ...(config.modelContextWindows ? { modelContextWindows: config.modelContextWindows } : {}),
     })
     const index = configs.value.findIndex(item => item.id === saved.id)
     if (index >= 0) configs.value = configs.value.map(item => (item.id === saved.id ? saved : item))
@@ -81,9 +82,20 @@ export const useApiConfigsStore = defineStore('apiConfigs', () => {
     return updated
   }
 
-  async function reasoningOptions(id: string) {
-    return invoke<ReasoningOptions>('apiConfigs.reasoning', { id })
+  async function reasoningOptions(id: string, model?: string) {
+    return invoke<ReasoningOptions>('apiConfigs.reasoning', { id, model: model ?? null })
   }
 
-  return { configs, testStatus, loaded, loadAll, save, remove, testConnection, refreshModels, reasoningOptions }
+  async function contextOptions(id: string, model?: string) {
+    return invoke<ModelContextInfo>('apiConfigs.context', { id, model: model ?? null })
+  }
+
+  /** Records a per-model window; 0 restores the automatic capacity. */
+  async function setContext(id: string, model: string, tokens: number) {
+    const info = await invoke<ModelContextInfo>('apiConfigs.setContext', { id, model, tokens })
+    await loadAll()
+    return info
+  }
+
+  return { configs, testStatus, loaded, loadAll, save, remove, testConnection, refreshModels, reasoningOptions, contextOptions, setContext }
 })

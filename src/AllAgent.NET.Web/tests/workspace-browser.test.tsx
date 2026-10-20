@@ -21,6 +21,10 @@ beforeEach(() => {
   vi.resetModules()
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+  vi.stubGlobal('scrollTo', () => { })
+  if (!Element.prototype.getAnimations) {
+    Object.defineProperty(Element.prototype, 'getAnimations', { configurable: true, value: () => [] })
+  }
   calls.length = 0
   host.chrome = { webview: { postMessage(json) {
     const request = JSON.parse(json) as Request
@@ -69,12 +73,12 @@ describe('工作区文件面板', () => {
       // The nested level only loads when the folder is expanded.
       expect(calls.some(call => call.method === 'workspace.tree' && (call.params as { path?: string }).path === 'src')).toBe(false)
 
-      const folder = findByText(element, '.tree-main', 'src')!
+      const folder = findByText(element, '[role="treeitem"]', 'src')! 
       await act(async () => { folder.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
       await settle(() => element.textContent?.includes('App.tsx') === true, 10000)
       expect(calls.some(call => call.method === 'workspace.tree' && (call.params as { path?: string }).path === 'src')).toBe(true)
 
-      const file = findByText(element, '.tree-main', 'App.tsx')!
+      const file = findByText(element, '[role="treeitem"]', 'App.tsx')!
       await act(async () => { file.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
       await settle(() => element.textContent?.includes('hello world') === true, 10000)
       expect(calls).toContainEqual(expect.objectContaining({ method: 'workspace.readFile', params: { path: 'src/App.tsx' } }))
@@ -97,4 +101,24 @@ describe('工作区文件面板', () => {
       element.remove()
     }
   })
+
+  it('opens a feature-rich context menu for a file row', async () => {
+    const { element, root } = await mount()
+    try {
+      await settle(() => element.textContent?.includes('README.md') === true, 10000)
+      const file = findByText(element, '[role="treeitem"]', 'README.md')!
+      await act(async () => {
+        file.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: 80, clientY: 80 }))
+      })
+      await settle(() => document.body.textContent?.includes('预览文件') === true)
+      expect(document.body.textContent).toContain('打开方式')
+      expect(document.body.textContent).toContain('引用到对话')
+      expect(document.body.textContent).toContain('查找同名文件')
+      expect(document.body.textContent).toContain('隐藏忽略目录')
+      expect(document.body.textContent).toContain('复制')
+    } finally {
+      await act(async () => { root.unmount() })
+      element.remove()
+    }
+  }, 20000)
 })

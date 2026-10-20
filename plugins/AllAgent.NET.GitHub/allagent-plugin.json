@@ -5,10 +5,10 @@
   "web": {
     "sdkVersion": 1,
     "entry": "web/index.html",
-    "capabilities": ["navigation", "workspace.switch"],
+    "capabilities": ["navigation", "workspace.switch", "workspace.pick", "clipboard.write", "markdown"],
     "contributes": {
-      "pages": [{ "id": "github", "title": "GitHub", "icon": "github", "entry": "web/index.html", "order": 25 }],
-      "commands": [{ "id": "open", "title": "GitHub · Issue、PR 与消息", "page": "github" }]
+      "panels": [{ "id": "github", "title": "GitHub", "icon": "github", "entry": "web/index.html", "order": 25 }],
+      "commands": [{ "id": "open", "title": "GitHub · Issue、PR 与消息", "panel": "github" }]
     }
   }
 }

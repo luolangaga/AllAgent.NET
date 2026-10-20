@@ -5,10 +5,26 @@ namespace AllAgent.NET.Core.Services.AI;
 
 public static class ModelContext
 {
-    public static int Capacity(ApiConfig config) => Validate(config.ModelContextWindows.TryGetValue(config.DefaultModel, out var manual) ? manual
-        : ModelCatalog.Resolve(config)?.ContextTokens ?? CodexPreset(config) ?? 100000);
-    private static int? CodexPreset(ApiConfig config) => config.ProviderId is "codex" or "openai" &&
-        config.DefaultModel is "gpt-6.1-sol" or "gpt-6-astra" or "gpt-6-sol" or "gpt-6-luna" ? 1050000 : null;
+    /// <summary>Unset marker kept for configs written before provider presets existed.</summary>
+    private const int FactoryDefault = 100000;
+    public static int Capacity(ApiConfig config) => Capacity(config, config.DefaultModel);
+    public static int Capacity(ApiConfig config, string model)
+    {
+        if (config.ModelContextWindows.TryGetValue(model, out var manual)) return Validate(manual);
+        // A limit discovered from the authenticated endpoint is the model's real window.
+        if (config.ModelLimits.TryGetValue(model, out var discovered) && discovered.ContextTokens is > 0)
+            return Validate(discovered.ContextTokens!.Value);
+        var known = model == config.DefaultModel ? ModelCatalog.Resolve(config) : ModelCatalog.Resolve(config, model);
+        return Validate(ExplicitDefault(config) ?? ProviderPreset(config, model) ?? known?.ContextTokens ?? FactoryDefault);
+    }
+    /// <summary>A capacity the user typed in the GUI; the untouched factory value must not shadow a provider preset.</summary>
+    private static int? ExplicitDefault(ApiConfig config) => config.ContextWindowTokens is > 0 and not FactoryDefault ? config.ContextWindowTokens : null;
+    private static int? ProviderPreset(ApiConfig config, string model) => config.ProviderId switch
+    {
+        "workbuddy" or "workbuddy-intl" => 300000,
+        "codex" or "openai" when model is "gpt-6.1-sol" or "gpt-6-astra" or "gpt-6-sol" or "gpt-6-luna" => 1050000,
+        _ => null
+    };
     public static int Validate(int value) => value is >= 1024 and <= 10000000 ? value : throw new ArgumentException("模型上下文容量范围为 1024–10000000 Token。");
     public static int Parse(string text)
     {

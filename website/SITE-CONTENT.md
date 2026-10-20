@@ -22,7 +22,7 @@ AllAgent.NET 是**面向 Windows 本机工作流**的终端 AI Agent：模型侧
 - **子代理**：`explore / general / investigate / modify / review / verify` 六种角色；支持单任务、**并行（最多 8 个任务、6 个并发）**、串行链；子代理向主代理返回结果与阻塞原因，停止会等待实际收尾。
 - **扩展**：内置 Skills、MCP 服务、DLL 插件；内置联网搜索与网页读取**不需要搜索 API Key**。
 - **数据**：Terminal 数据默认在 `<workspace>/.allagent/data/`；`allagent.json` 是 v3 清单；每次会话修订存 `conversations/`；原子写 + fsync + 校验和回读；跨进程事务、单写入者租约；旧版 v2 迁移会保留备份。
-- **环境检查**：`allagent doctor` / `/doctor` 检查 Python、PowerShell、ripgrep、共享库环境、pip、pip.md 与实际沙箱执行结果；`doctor install` 可经 `winget` 补装（安装 Python 3.13 / PowerShell 后提示重启）。检查本身不会安装软件。
+- **环境检查**：`allagent doctor` / `/doctor` 检查随包 PowerShell SDK worker、ripgrep、宿主机 WebView2 与实际沙箱执行结果；宿主 Python 只在 Monty 备用沙箱初始化时按需检测。`doctor install` 可经 `winget` 补装 Python 与 ripgrep，PowerShell 随包分发、无需安装。检查本身不会安装软件。
 - **共享库环境**：`python/venv/`，默认装 requests、beautifulsoup4、PyYAML、numpy、pypdf；`/install-pip` 安装并更新 `pip.md`，该文件按实际元数据生成并自动注入模型上下文。
 - **模型**：OpenAI Chat / Responses、Anthropic、Gemini，以及任何兼容 OpenAI 协议的服务（含 Ollama）；F2 或 `/model` 切换，选择会记住。
 - **快捷键**：F2 模型 · F3 恢复会话 · Ctrl+P 命令搜索 · F1 常用操作 · Ctrl+E 查看执行代码与工具结果 · Ctrl+B 侧栏 · Ctrl+J / Shift+Enter 多行 · Ctrl+V 贴图 · 双击 Esc 停止任务 · `/diff` `/undo` `/redo` · `/queue add` · `/steer` · `/sandbox` · `/status`。

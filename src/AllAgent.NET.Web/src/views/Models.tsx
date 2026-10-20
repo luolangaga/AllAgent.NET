@@ -307,11 +307,17 @@ export default function Models() {
         <Field label="最大输出 Tokens（0 = 自动）" onChange={value => update({ maxTokens: Number(value) })} type="number" value={editing.maxTokens} />
       </div>
       <Field
-        description={`实际生效：${formatTokens(editing.effectiveContextTokens ?? editing.contextWindowTokens ?? 0)} tokens（含按模型记录的容量）。`}
-        label="上下文容量（默认）"
-        onChange={value => update({ contextWindowTokens: Number(value) })}
+        description={`当前模型实际生效 ${formatTokens(editing.effectiveContextTokens ?? editing.contextWindowTokens ?? 0)} tokens；填入容量会只为该模型记录，填 0 或留空恢复自动。`}
+        label="上下文容量（当前模型）"
+        onChange={value => {
+          const model = editing.defaultModel.trim()
+          const tokens = Number(value) || 0
+          // Without a model ID the fallback stays global.
+          if (!model) { update({ contextWindowTokens: tokens || 100000 }); return }
+          update({ modelContextWindows: { ...(editing.modelContextWindows ?? {}), [model]: tokens } })
+        }}
         type="number"
-        value={editing.contextWindowTokens ?? 100000}
+        value={editing.modelContextWindows?.[editing.defaultModel.trim()] || editing.effectiveContextTokens || editing.contextWindowTokens || 100000}
       />
       {reasoning ? <>
         <label className="field"><span>思考协议</span>
@@ -319,7 +325,7 @@ export default function Models() {
             label="思考协议"
             onChange={reasoningProtocol => update({ reasoningProtocol })}
             options={reasoning.protocols.map(protocol => ({ value: protocol, label: protocol }))}
-            value={editing.reasoningProtocol ?? reasoning.protocol}
+            value={reasoning.protocol}
           />
         </label>
         <label className="field"><span>思考强度</span>
@@ -347,9 +353,6 @@ export default function Models() {
       />
       <div className="setting-row"><span>启用此模型</span>
         <Switch aria-label="启用此模型" checked={editing.isEnabled} onCheckedChange={isEnabled => update({ isEnabled })} size="sm" />
-      </div>
-      <div className="setting-row"><span>默认深度思考</span>
-        <Switch aria-label="默认深度思考" checked={editing.thinkingEnabled} onCheckedChange={thinkingEnabled => update({ thinkingEnabled })} size="sm" />
       </div>
     </Modal> : null}
 

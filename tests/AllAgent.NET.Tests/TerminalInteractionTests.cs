@@ -117,7 +117,7 @@ public sealed class TerminalInteractionTests
         Assert.Equal('q', (await reader.ReadAsync(default)).Key.KeyChar);
     }
     [Fact]
-    public async Task DragStaysInMessageOrTableColumnAndRightClickCopiesSelectedInput()
+    public async Task DragSelectionSpansMessagesButStaysInTableColumnAndRightClickCopiesSelectedInput()
     {
         using var w = new TestWorkspace(); using var store = new DataStore(Path.Combine(w.Root, "data"));
         await using var mcp = new McpToolService(store, new SkillExecutor()); var console = new TestConsole(); console.Profile.Width = 120; console.Profile.Height = 35;
@@ -128,7 +128,7 @@ public sealed class TerminalInteractionTests
         var y = lines.FindIndex(line => string.Concat(line.Select(segment => segment.Text)).Contains("FIRST-ONE"));
         screen.SelectInput(new(default, Pointer: new(2, y, PointerAction.Down)), state);
         screen.SelectInput(new(default, Pointer: new(119, 32, PointerAction.Drag)), state);
-        var text = screen.ExtractSelection((2, y), (119, 32)); Assert.Contains("FIRST-TWO", text); Assert.DoesNotContain("SECOND-BLOCK", text); Assert.DoesNotContain("会话信息", text); Assert.DoesNotContain("输入", text);
+        var text = screen.ExtractSelection((2, y), (119, 32)); Assert.Contains("FIRST-TWO", text); Assert.Contains("SECOND-BLOCK", text); Assert.DoesNotContain("会话信息", text); Assert.DoesNotContain("输入", text);
         screen.ScrollToLatest();
         var table = new Table().AddColumn("ID").AddColumn("Title").AddColumn("Model"); table.AddRow("id-one", "TITLE-ONE", "MODEL-ONE"); table.AddRow("id-two", "TITLE-TWO", "MODEL-TWO");
         screen.Append(table); frame = screen.RenderFrame(120, 35); lines = Segment.SplitLines(frame, 120, 35);
@@ -138,6 +138,27 @@ public sealed class TerminalInteractionTests
         text = screen.ExtractSelection((x, y), (119, y + 1)); Assert.Contains("TITLE-ONE", text); Assert.Contains("TITLE-TWO", text); Assert.DoesNotContain("id-", text); Assert.DoesNotContain("MODEL", text);
         state.SelectAll(); Assert.True(await screen.ContextClickAsync(new(default, Pointer: new(5, 28, PointerAction.Down, Button: PointerButton.Right)), state, _ => throw new Exception("Copy must not paste")));
         Assert.Equal("input text", copied);
+    }
+    [Fact]
+    public async Task DraggingPastTheTopEdgeScrollsAndExtendsSelectionAcrossMessages()
+    {
+        using var w = new TestWorkspace(); using var store = new DataStore(Path.Combine(w.Root, "data"));
+        await using var mcp = new McpToolService(store, new SkillExecutor()); var console = new TestConsole(); console.Profile.Width = 100; console.Profile.Height = 30;
+        using var screen = new FullScreenTerminal(store, new(store, w.Root, w.Root), mcp, new(false, false), console);
+        screen.Append(new Text(string.Join('\n', Enumerable.Range(0, 100).Select(i => $"ROW-{i:000}"))));
+        var input = new InputState(); screen.SetInput(input, [], "ready");
+        screen.RenderFrame(100, 30);
+        screen.Navigation(new TerminalInput(default, Wheel: 20));
+        var lines = Segment.SplitLines(screen.RenderFrame(100, 30), 100, 30);
+        var start = lines.FindIndex(line => string.Concat(line.Select(segment => segment.Text)).Contains("ROW-070"));
+        Assert.True(start > 3);
+        screen.SelectInput(new(default, Pointer: new(3, start, PointerAction.Down)), input);
+        screen.SelectInput(new(default, Pointer: new(3, 3, PointerAction.Drag)), input);
+        for (var now = 100L; now <= 500; now += 100) screen.AutoScrollTranscript(now);
+        var after = Segment.SplitLines(screen.RenderFrame(100, 30), 100, 30);
+        Assert.Contains(after, line => string.Concat(line.Select(segment => segment.Text)).Contains("ROW-068"));
+        var text = screen.ExtractTranscriptSelection();
+        Assert.Contains("ROW-060", text); Assert.Contains("ROW-068", text); Assert.DoesNotContain("ROW-056", text);
     }
     [Fact]
     public async Task ActualSpectreMultiSelectionReturnsSeveralAnswersAndOtherText()

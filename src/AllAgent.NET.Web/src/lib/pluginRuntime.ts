@@ -55,6 +55,7 @@ export interface FrameHandle {
 interface FrameEnvelope {
   allagent: number
   type: string
+  id?: string
   payload?: unknown
 }
 
@@ -151,7 +152,8 @@ export function registerFrame(element: HTMLIFrameElement, options: FrameOptions,
 }
 
 function send(record: FrameRecord, envelope: FrameEnvelope) {
-  try { record.element.contentWindow?.postMessage(envelope, record.origin || '*') } catch { /* frame is gone */ }
+  try { record.element.contentWindow?.postMessage(envelope, record.origin || '*') }
+  catch (error) { console.warn('[AllAgentPlugin] frame message failed:', envelope.type, error) }
 }
 
 function initPayload(record: FrameRecord) {
@@ -161,7 +163,9 @@ function initPayload(record: FrameRecord) {
     view: record.view,
     theme: themeSnapshot(),
     context: record.context,
-    capabilities: record.plugin.capabilities ?? [],
+    // The contributions store wraps arrays in Proxies, which structured clone rejects, so the
+    // frame gets a plain copy; a Proxy here makes postMessage throw a silent DataCloneError.
+    capabilities: Array.from(record.plugin.capabilities ?? []),
   }
 }
 
@@ -187,10 +191,10 @@ function ensureListeners() {
       }
       return
     }
-    if (type === 'workspace.changed') {
+    if (type === 'workspace.changed' || type === 'workspace.folderPicked') {
       for (const record of frames) {
-        if (record.subscriptions.has('workspace.changed')) {
-          send(record, { allagent: FRAME_PROTOCOL, type: 'event', payload: { name: 'workspace.changed', data: event } })
+        if (record.subscriptions.has(type)) {
+          send(record, { allagent: FRAME_PROTOCOL, type: 'event', payload: { name: type, data: event } })
         }
       }
     }
@@ -222,8 +226,10 @@ function onMessage(event: MessageEvent) {
   switch (data.type) {
     case 'invoke': {
       const payload = (data.payload ?? {}) as { id?: string; method?: string; params?: unknown }
-      if (typeof payload.id !== 'string' || typeof payload.method !== 'string') return
-      void handleInvoke(record, payload.id, payload.method, payload.params)
+      // The SDK correlates requests by the envelope id; older payloads may carry it inside.
+      const id = typeof data.id === 'string' ? data.id : payload.id
+      if (typeof id !== 'string' || typeof payload.method !== 'string') return
+      void handleInvoke(record, id, payload.method, payload.params)
       break
     }
     case 'subscribe': {

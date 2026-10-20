@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
@@ -13,6 +14,7 @@ using AllAgent.NET.Core.Localization;
 using AllAgent.NET.Core.Models;
 using AllAgent.NET.Core.Services;
 using AllAgent.NET.Core.Services.AI;
+using AllAgent.NET.Core.Services.Updates;
 
 namespace AllAgent.NET.Core.Bridge;
 
@@ -30,11 +32,19 @@ public record SkillDto(Guid Id, string Name, string Description, string Paramete
 public record ApiConfigDto(Guid Id, string ProviderId, string DisplayName, string BaseUrl, string ApiKey, string DefaultModel, double Temperature, int MaxTokens, bool IsEnabled, string? ExtraHeadersJson, bool ThinkingEnabled, int ThinkingBudget,
     int ContextWindowTokens = 100000, string Protocol = "", string ReasoningProtocol = "auto", string ReasoningEffort = "default",
     List<string>? Models = null, string? ApiKeyEnvironmentVariable = null, string? AuthenticationProviderId = null,
-    int EffectiveContextTokens = 0, string EffectiveProtocol = "", int EffectiveMaxTokens = 0);
+    int EffectiveContextTokens = 0, string EffectiveProtocol = "", int EffectiveMaxTokens = 0, Dictionary<string, int>? ModelContextWindows = null);
 public record McpServerConfigDto(string Id, string Name, string Command, string Arguments, bool IsEnabled, DateTime CreatedAt, bool IsConnected = false);
 public record SettingsDto(string Theme, string Language, string DefaultModel, bool StreamingEnabled, string DefaultProviderId, bool BrowserUseEnabled = true, string BrowserUseMode = "builtin", string BrowserExecutablePath = "", string BrowserCdpUrl = "", string GitCommitConfigId = "", string LanguageResolved = "zh");
 public record ToolInfoDto(string Name, string Description, string Risk, string ParametersJson, string Source, string Owner);
 public record ToolsSnapshotDto(IReadOnlyList<ToolInfoDto> Tools, IReadOnlyList<string> Errors);
+public record UpdateStatusDto(string CurrentVersion, string? LatestVersion, bool UpdateAvailable, string Source,
+    string InstallKind, string Architecture, string? ReleaseUrl, string? ReleaseNotes, string? Error,
+    string? LastResult, string? LastError, DateTimeOffset CheckedAt, bool FromCache, string? LogPath);
+public record UpdateCheckParams(string? Source = null, string? Channel = null, bool? Force = null);
+public record UpdateInstallParams(string? Source = null, string? Channel = null, bool? AllowUnsigned = null);
+public record UpdateSettingsDto(string Source = "auto", string Channel = "stable", bool AutoCheck = true,
+    bool AutoInstall = false, bool RequireSignature = false, bool RequireChecksum = true);
+public record UpdateInvokeResult(bool Started, string Message, string? Version = null, string? LogPath = null);
 
 // Request params
 public record CreateConversationParams(string Title = "New Conversation");
@@ -55,7 +65,11 @@ public record ToggleSkillParams(Guid Id, bool Enabled);
 public record DeleteSkillParams(Guid Id);
 public record SaveApiConfigParams(Guid? Id, string ProviderId, string DisplayName, string BaseUrl, string ApiKey, string DefaultModel, double Temperature, int MaxTokens, bool IsEnabled, string? ExtraHeadersJson, bool ThinkingEnabled = false, int ThinkingBudget = 8000,
     int ContextWindowTokens = 100000, string Protocol = "", string ReasoningProtocol = "auto", string ReasoningEffort = "default",
-    List<string>? Models = null, string? ApiKeyEnvironmentVariable = null, string? AuthenticationProviderId = null);
+    List<string>? Models = null, string? ApiKeyEnvironmentVariable = null, string? AuthenticationProviderId = null, Dictionary<string, int>? ModelContextWindows = null);
+public record ReasoningParams(Guid Id, string? Model = null);
+public record ModelContextParams(Guid Id, string? Model = null);
+public record SetModelContextParams(Guid Id, string? Model = null, int Tokens = 0);
+public record ModelContextDto(string Model, int Capacity, int? Manual, int DefaultWindow);
 public record ReasoningOptionsDto(string Protocol, IReadOnlyList<string> Protocols, IReadOnlyList<string> Efforts, string Effort, int Budget, int MinimumBudget, int MaximumBudget, string Label);
 public record DeleteApiConfigParams(Guid Id);
 public record TestApiConfigParams(Guid Id);
@@ -96,6 +110,25 @@ public class BridgeHandlerRegistrar
 
     public void RegisterAll()
     {
+        // Updates
+        _dispatcher.Register<UpdateStatusDto>("update.status", ct => UpdateStatusAsync(false, ct, null, null));
+        _dispatcher.Register<UpdateCheckParams, UpdateStatusDto>("update.check", (parameters, ct) =>
+            UpdateStatusAsync(parameters.Force ?? true, ct, parameters.Source, parameters.Channel));
+        _dispatcher.Register<UpdateInstallParams, UpdateInvokeResult>("update.install", InstallUpdateAsync);
+        _dispatcher.Register<UpdateSettingsDto>("update.settings.get", _ => Task.FromResult(UpdateSettingsSnapshot()));
+        _dispatcher.Register<UpdateSettingsDto, bool>("update.settings.set", (parameters, _) =>
+        {
+            var settings = new UpdateSettings(
+                UpdateSettings.ParseSource(parameters.Source) ?? UpdateSource.Auto,
+                UpdateSettings.ParseChannel(parameters.Channel) ?? UpdateChannel.Stable,
+                parameters.AutoCheck,
+                parameters.AutoInstall,
+                parameters.RequireSignature,
+                parameters.RequireChecksum);
+            settings.Save(_store.SetSetting);
+            return Task.FromResult(true);
+        });
+
         // Conversations
         _dispatcher.Register("conversations.list", ListConversationsAsync);
         _dispatcher.Register<CreateConversationParams, ConversationDto>("conversations.create", CreateConversationAsync);
@@ -150,7 +183,9 @@ public class BridgeHandlerRegistrar
         _dispatcher.Register<DeleteApiConfigParams, bool>("apiConfigs.delete", DeleteApiConfigAsync);
         _dispatcher.Register<TestApiConfigParams, bool>("apiConfigs.test", TestApiConfigAsync);
         _dispatcher.Register<TestApiConfigParams, ApiConfigDto>("apiConfigs.refreshModels", RefreshModelsAsync);
-        _dispatcher.Register<TestApiConfigParams, ReasoningOptionsDto>("apiConfigs.reasoning", GetReasoningAsync);
+        _dispatcher.Register<ReasoningParams, ReasoningOptionsDto>("apiConfigs.reasoning", GetReasoningAsync);
+        _dispatcher.Register<ModelContextParams, ModelContextDto>("apiConfigs.context", GetModelContextAsync);
+        _dispatcher.Register<SetModelContextParams, ModelContextDto>("apiConfigs.setContext", SetModelContextAsync);
 
         // Settings
         _dispatcher.Register<IReadOnlyList<AgentRoleDefinition>>("agents.list", ct => Task.FromResult(new AgentRoleCatalog(_store).List()));
@@ -367,6 +402,9 @@ public class BridgeHandlerRegistrar
         ContextWindowTokens = config.ContextWindowTokens,
         ModelContextWindows = config.ModelContextWindows,
         ModelLimits = config.ModelLimits,
+        ModelReasoningEfforts = config.ModelReasoningEfforts,
+        ModelThinkingBudgets = config.ModelThinkingBudgets,
+        ModelReasoningLevels = config.ModelReasoningLevels,
         Models = config.Models,
         Protocol = config.Protocol,
         AuthenticationProviderId = config.AuthenticationProviderId,
@@ -573,6 +611,15 @@ public class BridgeHandlerRegistrar
         config.ReasoningEffort = string.IsNullOrWhiteSpace(p.ReasoningEffort) ? "default" : p.ReasoningEffort;
         config.ApiKeyEnvironmentVariable = string.IsNullOrWhiteSpace(p.ApiKeyEnvironmentVariable) ? null : p.ApiKeyEnvironmentVariable.Trim();
         config.AuthenticationProviderId = string.IsNullOrWhiteSpace(p.AuthenticationProviderId) ? null : p.AuthenticationProviderId.Trim();
+        if (p.ModelContextWindows != null)
+        {
+            if (p.ModelContextWindows.Count > 2000) throw new ArgumentException("上下文容量最多记录 2000 个模型。");
+            foreach (var (model, tokens) in p.ModelContextWindows)
+                if (string.IsNullOrWhiteSpace(model) || model.Length > 300) throw new ArgumentException("模型 ID 需要 1–300 个字符。");
+            config.ModelContextWindows = p.ModelContextWindows
+                .Where(item => item.Value > 0)
+                .ToDictionary(item => item.Key, item => ModelContext.Validate(item.Value), StringComparer.Ordinal);
+        }
         if (p.Models is { Count: > 0 })
         {
             if (p.Models.Count > 2000 || p.Models.Any(model => string.IsNullOrWhiteSpace(model) || model.Length > 300 || model.Any(char.IsControl))) throw new ArgumentException("模型列表需要 1–2000 个有效 ID。");
@@ -642,12 +689,77 @@ public class BridgeHandlerRegistrar
         return ToDto(config);
     }
 
-    private Task<ReasoningOptionsDto> GetReasoningAsync(TestApiConfigParams p, CancellationToken ct)
+    private static readonly ConcurrentDictionary<string, DateTimeOffset> CatalogRefreshAttempts = new(StringComparer.Ordinal);
+    private static readonly TimeSpan CatalogRefreshRetry = TimeSpan.FromMinutes(10);
+
+    private async Task<ReasoningOptionsDto> GetReasoningAsync(ReasoningParams p, CancellationToken ct)
     {
         var config = _store.GetApiConfig(p.Id) ?? throw new Exception("ApiConfig not found");
+        var model = string.IsNullOrWhiteSpace(p.Model) ? config.DefaultModel : p.Model!;
+        // Account catalogs advertise each model's native effort levels. A config saved before that
+        // metadata existed would otherwise fall back to family guesses, so refresh once per model.
+        if (NeedsCatalogMetadata(config, model))
+            config = await RefreshCatalogForReasoningAsync(config, model, ct);
+        if (model != config.DefaultModel)
+            config = WithChatOverrides(config, config.ThinkingEnabled, config.ThinkingBudget, model, null);
         var capability = ReasoningSettings.Capabilities(config);
-        return Task.FromResult(new ReasoningOptionsDto(capability.Protocol, ReasoningSettings.Protocols.ToArray(), ReasoningSettings.Efforts(config).ToArray(), config.ReasoningEffort, config.ThinkingBudget, capability.MinimumBudget, capability.MaximumBudget, ReasoningSettings.Label(config)));
+        return new ReasoningOptionsDto(capability.Protocol, ReasoningSettings.Protocols.ToArray(), ReasoningSettings.Efforts(config).ToArray(), config.ReasoningEffort, config.ThinkingBudget, capability.MinimumBudget, capability.MaximumBudget, ReasoningSettings.Label(config));
     }
+
+    private static bool NeedsCatalogMetadata(ApiConfig config, string model) =>
+        !string.IsNullOrWhiteSpace(model)
+        && config.Models.Count > 0
+        && !string.IsNullOrWhiteSpace(config.AuthenticationProviderId)
+        && !config.ModelReasoningLevels.ContainsKey(model);
+
+    /// <summary>Best-effort refresh of an account catalog that predates advertised effort levels.</summary>
+    private async Task<ApiConfig> RefreshCatalogForReasoningAsync(ApiConfig config, string model, CancellationToken ct)
+    {
+        var key = config.Id + "\0" + model;
+        var now = DateTimeOffset.UtcNow;
+        if (CatalogRefreshAttempts.TryGetValue(key, out var last) && now - last < CatalogRefreshRetry) return config;
+        CatalogRefreshAttempts[key] = now;
+        try
+        {
+            // Never let a slow endpoint hold up the composer; the family fallback covers the wait.
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            deadline.CancelAfter(TimeSpan.FromSeconds(10));
+            var provider = _agentService.ProviderResolver?.Invoke(config) ?? _providerFactory.GetProvider(config);
+            var models = await provider.ListModelsAsync(config, deadline.Token);
+            if (models.Count == 0) return config;
+            config.Models = models.Select(item => item.Id).ToList();
+            ModelCatalog.Remember(config, models);
+            _store.UpdateApiConfig(config);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            // Offline or a rejected credential keeps the saved catalog and the family fallback.
+        }
+        return config;
+    }
+
+    private Task<ModelContextDto> GetModelContextAsync(ModelContextParams p, CancellationToken ct)
+    {
+        var config = _store.GetApiConfig(p.Id) ?? throw new Exception("ApiConfig not found");
+        return Task.FromResult(ContextDto(config, ContextModel(config, p.Model)));
+    }
+
+    private Task<ModelContextDto> SetModelContextAsync(SetModelContextParams p, CancellationToken ct)
+    {
+        var config = _store.GetApiConfig(p.Id) ?? throw new Exception("ApiConfig not found");
+        var model = ContextModel(config, p.Model);
+        if (model.Length == 0) throw new ArgumentException("请先选择模型。");
+        if (p.Tokens == 0) config.ModelContextWindows.Remove(model);
+        else config.ModelContextWindows[model] = ModelContext.Validate(p.Tokens);
+        _store.UpdateApiConfig(config);
+        return Task.FromResult(ContextDto(config, model));
+    }
+
+    private static string ContextModel(ApiConfig config, string? model) =>
+        string.IsNullOrWhiteSpace(model) ? config.DefaultModel : model.Trim();
+
+    private static ModelContextDto ContextDto(ApiConfig config, string model) =>
+        new(model, ModelContext.Capacity(config, model), config.ModelContextWindows.TryGetValue(model, out var manual) ? manual : null, config.ContextWindowTokens);
 
     // ── Settings ───────────────────────────────────────────────────────────────
 
@@ -747,6 +859,82 @@ private Task<bool> SaveSettingsAsync(SaveSettingsParams p, CancellationToken ct)
 
     // ── Helpers ────────────────────────────────────────────────────────────────
 
+    private UpdateService CreateUpdateService() =>
+        UpdateServiceFactory.Create(_store.SharedDirectoryPath ?? _store.DirectoryPath, _store.GetSetting);
+
+    private async Task<UpdateStatusDto> UpdateStatusAsync(bool force, CancellationToken ct, string? source, string? channel)
+    {
+        var settings = UpdateSettings.FromSettings(_store.GetSetting);
+        if (UpdateSettings.ParseSource(source) is { } parsedSource) settings = settings with { Source = parsedSource };
+        if (UpdateSettings.ParseChannel(channel) is { } parsedChannel) settings = settings with { Channel = parsedChannel };
+        var service = CreateUpdateService();
+        var check = force
+            ? await service.CheckAsync(settings, force: true, ct)
+            : service.GetCachedResult(settings.Channel == UpdateChannel.Preview);
+        var state = service.State.Load();
+        return new UpdateStatusDto(
+            check.CurrentVersion,
+            check.LatestVersion,
+            check.UpdateAvailable,
+            check.Source.ToString(),
+            check.InstallKind.ToString(),
+            check.Architecture,
+            check.ReleaseUrl ?? state.ReleaseUrl,
+            check.Release?.Notes ?? state.ReleaseNotes,
+            check.Error,
+            state.LastResult,
+            state.LastError,
+            check.CheckedAt,
+            check.FromCache,
+            state.LastLogPath);
+    }
+
+    private async Task<UpdateInvokeResult> InstallUpdateAsync(UpdateInstallParams parameters, CancellationToken ct)
+    {
+        var settings = UpdateSettings.FromSettings(_store.GetSetting);
+        if (UpdateSettings.ParseSource(parameters.Source) is { } parsedSource) settings = settings with { Source = parsedSource };
+        if (UpdateSettings.ParseChannel(parameters.Channel) is { } parsedChannel) settings = settings with { Channel = parsedChannel };
+        var service = CreateUpdateService();
+        var check = await service.CheckAsync(settings, force: true, ct);
+        if (check.Error != null) return new UpdateInvokeResult(false, check.Error);
+        if (!check.UpdateAvailable) return new UpdateInvokeResult(false, "已是最新版本：" + check.CurrentVersion);
+        var restartArgs = UpdateRuntimeContext.GuiLauncher
+            ? UpdateRuntimeContext.RestartArguments
+            : UpdateRuntimeContext.WebUiHost ? ["web-ui"] : UpdateRuntimeContext.RestartArguments;
+        var options = new UpdateInstallOptions(
+            settings,
+            Force: false,
+            AllowUnsigned: parameters.AllowUnsigned ?? !settings.RequireSignature,
+            Restart: true,
+            RestartArguments: restartArgs,
+            WorkingDirectory: UpdateRuntimeContext.WorkingDirectory,
+            GuiLauncher: UpdateRuntimeContext.GuiLauncher);
+        var result = await service.InstallAsync(check, settings, options, ct);
+        if (result.Started)
+        {
+            // Let the bridge response reach the browser before the host exits; the detached
+            // updater waits for this process and restarts the chosen surface afterwards.
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(900);
+                Environment.Exit(0);
+            });
+        }
+        return new UpdateInvokeResult(result.Started, result.Message, result.Version, result.LogPath);
+    }
+
+    private UpdateSettingsDto UpdateSettingsSnapshot()
+    {
+        var settings = UpdateSettings.FromSettings(_store.GetSetting);
+        return new UpdateSettingsDto(
+            settings.Source.ToString().ToLowerInvariant(),
+            settings.Channel == UpdateChannel.Preview ? "pre" : "stable",
+            settings.AutoCheck,
+            settings.AutoInstall,
+            settings.RequireSignature,
+            settings.RequireChecksum);
+    }
+
     private static ConversationDto ToDto(Conversation c) =>
         new(c.Id, c.Title, c.ModelId, c.ProviderId, c.CreatedAt, c.UpdatedAt);
 
@@ -763,7 +951,7 @@ private Task<bool> SaveSettingsAsync(SaveSettingsParams p, CancellationToken ct)
             c.ThinkingEnabled, c.ThinkingBudget,
             c.ContextWindowTokens, c.Protocol, c.ReasoningProtocol, c.ReasoningEffort,
             c.Models.ToList(), c.ApiKeyEnvironmentVariable, c.AuthenticationProviderId,
-            ModelContext.Capacity(c), ProviderCatalog.ProtocolFor(c), ModelCatalog.OutputLimit(c));
+            ModelContext.Capacity(c), ProviderCatalog.ProtocolFor(c), ModelCatalog.OutputLimit(c), new Dictionary<string, int>(c.ModelContextWindows));
 
     private McpServerConfigDto ToDto(McpServerConfig c) =>
         new(c.Id, c.Name, c.Command, c.Arguments, c.IsEnabled, c.CreatedAt, _mcpToolService.IsConnected(c.Id));

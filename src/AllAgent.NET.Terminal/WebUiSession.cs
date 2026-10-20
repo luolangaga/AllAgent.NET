@@ -42,6 +42,12 @@ public sealed record ModelFooterSnapshot(IReadOnlyList<ModelFooterItemInfo> Item
 public sealed record ConversationUsageParams(Guid ConversationId);
 public sealed record ConversationUsageDto(int? ContextUsedTokens, bool ContextEstimated, double? CacheHitRate,
     long CacheInputTokens, long CachedInputTokens, long CacheWriteInputTokens, long CacheRequests);
+// Settings charts: lifetime per-model totals plus local-day buckets. Daily history only starts
+// with builds that write DailyUsageStats; lifetime totals still include older usage.
+public sealed record UsageDayDto(string Date, long InputTokens, long OutputTokens, long Requests, long RequestsWithUsage);
+public sealed record UsageModelDto(string ProviderId, string ModelId, long InputTokens, long OutputTokens, long Requests, long RequestsWithUsage);
+public sealed record UsageTotalsDto(long InputTokens, long OutputTokens, long Requests, long RequestsWithUsage, int ActiveDays);
+public sealed record UsageStatsDto(IReadOnlyList<UsageModelDto> Models, IReadOnlyList<UsageDayDto> Days, UsageTotalsDto Totals);
 public sealed record PluginProviderInfo(string ProviderId);
 public sealed record PluginAuthInfo(string Id, string Name);
 public sealed record HookInfo(string Name, bool Enabled);
@@ -592,6 +598,7 @@ internal sealed class WebUiSession : IAsyncDisposable
         });
         _dispatcher.Register<WorkspaceInfo>("workspace.get", _ => Task.FromResult(Info()));
         _dispatcher.Register<List<WorkspaceInfo>>("workspace.recent", _ => Task.FromResult(Recent()));
+        _dispatcher.Register<UsageStatsDto>("usage.stats", _ => Task.FromResult(UsageStatsSnapshot()));
         // LAN listening, access password and the pairing QR. The browser settings page drives
         // these; a bind or port change restarts the listener after the response is delivered.
         _dispatcher.Register<WebUiNetworkInfo>("webui.network.get", _ => Task.FromResult(NetworkInfo()));
@@ -966,6 +973,31 @@ internal sealed class WebUiSession : IAsyncDisposable
     private int _picking;
 
     private WorkspaceInfo Info() => new(_current.Workspace, _current.DataDirectory, _sharedDirectory, WorkspacesRoot);
+
+    private UsageStatsDto UsageStatsSnapshot()
+    {
+        var models = _current.Store.GetTokenUsageStats();
+        var days = _current.Store.GetDailyUsageStats()
+            .GroupBy(entry => entry.Date, StringComparer.Ordinal)
+            .Select(group => new UsageDayDto(
+                group.Key,
+                group.Sum(entry => entry.InputTokens),
+                group.Sum(entry => entry.OutputTokens),
+                group.Sum(entry => entry.Requests),
+                group.Sum(entry => entry.RequestsWithUsage)))
+            .OrderBy(entry => entry.Date, StringComparer.Ordinal)
+            .ToArray();
+        return new UsageStatsDto(
+            models.Select(model => new UsageModelDto(
+                model.ProviderId, model.ModelId, model.InputTokens, model.OutputTokens, model.Requests, model.RequestsWithUsage)).ToArray(),
+            days,
+            new UsageTotalsDto(
+                models.Sum(model => model.InputTokens),
+                models.Sum(model => model.OutputTokens),
+                models.Sum(model => model.Requests),
+                models.Sum(model => model.RequestsWithUsage),
+                days.Count(day => day.Requests > 0)));
+    }
 
     private List<WorkspaceInfo> Recent()
         => ProjectDataDirectory.List()

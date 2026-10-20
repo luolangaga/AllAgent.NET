@@ -20,6 +20,8 @@ beforeEach(() => {
     if (request.method === 'conversations.create') {
       reply(request, { id: 'conv-1', title: 'New Conversation', modelId: '', providerId: '', createdAt: '', updatedAt: '' })
     } else if (request.method === 'chat.compact') reply(request, 'stream-c')
+    else if (request.method === 'chat.getStreamState') reply(request, null)
+    else if (request.method === 'conversations.getMessages' || request.method === 'todos.get' || request.method === 'chat.pendingInputs') reply(request, [])
     else reply(request, true)
   }
 })
@@ -31,7 +33,7 @@ describe('/compact in the web UI', () => {
     expect(isTerminalOnly('/compact')).toBe(false)
 
     const store = useConversationsStore()
-    await store.createConversation()
+    await store.selectConversation('conv-1')
     const consumed = await runCommand('/compact 数据库迁移', { go: () => {}, openPalette: () => {} }, { apiConfigId: 'config-9' })
     expect(consumed).toBe(true)
 
@@ -56,12 +58,13 @@ describe('/compact in the web UI', () => {
     const { runCommand } = await import('../src/lib/commandRouter')
     handle = request => {
       calls.push(request)
-      if (request.method === 'conversations.create') reply(request, { id: 'conv-1', title: 'New Conversation', modelId: '', providerId: '', createdAt: '', updatedAt: '' })
-      else if (request.method === 'chat.compact') host.__bridgeCallback(JSON.stringify({ id: request.id, error: '会话为空，无需整理。' }))
+      if (request.method === 'chat.compact') host.__bridgeCallback(JSON.stringify({ id: request.id, error: '会话为空，无需整理。' }))
+      else if (request.method === 'chat.getStreamState') reply(request, null)
+      else if (request.method === 'conversations.getMessages' || request.method === 'todos.get' || request.method === 'chat.pendingInputs') reply(request, [])
       else reply(request, true)
     }
     const store = useConversationsStore()
-    await store.createConversation()
+    await store.selectConversation('conv-1')
     await runCommand('/compact', { go: () => {}, openPalette: () => {} }, { apiConfigId: 'config-9' })
     expect(store.messages).toHaveLength(0)
     expect(store.activeStreamId).toBeNull()

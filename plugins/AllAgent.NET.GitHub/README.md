@@ -1,6 +1,6 @@
 # GitHub 插件
 
-GUI 侧栏的 **GitHub** 页面支持仓库列表、Issue / PR 搜索、详情与讨论、PR 文件补丁、通知及标记已读。列表分页，支持 `assignee:@me`、`author:@me`、`review-requested:@me` 等 GitHub 搜索条件。
+GUI 右上工具栏的 **GitHub** 按钮打开浮动弹窗，支持仓库列表、Issue / PR 搜索、详情与讨论、PR 文件补丁、通知及标记已读；命令面板中也有入口，不占用侧栏导航位。列表分页，支持 `assignee:@me`、`author:@me`、`review-requested:@me` 等 GitHub 搜索条件。
 
 ## 登录
 
@@ -8,7 +8,7 @@ GUI 侧栏的 **GitHub** 页面支持仓库列表、Issue / PR 搜索、详情�
 
 私有仓库使用 classic Token 的 `repo`，通知需要 `notifications`，账号资料使用 `read:user`。Fine-grained Token 需对相应仓库授权 Issues / Pull requests / Contents 读取；GitHub Notifications API 不支持 fine-grained Token，消息页需 classic Token。组织资源还可能需要 SSO 授权。
 
-可选浏览器登录：创建**自己的 GitHub OAuth App**，启用 Device Flow，启动宿主前设置 `ALLAGENT_GITHUB_CLIENT_ID` 为该 App 的 Client ID。GUI 点“浏览器授权”，复制页面显示的设备码到系统浏览器完成授权。无需 Client Secret；未配置时仍可用 Token 登录。
+浏览器登录：GUI 点“浏览器授权”，设备码会自动复制并打开 GitHub 授权页，完成授权后界面自动刷新。插件内置 OAuth App 与设备码流程，开箱即用：无需 Client ID/Secret、无需回调地址，也不读取环境变量覆盖。
 
 ## Agent 流程
 

@@ -2,7 +2,7 @@
 
 沿用 WorkBuddy 的登录、模型发现、模型选择和退出流程。仅依赖 AllAgent.NET 已有的 .NET 8 宿主，无需 Node.js、npm、Python 或 Docker，不启动子进程、不监听本地端口。
 
-协议移植参考 https://github.com/MAXeaglet/commandcode-proxy 的 972828aff37f07c9cb12959bc6a1f4d44aaa005a 版本（MIT），许可证随包分发。固定兼容 CLI 1.53.1 协议，实现指纹和生命周期初始化、消息、图片、思考历史、工具调用及结果转换、NDJSON/SSE 流解析与用量。采用稳定合成设备档案，不读取或上传真实硬件、用户名和项目目录。模型目录直接查询官方接口，无硬编码回退；每个模型的思考档位（`reasoningEfforts`，`off` 映射为宿主的 `none`）、上下文窗口与输出上限均按官方目录保存。
+协议移植参考 https://github.com/MAXeaglet/commandcode-proxy 的 972828aff37f07c9cb12959bc6a1f4d44aaa005a 版本（MIT），许可证随包分发。固定兼容 CLI 1.53.1 协议，实现指纹和生命周期初始化、消息、图片、思考历史、工具调用及结果转换、NDJSON/SSE 流解析与用量。采用稳定合成设备档案，不读取或上传真实硬件、用户名和项目目录。模型目录直接查询官方接口，无硬编码回退；每个模型的思考档位（`reasoningEfforts`，`off` 映射为宿主的 `none`）、上下文窗口与输出上限均按官方目录保存。思考等级使用独立的 `commandcode` 推理协议：目录声明的档位优先；目录尚未刷新时按厂商族（DeepSeek/Claude/GPT/Gemini/Qwen/GLM/Kimi 等）回退，不再套用 GPT 规则。
 
 仅提供 AllAgent.NET 进程内上游适配，不提供原项目的独立 OpenAI/Anthropic/Responses HTTP 服务。上游协议改变时需更新插件；失败或截断响应会报错，不自动重放已输出的对话。
 

@@ -8,14 +8,19 @@ AllAgent.NET 的终端 AI Agent，安装后的命令为 `allagent`。
 
 ## 环境要求
 
-目前 Agent 执行支持 Windows x64，需要 .NET 10 或更高版本运行时；优先使用 Hyperlight（需要硬件虚拟化和 Windows Hypervisor Platform），启动失败自动使用 Monty 软件沙箱（无需虚拟化，首次安装需要联网）。工具已启用主版本向前滚动，因此安装了较新 .NET 运行时的电脑也可启动它。安装工具仍需 .NET SDK 提供 `dotnet tool` 命令。工具包内嵌 PowerShell SDK 7.6.7，通过独立 worker 调用，无需安装系统 PowerShell。执行前自检 worker，缺失时需修复工具包。工具包自带 sandbox worker、Hyperlight 原生组件和 Python guest；宿主 Python 用于沙箱运行支持，检查可执行性和 3.10–3.14 版本范围；缺少或版本不符时提示通过 winget 安装 Python 3.13，成功后要求重启软件。React 前端源码构建需要 Node.js 与 npm；终端代理执行不依赖 Node.js。
+目前 Agent 执行支持 Windows x64 / ARM64，需要 .NET 10 或更高版本运行时；优先使用 Hyperlight（需要硬件虚拟化和 Windows Hypervisor Platform），启动失败自动使用 Monty 软件沙箱（无需虚拟化，首次安装需要联网）。ARM64 上 Hyperlight 不可用时同样回退 Monty。工具已启用主版本向前滚动，因此安装了较新 .NET 运行时的电脑也可启动它。安装工具仍需 .NET SDK 提供 `dotnet tool` 命令。工具包内嵌 PowerShell SDK 7.6.7，通过独立 worker 调用，无需安装系统 PowerShell。执行前自检 worker，缺失时需修复工具包。工具包自带 sandbox worker、Hyperlight 原生组件和 Python guest；宿主 Python 用于沙箱运行支持，检查可执行性和 3.10–3.14 版本范围；缺少或版本不符时提示通过 winget 安装 Python 3.13，成功后要求重启软件。React 前端源码构建需要 Node.js 与 npm；终端代理执行不依赖 Node.js。
 
 ## 安装与使用
 
 安装已发布到 NuGet.org 的版本：
 
 ```powershell
+# Windows x64
 dotnet tool install --global AllAgent.NET.Terminal
+
+# Windows on ARM（命令名同样是 allagent）
+dotnet tool install --global AllAgent.NET.Terminal.arm64
+
 allagent --help
 allagent doctor
 allagent doctor --install
@@ -46,15 +51,35 @@ allagent -guimode --workspace C:\Projects\MyProject
 ```powershell
 dotnet tool update --global AllAgent.NET.Terminal
 dotnet tool uninstall --global AllAgent.NET.Terminal
+
+# Windows on ARM
+dotnet tool update --global AllAgent.NET.Terminal.arm64
+dotnet tool uninstall --global AllAgent.NET.Terminal.arm64
 ```
+
+也可以使用内置更新器（自动识别当前安装的是哪个包 ID）：
+
+```powershell
+allagent update --check
+allagent update
+```
+
+更新器在 NuGet 工具形态下通过 `dotnet tool update` 更新，并重启 `allagent.cmd` shim 指向新版本，而不是旧 `.store` 路径的 DLL。详见 [自动更新](auto-update.zh-CN.md)。
 
 ## 从源码打包并通过本地 NuGet 源安装
 
 在仓库根目录运行（打包需 .NET SDK）：
 
 ```powershell
-dotnet pack src/AllAgent.NET.Terminal -c Release -p:Version=1.0.1
+# x64 -> AllAgent.NET.Terminal.1.0.1.nupkg
+tools\build-nuget.ps1 -Version 1.0.1 -Runtime win-x64
+
+# ARM64 -> AllAgent.NET.Terminal.arm64.1.0.1.nupkg
+tools\build-nuget.ps1 -Version 1.0.1 -Runtime win-arm64
+
 dotnet tool install --global AllAgent.NET.Terminal --add-source ./artifacts/packages --version 1.0.1
+# ARM64 机器：
+dotnet tool install --global AllAgent.NET.Terminal.arm64 --add-source ./artifacts/packages --version 1.0.1
 ```
 
 更新到刚打包的本地版本：
@@ -63,7 +88,9 @@ dotnet tool install --global AllAgent.NET.Terminal --add-source ./artifacts/pack
 dotnet tool update --global AllAgent.NET.Terminal --add-source ./artifacts/packages --version 1.0.1
 ```
 
-版本默认在 `src/AllAgent.NET.Terminal/AllAgent.NET.Terminal.csproj` 中维护，也可以通过 `-p:Version=1.0.2` 覆盖。各 worker 的文件作为工具运行文件与宿主同目录，不依赖另外发布 AllAgent.NET.Core 或 AllAgent.NET.Sandbox 包。
+`build-nuget.ps1` 会按 RID 还原、显式构建内嵌 PowerShell worker、打包并检查包内是否包含 `allagent.dll`、五个 worker 和 `web/index.html`。两个包 ID 共用 `allagent` 命令；NuGet 需要按 RID 解析 ARM64 的 worker apphost，因此不能把两种架构塞进同一个 tool 包。
+
+版本默认在 `src/AllAgent.NET.Terminal/AllAgent.NET.Terminal.csproj` 中维护，也可以通过 `-Version` 覆盖。各 worker 的文件作为工具运行文件与宿主同目录，不依赖另外发布 AllAgent.NET.Core 或 AllAgent.NET.Sandbox 包。
 
 ## 发布
 
@@ -71,8 +98,9 @@ dotnet tool update --global AllAgent.NET.Terminal --add-source ./artifacts/packa
 
 ```powershell
 dotnet nuget push ./artifacts/packages/AllAgent.NET.Terminal.1.0.0.nupkg --source https://api.nuget.org/v3/index.json --api-key <API_KEY>
+dotnet nuget push ./artifacts/packages/AllAgent.NET.Terminal.arm64.1.0.0.nupkg --source https://api.nuget.org/v3/index.json --api-key <API_KEY>
 ```
 
-API Key 请通过本地安全配置提供，不要提交到仓库。这里只配置和生成工具包；公共发布需要单独执行上述命令。
+GitHub Actions 的 `.github/workflows/release.yml` 会在 tag 发布时自动推送两个包（存在 `NUGET_API_KEY` 时）。API Key 请通过仓库 Secret 提供，不要提交到仓库。详见 [CI 与发布流水线](release-ci.zh-CN.md)。
 
 聊天中使用 `/workspace D:\Projects\Demo` 切换工作目录，空格路径可写为 `/workspace "D:\My Projects\Demo"`；也支持相对当前工作目录的路径，如 `/workspace ..`。单独输入 `/workspace` 查看当前目录。切换后进入目标项目的新会话，保留当前模型和权限模式，重新加载技能、文件引用、MCP 和工具运行环境。旧会话历史保留，可以切回原目录后用 `/session` 恢复。默认数据目录随项目切换；显式 `--data-dir` 保持指定的目录。存在运行中的后台任务时，需要先完成或取消任务再切换；路径不存在或目标数据无法读取时，继续留在当前项目。

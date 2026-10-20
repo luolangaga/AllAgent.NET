@@ -71,6 +71,25 @@ public sealed class PlanModeTests
     }
 
     [Fact]
+    public async Task ApprovedPlanKeepsTheHumanCommentForExecution()
+    {
+        using var workspace = new TestWorkspace();
+        using var store = new DataStore(Path.Combine(workspace.Root, "data"));
+        var conversation = new Conversation();
+        store.AddConversation(conversation);
+        var tools = new PlanTools(store, (_, _) => Task.FromResult(new PlanDecision(true, " Keep the API stable. ", "full")), () => true);
+
+        using var scope = AgentExecutionScope.Enter(false, conversation.Id, workspace.Root);
+        var result = await tools.ProposeAsync("Add a feature", "# Plan\n\nDo it.");
+
+        Assert.True(result.Ok, result.Error);
+        var stored = store.GetPlan(conversation.Id);
+        Assert.Equal("approved", stored!.Status);
+        Assert.Equal("Keep the API stable.", stored.Feedback);
+        Assert.Contains("satisfy that comment", JsonSerializer.Serialize(result.Data, ToolResult.JsonOptions));
+    }
+
+    [Fact]
     public async Task PlanToolIsOnlyAvailableInPlanMode()
     {
         using var workspace = new TestWorkspace();
@@ -138,6 +157,7 @@ public sealed class PlanModeTests
         var planning = provider.Instructions;
         Assert.Contains("plan_propose", planning);
         Assert.Contains("## Plan approval", planning);
+        Assert.Contains("Simplified Chinese", planning);
         Assert.DoesNotContain("call_tool(\"file_edit\"", planning);
 
         planMode = false;
@@ -179,6 +199,25 @@ public sealed class PlanModeTests
         Assert.True(approved);
         Assert.Contains(pushed, json => json.Contains("plans.updated") && json.Contains("\"approved\""));
         Assert.Contains(pushed, json => json.Contains("interactions.resolved"));
+    }
+
+    [Fact]
+    public async Task BrowserPlanDecisionCarriesTheHumanComment()
+    {
+        var dispatcher = new BridgeDispatcher();
+        var approvals = new WebApprovals(dispatcher, new BridgeEventPusher()) { HasClients = () => true };
+
+        var pending = approvals.ProposePlanAsync(new PlanProposal("Plan", "# Plan", "plan-1"), CancellationToken.None);
+        await dispatcher.InvokeAsync(JsonSerializer.Serialize(new
+        {
+            id = "1",
+            method = "plan.respond",
+            @params = new { planId = "plan-1", approved = false, feedback = "Add a rollback step." }
+        }, JsonOptions.Default));
+
+        var decision = await pending;
+        Assert.False(decision.Approved);
+        Assert.Equal("Add a rollback step.", decision.Feedback);
     }
 
     [Fact]
@@ -252,9 +291,9 @@ public sealed class PlanModeTests
         Assert.True(sandbox.Results[0].Ok, sandbox.Results[0].ToJson());
         Assert.True(sandbox.Results[1].Ok, sandbox.Results[1].ToJson());
         Assert.Equal("edited line\n", await File.ReadAllTextAsync(Path.Combine(workspace.Root, "note.txt")));
-        Assert.Contains("plan_propose", provider.Requests[0].Messages[0].Content);
-        Assert.Contains("file_edit", provider.Requests[1].Messages[0].Content);
-        Assert.DoesNotContain("plan_propose", provider.Requests[1].Messages[0].Content);
+        Assert.Contains("plan_propose", HostContext(provider.Requests[0]));
+        Assert.Contains("file_edit", HostContext(provider.Requests[1]));
+        Assert.DoesNotContain("plan_propose", HostContext(provider.Requests[1]));
         Assert.Equal("approved", store.GetPlan(conversation.Id)!.Status);
     }
 
@@ -263,7 +302,7 @@ public sealed class PlanModeTests
     {
         using var cancellation = new CancellationTokenSource();
         var run = new SessionRun(Guid.NewGuid(), "Plan session", "stream", new BridgeStreamJournal([], ""), cancellation);
-        var completion = new TaskCompletionSource<bool>();
+        var completion = new TaskCompletionSource<PlanDecision>();
         var preview = new PlanPreview(new PlanProposal("Plan", "# Plan"));
         run.EnqueuePlan(new PendingPlan(preview, completion, CancellationToken.None));
         Assert.Equal(1, run.PendingPrompts);
@@ -273,7 +312,7 @@ public sealed class PlanModeTests
         run.EnqueuePlan(new PendingPlan(preview, completion, CancellationToken.None));
         run.ReleasePrompts();
         Assert.True(completion.Task.IsCompleted);
-        Assert.False(await completion.Task);
+        Assert.False((await completion.Task).Approved);
         Assert.Equal(0, run.PendingPrompts);
     }
 
@@ -319,6 +358,10 @@ public sealed class PlanModeTests
         public Task<IReadOnlyList<ModelInfo>> ListModelsAsync(ApiConfig config, CancellationToken ct) =>
             Task.FromResult<IReadOnlyList<ModelInfo>>([]);
     }
+
+    /// <summary>The current tool catalog and dynamic instructions ride in the newest tool_context snapshot.</summary>
+    private static string HostContext(ChatRequest request) =>
+        request.Messages.Last(message => message.ToolName == "tool_context").Content;
 
     private static StreamChunk[] Call(string id) =>
     [

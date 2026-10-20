@@ -16,10 +16,12 @@ import { Notices } from './components/Notices'
 import { PendingInteractions } from './components/PendingInteractions'
 import { pluginIcon } from './components/plugins/icons'
 import { PluginPage } from './components/plugins/PluginPage'
+import { PluginPanel } from './components/plugins/PluginPanel'
 import { RunDock } from './components/RunDock'
 import { RunMarker } from './components/RunMarker'
 import { TaskDetailModal } from './components/TaskDetailModal'
 import { TerminalPanel } from './components/TerminalPanel'
+import { UpdateBanner } from './components/UpdateBanner'
 import { WorkspacePanel } from './components/WorkspacePanel'
 import { WorkspaceSwitcher } from './components/WorkspaceSwitcher'
 import { useStore } from './lib/store'
@@ -142,9 +144,10 @@ export default function App() {
     })
   }
 
-  async function newChat() {
+  function newChat() {
     try {
-      await conv.createConversation()
+      // Draft only: the session is created when the first message is sent.
+      conv.newConversation()
       go('chat')
     } catch (error) {
       notices.report(error)
@@ -466,6 +469,18 @@ export default function App() {
               variant="ghost"
             ><TerminalIcon size={14} /></Button>
           </Tooltip>
+          {contributions.panels.map(entry => {
+            const Icon = pluginIcon(entry.icon)
+            return <Tooltip content={entry.title} key={entry.key}>
+              <Button
+                className={panels.open[entry.key] ? 'is-active' : undefined}
+                iconLabel={entry.title}
+                onClick={() => panels.togglePanel(entry.key)}
+                size="icon-sm"
+                variant="ghost"
+              ><Icon size={14} /></Button>
+            </Tooltip>
+          })}
           <Tooltip content={tr('命令面板 · Ctrl+Shift+P', 'Command palette · Ctrl+Shift+P')}>
             <Button iconLabel={tr('命令面板', 'Command palette')} onClick={() => setPalette(true)} size="icon-sm" variant="ghost"><Command size={14} /></Button>
           </Tooltip>
@@ -499,6 +514,7 @@ export default function App() {
         <Button onClick={() => reconnect()} size="xs" variant="outline">{tr('重试连接', 'Retry connection')}</Button>
         <Button onClick={() => location.reload()} size="xs" variant="ghost">{tr('刷新页面', 'Reload page')}</Button>
       </div> : null}
+      <UpdateBanner />
       {page.startsWith('plugin:') ? <PluginPage onNavigate={go} route={page} />
         : page === 'models' ? <Models />
         : page === 'skills' ? <Skills />
@@ -534,6 +550,7 @@ export default function App() {
     <WorkspacePanel />
     <GitPanel />
     <TerminalPanel />
+    {contributions.panels.filter(entry => panels.open[entry.key]).map(entry => <PluginPanel entry={entry} key={entry.key} />)}
     <PendingInteractions />
     <WorkspaceSwitcher />
     <TaskDetailModal />

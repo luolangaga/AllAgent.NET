@@ -7,9 +7,12 @@ import { StatusDot } from './ui/status-dot'
 import { invoke } from '@/bridge'
 import { groupCommands, matchCommands } from '@/lib/commandRouter'
 import { MAX_IMAGES, assertCapacity, base64Bytes, dataUrl, droppedFiles, formatBytes, imageFilesFrom, prepareImage, totalBytes } from '@/lib/attachments'
+import { formatTokens } from '@/lib/format'
 import { completeMention, findMention, parentPath, type MentionQuery } from '@/lib/mentions'
+import { useStore } from '@/lib/store'
+import { useApiConfigsStore } from '@/stores/apiConfigs'
 import { useT } from '@/i18n'
-import type { ApiConfig, CommandInfo, ImageAttachment, InputDelivery, PendingInput, ReasoningOptions, WorkspaceFileEntry } from '@/types'
+import type { ApiConfig, CommandInfo, ImageAttachment, InputDelivery, ModelContextInfo, PendingInput, ReasoningOptions, WorkspaceFileEntry } from '@/types'
 
 export interface PromptMeta {
   thinkingEnabled: boolean
@@ -24,7 +27,7 @@ export interface PromptMeta {
 /** Mirrors the textarea cap inside the Iconiq composer. */
 const MAX_TEXTAREA_HEIGHT = 132
 
-export function PromptComposer({ draft, onDraftChange, attachments, onAttachmentsChange, busy, pending, configs, selectedId, onSelect, onSend, onStop, onCancelPending, onConfigure, onSettings, onNotify, onReport, models, reasoning, commands, onCommand }: {
+export function PromptComposer({ draft, onDraftChange, attachments, onAttachmentsChange, busy, pending, configs, selectedId, onSelect, onSend, onStop, onCancelPending, onConfigure, onSettings, onNotify, onReport, models, commands, onCommand }: {
   draft: string
   onDraftChange: (value: string) => void
   attachments: ImageAttachment[]
@@ -42,14 +45,75 @@ export function PromptComposer({ draft, onDraftChange, attachments, onAttachment
   onNotify: (title: string, message?: string, appearance?: 'default' | 'success' | 'info' | 'destructive' | 'warning') => void
   onReport: (error: unknown) => void
   models: string[]
-  reasoning: ReasoningOptions | null
   commands: CommandInfo[]
   onCommand: (text: string, delivery?: InputDelivery) => Promise<boolean>
 }) {
   const tr = useT()
+  const api = useStore(useApiConfigsStore)
   const config = configs.find(item => item.id === selectedId) ?? configs[0]
   const areaRef = useRef<HTMLDivElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
+
+  // The composer owns its dropdown values: the selected model drives both the native
+  // thinking levels and the context capacity, and both arrive asynchronously from the host.
+  const [settings, setSettings] = useState<Record<string, string>>(() => ({
+    model: config?.defaultModel ?? '',
+    thinking: 'default',
+    context: 'auto',
+  }))
+  const selectedModel = settings.model || config?.defaultModel || ''
+  const [reasoning, setReasoning] = useState<ReasoningOptions | null>(null)
+  const [contextInfo, setContextInfo] = useState<ModelContextInfo | null>(null)
+
+  useEffect(() => {
+    setSettings({ model: config?.defaultModel ?? '', thinking: 'default', context: 'auto' })
+  }, [config?.id])
+
+  useEffect(() => {
+    if (!config?.id) { setReasoning(null); return }
+    let active = true
+    void api.reasoningOptions(config.id, selectedModel || undefined)
+      .then(options => { if (active) setReasoning(options) })
+      .catch(() => { if (active) setReasoning(null) })
+    return () => { active = false }
+  }, [config?.id, selectedModel])
+
+  useEffect(() => {
+    if (!config?.id || !selectedModel) { setContextInfo(null); return }
+    let active = true
+    void api.contextOptions(config.id, selectedModel)
+      .then(info => {
+        if (!active) return
+        setContextInfo(info)
+        setSettings(current => {
+          const value = info.manual != null ? String(info.manual) : 'auto'
+          return current.context === value ? current : { ...current, context: value }
+        })
+      })
+      .catch(() => { if (active) setContextInfo(null) })
+    return () => { active = false }
+  }, [config?.id, selectedModel, config?.effectiveContextTokens, config?.modelContextWindows])
+
+  function changeSettings(next: Record<string, string>) {
+    const previous = settings
+    if (next.model !== previous.model) {
+      // The new model has its own native levels and window; wait for those before persisting.
+      setSettings({ ...next, thinking: 'default', context: 'auto' })
+      return
+    }
+    setSettings(next)
+    if (next.context === previous.context) return
+    if (!config?.id) return
+    const model = next.model || config.defaultModel
+    if (!model) return
+    const tokens = next.context === 'auto' ? 0 : Number(next.context)
+    void api.setContext(config.id, model, Number.isFinite(tokens) ? tokens : 0)
+      .then(info => {
+        setContextInfo(info)
+        setSettings(current => ({ ...current, context: info.manual != null ? String(info.manual) : 'auto' }))
+      })
+      .catch(error => { setSettings(previous); onReport(error) })
+  }
 
   // Slash menu: the full terminal catalog — built-ins, plugin commands and user-invocable
   // skills — filtered by prefix while the draft is still a single command word.
@@ -261,17 +325,33 @@ export function PromptComposer({ draft, onDraftChange, attachments, onAttachment
     return [...new Set([...(current ? [current] : []), ...list])].map(id => ({ value: id, label: id }))
   }, [models, config?.defaultModel])
 
-  const thinkingOptions = [
-    { value: 'off', label: tr('标准回答', 'Standard answer') },
-    { value: 'on', label: tr('深度思考', 'Deep thinking') },
-    ...(reasoning?.efforts ?? []).filter(effort => effort !== 'default').map(effort => ({ value: `effort:${effort}`, label: tr(`等级 · ${effort}`, `Level · ${effort}`) })),
-  ]
+  // Native reasoning levels only — no legacy on/off aliases. Models without native
+  // controls (protocol none) get no thinking selector at all.
+  const thinkingOptions = useMemo(() => {
+    const efforts = (reasoning?.efforts ?? []).filter(effort => effort !== 'default')
+    if (!efforts.length) return []
+    return [
+      { value: 'default', label: tr('跟随配置', 'Use configured level') },
+      ...efforts.map(effort => ({ value: `effort:${effort}`, label: effort === 'budget' ? tr('budget（自定义预算）', 'budget') : effort })),
+    ]
+  }, [reasoning, tr])
+
+  const contextOptions = useMemo(() => {
+    const capacity = contextInfo?.capacity ?? 0
+    const presets = [100000, 200000, 300000, 400000, 512000, 1000000]
+    const values = [...new Set([...presets, ...(contextInfo?.manual ? [contextInfo.manual] : []), ...(capacity ? [capacity] : [])])].sort((a, b) => a - b)
+    return [
+      { value: 'auto', label: capacity > 0 ? tr(`自动（${formatTokens(capacity)}）`, `Auto (${formatTokens(capacity)})`) : tr('自动', 'Auto') },
+      ...values.map(value => ({ value: String(value), label: formatTokens(value) })),
+    ]
+  }, [contextInfo?.capacity, contextInfo?.manual, tr])
 
   // Iconiq's settings dropdown only renders groups that declare a display mode:
   // submenu groups get a label, a live value and a flyout list.
   const groups: PromptSettingGroup[] = [
     ...(modelOptions.length > 0 ? [{ id: 'model', label: tr('模型', 'Model'), display: 'submenu' as const, options: modelOptions }] : []),
-    { id: 'thinking', label: tr('思考等级', 'Thinking level'), display: 'submenu' as const, options: thinkingOptions },
+    ...(thinkingOptions.length > 0 ? [{ id: 'thinking', label: tr('思考等级', 'Thinking level'), display: 'submenu' as const, options: thinkingOptions }] : []),
+    { id: 'context', label: tr('上下文', 'Context'), display: 'submenu' as const, options: contextOptions },
   ]
 
   const attached = attachments.length > 0
@@ -395,9 +475,10 @@ export function PromptComposer({ draft, onDraftChange, attachments, onAttachment
         defaultAgent={config?.id}
         defaultSettings={{
           model: config?.defaultModel ?? '',
-          thinking: config?.thinkingEnabled ? 'on' : 'off',
-          budget: String(config?.thinkingBudget ?? 8000),
+          thinking: 'default',
+          context: 'auto',
         }}
+        settings={settings}
         disabled={!config}
         key={config?.id ?? 'none'}
         menuItems={[
@@ -407,11 +488,14 @@ export function PromptComposer({ draft, onDraftChange, attachments, onAttachment
           { value: 'settings', label: tr('工作空间设置', 'Workspace settings'), icon: Settings2, onClick: onSettings },
         ]}
         onAgentChange={onSelect}
+        onSettingsChange={changeSettings}
         onSend={(text, meta) => {
-          const thinking = meta.settings.thinking ?? 'off'
+          const thinking = meta.settings.thinking ?? 'default'
           const effort = thinking.startsWith('effort:') ? thinking.slice('effort:'.length) : undefined
           const payload: PromptMeta = {
-            thinkingEnabled: thinking !== 'off',
+            // "Follow the configured level" keeps the legacy default-thinking switch intact;
+            // an explicit native level overrides it for this message only.
+            thinkingEnabled: effort ? effort !== 'none' : config?.thinkingEnabled ?? false,
             thinkingBudget: Number(meta.settings.budget ?? config?.thinkingBudget ?? 8000),
             model: meta.settings.model || undefined,
             reasoningEffort: effort,

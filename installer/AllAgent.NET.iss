@@ -22,6 +22,19 @@
 #ifndef OutputDir
   #define OutputDir "..\artifacts\installer"
 #endif
+; x64compatible on x64, arm64 on Windows on ARM. Both installers use the same
+; AppId, so an in-place upgrade keeps the previous uninstall entry.
+#ifndef Architecture
+  #define Architecture "x64compatible"
+#endif
+#ifndef OutputSuffix
+  #define OutputSuffix "win-x64"
+#endif
+; Inno's version resource accepts numbers only. Pre-release builds keep the
+; full string in AppVersion and use the numeric part here.
+#ifndef VersionInfo
+  #define VersionInfo AppVersion
+#endif
 
 [Setup]
 AppId={{#AppGuid}
@@ -32,11 +45,11 @@ AppPublisher={#AppPublisher}
 AppPublisherURL={#AppUrl}
 AppSupportURL={#AppUrl}/issues
 AppUpdatesURL={#AppUrl}/releases
-VersionInfoVersion={#AppVersion}
+VersionInfoVersion={#VersionInfo}
 VersionInfoCompany={#AppPublisher}
 VersionInfoDescription={#AppName} 安装程序
 VersionInfoProductName={#AppName}
-VersionInfoProductVersion={#AppVersion}
+VersionInfoProductVersion={#VersionInfo}
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
@@ -44,7 +57,7 @@ DisableDirPage=auto
 AllowNoIcons=yes
 LicenseFile=..\LICENSE
 OutputDir={#OutputDir}
-OutputBaseFilename={#AppName}-{#AppVersion}-win-x64-setup
+OutputBaseFilename={#AppName}-{#AppVersion}-{#OutputSuffix}-setup
 SetupIconFile=..\src\AllAgent.NET.Terminal\Assets\allagent.ico
 UninstallDisplayIcon={app}\{#AppExeName}
 UninstallDisplayName={#AppName} {#AppVersion}
@@ -55,8 +68,8 @@ WizardStyle=modern
 ; The dialog still offers an all-users install into Program Files.
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog commandline
-ArchitecturesAllowed=x64compatible
-ArchitecturesInstallIn64BitMode=x64compatible
+ArchitecturesAllowed={#Architecture}
+ArchitecturesInstallIn64BitMode={#Architecture}
 MinVersion=10.0.17763
 CloseApplications=yes
 RestartApplications=no
@@ -75,11 +88,11 @@ chinesesimplified.GroupOptions=其他选项：
 chinesesimplified.TaskTerminal=创建桌面快捷方式：AllAgent.NET 终端（命令行聊天）
 chinesesimplified.TaskDesktop=创建桌面快捷方式：AllAgent.NET 桌面端（窗口工作台）
 chinesesimplified.TaskPath=将 allagent 命令加入 PATH（在任意终端直接运行）
-chinesesimplified.TaskRuntime=补齐缺失的运行环境（WebView2 运行时、Python 3.13、ripgrep）
+chinesesimplified.TaskRuntime=补齐缺失的运行环境（WebView2 运行时、ripgrep）
 chinesesimplified.TaskVerify=安装完成后在控制台运行环境自检
 chinesesimplified.IconTerminal=命令行聊天，在任意项目目录里直接使用
 chinesesimplified.IconDesktop=原生窗口工作台，与终端共享工作区与会话
-chinesesimplified.IconDoctor=检查 Python、WebView2、ripgrep 与沙箱执行环境
+chinesesimplified.IconDoctor=检查 WebView2、ripgrep 与沙箱执行环境
 chinesesimplified.RunTerminal=运行 AllAgent.NET 终端
 chinesesimplified.RunDesktop=运行 AllAgent.NET 桌面端
 chinesesimplified.RunVerify=运行环境自检
@@ -90,17 +103,17 @@ chinesesimplified.RuntimeInstalling=正在安装 %1...
 chinesesimplified.RuntimeFailed=以下组件未能自动安装：%n%n%1%n%n可以稍后在控制台中运行 `allagent doctor --install` 手动补齐。
 chinesesimplified.RuntimeNone=运行环境已齐全，无需补齐。
 chinesesimplified.RuntimeDone=运行环境补齐完成：%1
-chinesesimplified.UninstallKeepData=是否同时删除配置与凭据？%n%n它们保存在 %1（模型、API Key、插件、共享 Python 环境）。%n%n选择“否”会在卸载后保留这些设置，重新安装时可以直接继续使用。
+chinesesimplified.UninstallDeleteData=是否同时清除用户数据？%n%n默认选择“是”，将删除：%n%1（模型配置、API Key、登录凭据、插件、技能、共享 Python 环境）%n%2（更新缓存、窗口缓存与本地索引）%n%n工作区项目目录下的 .allagent 数据不会被删除。%n%n选择“否”会保留这些数据，重新安装后可以继续使用。
 english.GroupDesktop=Desktop shortcuts:
 english.GroupOptions=Other options:
 english.TaskTerminal=Create a desktop shortcut: AllAgent.NET Terminal (command line chat)
 english.TaskDesktop=Create a desktop shortcut: AllAgent.NET Desktop (window workbench)
 english.TaskPath=Add the allagent command to PATH (run it from any terminal)
-english.TaskRuntime=Install missing runtime components (WebView2 Runtime, Python 3.13, ripgrep)
+english.TaskRuntime=Install missing runtime components (WebView2 Runtime, ripgrep)
 english.TaskVerify=Run the environment check in a console after installation
 english.IconTerminal=Command line chat, usable directly in any project directory
 english.IconDesktop=Native window workbench sharing workspace and sessions with the terminal
-english.IconDoctor=Checks Python, WebView2, ripgrep and the sandbox execution environment
+english.IconDoctor=Checks WebView2, ripgrep and the sandbox execution environment
 english.RunTerminal=Run AllAgent.NET Terminal
 english.RunDesktop=Run AllAgent.NET Desktop
 english.RunVerify=Run the environment check
@@ -111,7 +124,7 @@ english.RuntimeInstalling=Installing %1...
 english.RuntimeFailed=These components could not be installed automatically:%n%n%1%n%nRun `allagent doctor --install` in a terminal to finish the setup.
 english.RuntimeNone=Every runtime component is already present.
 english.RuntimeDone=Runtime components installed: %1
-english.UninstallKeepData=Also delete configuration and credentials?%n%nThey live in %1 (models, API keys, plugins, shared Python environment).%n%nAnswer No to keep them for a later reinstall.
+english.UninstallDeleteData=Delete user data as well?%n%n"Yes" is selected by default and removes:%n%1 (model configuration, API keys, sign-in credentials, plugins, skills, shared Python environment)%n%2 (update cache, window cache and local index)%n%nProject data under .allagent in each workspace is not deleted.%n%nAnswer No to keep this data for a later reinstall.
 
 [Tasks]
 Name: "desktopicon_terminal"; Description: "{cm:TaskTerminal}"; GroupDescription: "{cm:GroupDesktop}"
@@ -148,7 +161,6 @@ Filename: "{app}\{#AppExeName}"; Parameters: "-guimode"; WorkingDir: "{%USERPROF
 const
   WebView2Client = 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
   WebView2BootstrapperUrl = 'https://go.microsoft.com/fwlink/p/?LinkId=2124703';
-  PythonPackageId = 'Python.Python.3.13';
   RipgrepPackageId = 'BurntSushi.ripgrep.MSVC';
 
 var
@@ -189,22 +201,6 @@ begin
             RegQueryStringValue(HKLM, WebView2Client, 'pv', Version) or
             RegQueryStringValue(HKCU, WebView2Client, 'pv', Version);
   Result := Result and (Version <> '');
-end;
-
-function PythonInstalled(): Boolean;
-var
-  Python: String;
-  ResultCode: Integer;
-begin
-  Result := False;
-  Python := FindOnPath('python.exe');
-  if Python = '' then
-    Exit;
-  { The Microsoft Store placeholder is found by FileSearch too; a probe with -I -S
-    only succeeds for a real interpreter inside the supported 3.10-3.14 range. }
-  if not RunHidden(Python, '-I -S -c "import sys; sys.exit(0 if (3,10) <= sys.version_info[:2] <= (3,14) else 1)"', ResultCode) then
-    Exit;
-  Result := ResultCode = 0;
 end;
 
 function RipgrepInstalled(): Boolean;
@@ -256,11 +252,11 @@ begin
   RuntimeFailures := '';
   RuntimeInstalled := '';
   Page := CreateOutputProgressPage(CustomMessage('RuntimeTitle'), CustomMessage('RuntimeProgress'));
-  Page.SetProgress(0, 3);
+  Page.SetProgress(0, 2);
   try
     if WebView2Installed() then
     begin
-      Page.SetProgress(1, 3);
+      Page.SetProgress(1, 2);
     end
     else
     begin
@@ -269,17 +265,8 @@ begin
         Note('WebView2')
       else
         Fail('WebView2 运行时 / WebView2 Runtime');
-      Page.SetProgress(1, 3);
+      Page.SetProgress(1, 2);
     end;
-
-    Page.SetText('', 'Python 3.13');
-    if PythonInstalled() then
-    begin end
-    else if InstallWingetPackage(PythonPackageId) then
-      Note('Python 3.13')
-    else
-      Fail('Python 3.13');
-    Page.SetProgress(2, 3);
 
     Page.SetText('', 'ripgrep');
     if RipgrepInstalled() then
@@ -288,7 +275,7 @@ begin
       Note('ripgrep')
     else
       Fail('ripgrep');
-    Page.SetProgress(3, 3);
+    Page.SetProgress(2, 2);
   finally
     Page.Hide;
   end;
@@ -422,13 +409,21 @@ end;
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   SharedDirectory: String;
+  LocalDirectory: String;
 begin
   if CurUninstallStep <> usUninstall then
     Exit;
   RemoveFromPath(ExpandConstant('{app}'));
   SharedDirectory := ExpandConstant('{%APPDATA}\AllAgent.NET');
-  { Defaults to No: keeping credentials is the safe answer for Enter and for /SUPPRESSMSGBOXES. }
-  if DirExists(SharedDirectory) and
-     (MsgBox(FmtMessage(CustomMessage('UninstallKeepData'), [SharedDirectory]), mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES) then
-    DelTree(SharedDirectory, True, True, True);
+  LocalDirectory := ExpandConstant('{%LOCALAPPDATA}\AllAgent.NET');
+  { Defaults to Yes: MB_YESNO's first button is selected, including for
+    /SUPPRESSMSGBOXES. Workspace .allagent data is deliberately never touched. }
+  if (DirExists(SharedDirectory) or DirExists(LocalDirectory)) and
+     (MsgBox(FmtMessage(CustomMessage('UninstallDeleteData'), [SharedDirectory, LocalDirectory]), mbConfirmation, MB_YESNO or MB_DEFBUTTON1) = IDYES) then
+  begin
+    if DirExists(SharedDirectory) then
+      DelTree(SharedDirectory, True, True, True);
+    if DirExists(LocalDirectory) then
+      DelTree(LocalDirectory, True, True, True);
+  end;
 end;

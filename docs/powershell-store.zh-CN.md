@@ -24,7 +24,7 @@ allagent powershell commands Pester
 
 Web 工作台侧栏的「PowerShell」页是同一份能力商店的浏览器界面：查看已安装模块、导入错误与命令数量，按模块查看导出命令，搜索 PSGallery 并按结果中的确切版本安装，也可直接按名称（可选版本）安装，以及刷新能力清单。聊天内输入 `/powershell` 会切到该页面。两端的模块目录与 `capabilities.json` 完全共享，任一端安装后另一端刷新即可看到；安装与验证始终由终端宿主的内嵌 SDK worker 执行（`src/AllAgent.NET.Terminal/PowerShellStoreBridge.cs`，桥接方法 `powershell.status|refresh|search|install|commands`）。模块缺失时页面明确提示重新安装 AllAgent，而不是引导安装系统 PowerShell。
 
-来源为 PowerShell Gallery。首次搜索或安装自动下载微软 Microsoft.PowerShell.PSResourceGet 1.2.0。使用其 [Save-PSResource](https://learn.microsoft.com/powershell/module/microsoft.powershell.psresourceget/save-psresource) 下载模块及依赖到 AllAgent.NET 专属目录，不修改系统 PowerShell 安装。安装命令接受所选模块及依赖的许可证。模块是会执行的代码，安装表示允许导入它及其依赖。
+来源为 PowerShell Gallery。搜索直接查询 Gallery 的 `Packages()` OData 接口，通常在 1 秒内返回；PSResourceGet 生成的复合过滤查询会对 `Az`、`Power` 这类宽泛关键词返回 HTTP 500，因此搜索不再经过它。首次安装自动下载微软 Microsoft.PowerShell.PSResourceGet 1.2.0，使用其 [Save-PSResource](https://learn.microsoft.com/powershell/module/microsoft.powershell.psresourceget/save-psresource) 下载模块及依赖到 AllAgent.NET 专属目录，不修改系统 PowerShell 安装。安装命令接受所选模块及依赖的许可证。模块是会执行的代码，安装表示允许导入它及其依赖。
 
 默认位置为 `%APPDATA%/AllAgent.NET/powershell/Modules`；显式 `--data-dir` 时跟随共享数据目录。首次安装需要联网。每次新建 Agent runtime 时实际导入验证并生成能力清单；聊天内管理命令会同步刷新当前 runtime 的清单。模型上下文包含模块名、版本、导入错误和命令数量，可调用 `powershell_capabilities(module="Pester", skip=0, limit=50)` 分页查询导出命令。
 

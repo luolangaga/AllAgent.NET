@@ -16,9 +16,10 @@ beforeEach(async () => {
     if (method === 'list') return { items: p.kind === 'repositories' ? [{ full_name: 'octo/demo' }] : [p.kind === 'pulls' ? { ...issue, pull_request: {} } : issue], page: 1, hasMore: false, total: 1 }
     if (method === 'detail') return { item: { ...issue, head: { label: 'octo:fix' }, base: { label: 'octo:main' } }, files: [{ filename: 'demo.cs', patch: '+ fix' }], comments: [], reviews: [], truncated: false }
     if (method === 'start') return { id: 'operation-1', state: 'done', result: { conversationId: 'conversation-1', workspace: 'C:\\Projects\\demo' } }
+    if (method === 'host.markdown.render') return '<p>渲染后的正文</p>'
     return true
   })
-  ;(window as any).AllAgentPlugin = { connect: () => ({ ready: Promise.resolve(), invoke, context: { workspace: 'C:\\Projects\\demo' }, openExternal: vi.fn() }) }
+  ;(window as any).AllAgentPlugin = { connect: () => ({ ready: Promise.resolve(), invoke, on: () => () => {}, context: { workspace: 'C:\\Projects\\demo' }, openExternal: vi.fn() }) }
   // Execute the shipped, framework-free plugin page with a fake host SDK.
   new Function(script)()
   await settle()
@@ -37,7 +38,10 @@ describe('GitHub plugin GUI', () => {
     expect(document.querySelector('#workflow')).toBeNull()
     expect(document.querySelector('#task-dialog')?.textContent).not.toContain('提示词')
     expect(invoke.mock.calls.some(([method]) => method === 'workflows')).toBe(false)
-    expect((document.querySelector('#workspace-path') as HTMLInputElement).value).toBe('C:\\Projects\\demo')
+    expect(document.querySelector('#detail .markdown')?.innerHTML).toContain('渲染后的正文')
+    // Existing-workspace mode derives the path from the select; no manual path entry.
+    expect((document.querySelector('#workspace-choice') as HTMLSelectElement).value).toBe('C:\\Projects\\demo')
+    expect((document.querySelector('#workspace-path') as HTMLInputElement).value).toBe('')
   })
 
   it('starts a PR review with clone selection and user instructions, then opens the resulting workspace session', async () => {

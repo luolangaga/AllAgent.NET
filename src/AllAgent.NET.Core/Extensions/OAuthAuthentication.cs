@@ -62,6 +62,10 @@ public sealed class OAuthAuthentication : IAuthenticationProvider
     public string Id => _profile.Id;
     public string Name => _profile.Name;
     public string? LoginInstructions { get; private set; }
+    /// <summary>Device-flow code to type on the verification page; null outside an active login.</summary>
+    public string? DeviceUserCode { get; private set; }
+    /// <summary>Verification page opened by the device flow (may embed the code).</summary>
+    public string? VerificationUri { get; private set; }
     public async Task LoginAsync(Func<Uri, CancellationToken, Task> openBrowser, CancellationToken ct)
     {
         await _gate.WaitAsync(ct); using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct); deadline.CancelAfter(TimeSpan.FromMinutes(5));
@@ -105,7 +109,9 @@ public sealed class OAuthAuthentication : IAuthenticationProvider
         using var doc = await PostAsync(_profile.DeviceEndpoint!, Fields(("scope", _profile.Scope)), ct); var data = doc.RootElement;
         if (data.TryGetProperty("error", out var error)) throw new InvalidOperationException("Device OAuth：" + error.GetString());
         var verification = data.TryGetProperty("verification_uri_complete", out var complete) ? complete : data.GetProperty("verification_uri");
-        LoginInstructions = "浏览器登录 · 设备码：" + data.GetProperty("user_code").GetString();
+        DeviceUserCode = data.GetProperty("user_code").GetString();
+        VerificationUri = verification.GetString();
+        LoginInstructions = "浏览器登录 · 设备码：" + DeviceUserCode;
         var uri = new Uri(verification.GetString()!); if ((uri.Scheme != "https" && !uri.IsLoopback) || uri.UserInfo.Length > 0 || (_validateVerification != null && !_validateVerification(uri))) throw new InvalidDataException("无效的设备登录地址。");
         await openBrowser(uri, ct);
         using var expires = CancellationTokenSource.CreateLinkedTokenSource(ct); expires.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(data.GetProperty("expires_in").GetInt32(), 1, 300)));

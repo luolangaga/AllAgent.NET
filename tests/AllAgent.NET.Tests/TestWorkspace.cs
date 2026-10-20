@@ -5,7 +5,11 @@ namespace AllAgent.NET.Tests;
 
 internal sealed class TestWorkspace : IDisposable
 {
-    private static readonly Lazy<RuntimeEnvironment> Installed = new(() => new EnvironmentDoctor().CheckAsync().GetAwaiter().GetResult());
+    private static readonly Lazy<RuntimeEnvironment> Installed = new(() =>
+    {
+        var doctor = new EnvironmentDoctor();
+        return doctor.CheckAsync().GetAwaiter().GetResult() with { Python = doctor.ResolvePythonAsync().GetAwaiter().GetResult() };
+    });
     public string Root { get; } = Path.Combine(Path.GetTempPath(), "AllAgent.NET.Tests", Guid.NewGuid().ToString("N"));
     public string Python { get; }
     public string Pwsh { get; }

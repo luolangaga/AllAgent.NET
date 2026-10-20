@@ -146,7 +146,7 @@ export default function PowerShell() {
           >搜索</Button>
         </div>
         {searching ? <p className="list-description plugin-empty">
-          正在查询 PowerShell Gallery，已等待 {searchSeconds} 秒。Gallery 响应可能较慢，通常需要 10–60 秒；超过 5 分钟会返回超时提示。
+          正在查询 PowerShell Gallery，已等待 {searchSeconds} 秒。通常 1–3 秒即可返回；网络较慢时会稍久，超时后会明确提示。
         </p> : null}
         {store.packages.length ? <div className="divide-list">{store.packages.map(pkg => <div className="list-row" key={`${pkg.name}@${pkg.version}`}>
           <div className="list-content">

@@ -133,6 +133,8 @@ internal sealed class TerminalUi(bool json, bool verbose)
     private int _approvalChoice = 0, _approvalScroll;
     private int _planChoice = 1, _planScroll;
     private bool _planExpanded;
+    private readonly InputState _planComment = new();
+    private bool _planCommentActive;
     private bool _expanded;
     private InputState _queued = new();
     private bool _plainStreaming;
@@ -208,34 +210,35 @@ internal sealed class TerminalUi(bool json, bool verbose)
         finally { Gate.Release(); }
     }
 
-    public async Task<bool> RequestPlanApprovalAsync(PlanProposal plan, CancellationToken ct)
+    public async Task<PlanDecision> RequestPlanApprovalAsync(PlanProposal plan, CancellationToken ct)
     {
-        if (!Interactive || Json) return false;
+        if (!Interactive || Json) return new PlanDecision(false, "Plan approval requires an interactive terminal; stay in plan mode.");
         var preview = new PlanPreview(plan);
         // A plan raised by a background run waits on that run and is asked when its session is
         // back on screen — never answered (or silently denied) on the person's behalf.
         if (Runs?.Find(AgentExecutionScope.ConversationId) is { } run)
         {
-            var waiting = new PendingPlan(preview, new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously), ct);
+            var waiting = new PendingPlan(preview, new TaskCompletionSource<PlanDecision>(TaskCreationOptions.RunContinuationsAsynchronously), ct);
             run.EnqueuePlan(waiting);
             if (!run.Attached) run.State = SessionRunState.AwaitingPlan;
             Runs.Bump();
             try { return await waiting.Completion.Task.WaitAsync(ct); }
-            finally { if (!waiting.Completion.Task.IsCompleted) waiting.Completion.TrySetResult(false); }
+            finally { if (!waiting.Completion.Task.IsCompleted) waiting.Completion.TrySetResult(new PlanDecision(false)); }
         }
         if (_live)
         {
-            var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var completion = new TaskCompletionSource<PlanDecision>(TaskCreationOptions.RunContinuationsAsynchronously);
             _plans.Enqueue(new(preview, completion, ct));
             try { return await completion.Task.WaitAsync(ct); }
-            finally { if (!completion.Task.IsCompleted) completion.TrySetResult(false); }
+            finally { if (!completion.Task.IsCompleted) completion.TrySetResult(new PlanDecision(false)); }
         }
         await Gate.WaitAsync(ct);
         try
         {
             if (FullScreenTerminal.Current is { } screen) return await screen.ApprovePlanAsync(preview, ct);
             TerminalOutput.WriteLine(); TerminalOutput.Write(TerminalMarkdown.Render(plan.Markdown));
-            return await AnsiConsole.PromptAsync(new ConfirmationPrompt(L.Pick("批准计划并进入完全访问？", "Approve the plan and switch to full access?")) { DefaultValue = false }, ct);
+            var approved = await AnsiConsole.PromptAsync(new ConfirmationPrompt(L.Pick("批准计划并进入完全访问？", "Approve the plan and switch to full access?")) { DefaultValue = false }, ct);
+            return new PlanDecision(approved);
         }
         finally { Gate.Release(); }
     }
@@ -328,7 +331,7 @@ internal sealed class TerminalUi(bool json, bool verbose)
                     if (_pending?.Token.IsCancellationRequested == true) Decide(false);
                     if (_question == null && _plan == null && _pending == null && TryDequeueQuestion(run, out var question)) { _question = question; _questionChoice = _questionScroll = 0; _questionText = new(); FlushAnswer(); }
                     if (_question?.Token.IsCancellationRequested == true) AnswerQuestion(null);
-                    if (_plan == null && _pending == null && _question == null && TryDequeuePlan(run, out var plan)) { _plan = plan; _planChoice = 1; _planScroll = 0; _planExpanded = false; FlushAnswer(); }
+                    if (_plan == null && _pending == null && _question == null && TryDequeuePlan(run, out var plan)) { _plan = plan; _planChoice = 1; _planScroll = 0; _planExpanded = false; _planCommentActive = false; _planComment.Set(""); FlushAnswer(); }
                     if (_plan?.Token.IsCancellationRequested == true) DecidePlan(false);
                     if (_pending == null && _plan == null && _question is { Question.Choices.Count: > 0 } choiceQuestion)
                     {
@@ -355,7 +358,7 @@ internal sealed class TerminalUi(bool json, bool verbose)
                         else if (key.Modifiers.HasFlag(ConsoleModifiers.Control) && key.Key == ConsoleKey.C && FullScreenTerminal.Current?.CopyTranscriptSelection(key) == true) { }
                         else if (key.Modifiers.HasFlag(ConsoleModifiers.Control) && key.Key == ConsoleKey.C) Stop();
                         else if (_question != null) { if (input.Wheel != 0) _questionScroll = Math.Max(0, _questionScroll - input.Wheel); else if (input.Paste != null) _questionText.Insert(input.Paste); else QuestionKey(key); }
-                        else if (_plan != null) { if (input.Wheel != 0) _planScroll = Math.Max(0, _planScroll - input.Wheel); else if (input.Paste != null) { } else PlanKey(key); }
+                        else if (_plan != null) { if (input.Wheel != 0) _planScroll = Math.Max(0, _planScroll - input.Wheel); else if (input.Paste != null) { if (_planCommentActive) _planComment.Insert(input.Paste); } else PlanKey(key); }
                         else if (input.Paste != null && _pending == null)
                         {
                             var prepared = await PastedImages.PrepareAsync(input.Paste, Workspace, cancelled.Token);
@@ -429,7 +432,7 @@ internal sealed class TerminalUi(bool json, bool verbose)
                 }
             }
             if (FullScreenTerminal.Current is { } screen)
-                await PumpAsync(activity => { var prompt = _plan != null || _pending != null || _question != null; screen.SetActivity(prompt ? null : activity); screen.SetConversationPrompt(prompt ? new Panel(activity).Header(_plan != null ? L.Pick("计划审批", "Plan approval") : _pending != null ? L.Pick("需要授权", "Approval required") : L.Pick("需要你的回答", "Your answer is needed")).Border(BoxBorder.Rounded).BorderColor(Color.Yellow).Padding(1, 0) : null); screen.SetInput(_queued, prompt ? [] : _queued.Suggestions(RunningHints), prompt ? L.Pick("↑↓ 选择 · Enter 确认 · Esc 拒绝 / 返回", "↑↓ select · Enter confirm · Esc reject / back") : L.Pick("任务运行中 · Esc 停止 · 回车指导当前任务 · /tasks 任务 · /queue add 排队", "Task running · Esc stop · Enter steer · /tasks tasks · /queue add queue")); screen.Draw(); });
+                await PumpAsync(activity => { var prompt = _plan != null || _pending != null || _question != null; screen.SetActivity(prompt ? null : activity); screen.SetConversationPrompt(prompt ? new Panel(activity).Header(_plan != null ? L.Pick("计划审批", "Plan approval") : _pending != null ? L.Pick("需要授权", "Approval required") : L.Pick("需要你的回答", "Your answer is needed")).Border(BoxBorder.Rounded).BorderColor(Color.Yellow).Padding(1, 0) : null); screen.SetInput(_queued, prompt ? [] : _queued.Suggestions(RunningHints), _plan != null && _planCommentActive ? L.Pick("输入评论 / 建议 · Enter 提交并继续规划 · Esc 返回", "Type a comment / suggestion · Enter submits and keeps planning · Esc back") : prompt ? L.Pick("↑↓ 选择 · Enter 确认 · Esc 拒绝 / 返回 · 3 评论", "↑↓ select · Enter confirm · Esc reject / back · 3 comment") : L.Pick("任务运行中 · Esc 停止 · 回车指导当前任务 · /tasks 任务 · /queue add 排队", "Task running · Esc stop · Enter steer · /tasks tasks · /queue add queue")); screen.Draw(); });
             else
             {
                 using var display = new SpectreScreenDisplay(AnsiConsole.Console); inlineDisplay = display; display.Start(RenderActivity());
@@ -450,7 +453,7 @@ internal sealed class TerminalUi(bool json, bool verbose)
             if (run is { IsFinished: false } && _plan is { } openPlan) { run.EnqueuePlan(openPlan); _plan = null; }
             Decide(false); while (_approvals.TryDequeue(out var pending)) pending.Completion.TrySetResult(false);
             AnswerQuestion(null); while (_questions.TryDequeue(out var question)) question.Completion.TrySetResult(null);
-            DecidePlan(false); while (_plans.TryDequeue(out var plan)) plan.Completion.TrySetResult(false);
+            DecidePlan(false); while (_plans.TryDequeue(out var plan)) plan.Completion.TrySetResult(new PlanDecision(false));
             if (runningCommand != null)
             {
                 try { await runningCommand; }
@@ -503,15 +506,30 @@ internal sealed class TerminalUi(bool json, bool verbose)
     }
     private void PlanKey(ConsoleKeyInfo key)
     {
+        if (_planCommentActive)
+        {
+            if (key.Key == ConsoleKey.Enter) { DecidePlan(false, _planComment.Text); return; }
+            if (key.Key == ConsoleKey.Escape || key.Modifiers.HasFlag(ConsoleModifiers.Control) && key.Key is ConsoleKey.C or ConsoleKey.D)
+            { _planCommentActive = false; _planComment.Set(""); return; }
+            _planComment.Key(key, [], []);
+            return;
+        }
         if (key.Key is ConsoleKey.Y or ConsoleKey.D1 or ConsoleKey.NumPad1) { DecidePlan(true); return; }
         if (key.Key is ConsoleKey.N or ConsoleKey.D2 or ConsoleKey.NumPad2 or ConsoleKey.Escape) { DecidePlan(false); return; }
-        if (key.Key == ConsoleKey.Enter) { DecidePlan(_planChoice == 0); return; }
+        if (key.Key is ConsoleKey.D3 or ConsoleKey.NumPad3 || key.Key == ConsoleKey.C && key.Modifiers == 0)
+        { _planChoice = 2; _planCommentActive = true; _planComment.Set(""); return; }
+        if (key.Key == ConsoleKey.Enter)
+        {
+            if (_planChoice == 2) { _planCommentActive = true; _planComment.Set(""); }
+            else DecidePlan(_planChoice == 0);
+            return;
+        }
         if (key.Key == ConsoleKey.Tab) { _planExpanded = !_planExpanded; return; }
         if (key.Key is ConsoleKey.UpArrow or ConsoleKey.DownArrow)
         {
             if (key.Modifiers.HasFlag(ConsoleModifiers.Control))
                 _planScroll = Math.Clamp(_planScroll + (key.Key == ConsoleKey.UpArrow ? -3 : 3), 0, Math.Max(0, _plan!.Preview.Lines.Count - 1));
-            else _planChoice = Math.Clamp(_planChoice + (key.Key == ConsoleKey.UpArrow ? -1 : 1), 0, 1);
+            else _planChoice = Math.Clamp(_planChoice + (key.Key == ConsoleKey.UpArrow ? -1 : 1), 0, 2);
         }
     }
     private void Decide(bool allow)
@@ -521,20 +539,23 @@ internal sealed class TerminalUi(bool json, bool verbose)
         if (pending != null && _attachedRun is { } run && run.Waiting) { run.State = SessionRunState.Running; Runs?.Bump(); }
         if (pending != null) { TerminalOutput.MarkupLine(allow ? L.Pick("[dim]  ⎿ 本次操作已授权[/]", "[dim]  ⎿ Operation approved[/]") : L.Pick("[yellow]  ⎿ 本次操作已拒绝[/]", "[yellow]  ⎿ Operation rejected[/]")); _stage = allow ? Stage.Running : Stage.WaitingContinue; }
     }
-    private void DecidePlan(bool approve)
+    private void DecidePlan(bool approve, string? feedback = null)
     {
         var plan = _plan; _plan = null;
-        plan?.Completion.TrySetResult(approve);
+        _planCommentActive = false; _planComment.Set("");
+        var comment = string.IsNullOrWhiteSpace(feedback) ? null : feedback.Trim();
+        plan?.Completion.TrySetResult(new PlanDecision(approve, comment));
         if (plan != null && _attachedRun is { } run && run.Waiting) { run.State = SessionRunState.Running; Runs?.Bump(); }
         if (plan != null)
         {
-            TerminalOutput.MarkupLine(approve ? L.Pick("[dim]  ⎿ 计划已批准[/]", "[dim]  ⎿ Plan approved[/]") : L.Pick("[yellow]  ⎿ 计划已拒绝 · 继续规划[/]", "[yellow]  ⎿ Plan rejected · continue planning[/]"));
+            var label = approve ? L.Pick("[dim]  ⎿ 计划已批准[/]", "[dim]  ⎿ Plan approved[/]") : L.Pick("[yellow]  ⎿ 计划已拒绝 · 继续规划[/]", "[yellow]  ⎿ Plan rejected · continue planning[/]");
+            TerminalOutput.MarkupLine(label + (comment is { Length: > 0 } ? " · " + Markup.Escape(comment) : ""));
             _stage = approve ? Stage.Running : Stage.WaitingPlanRevision;
         }
     }
     internal IRenderable RenderActivity()
     {
-        if (_plan != null) return _plan.Preview.Render(_planChoice, _planScroll, _planExpanded, FullScreenTerminal.Current != null ? 6 : null);
+        if (_plan != null) return _plan.Preview.Render(_planChoice, _planScroll, _planExpanded, FullScreenTerminal.Current != null ? 6 : null, _planCommentActive ? _planComment : null);
         if (_pending != null) return _pending.Preview.Render(_approvalChoice, _approvalScroll, _expanded, FullScreenTerminal.Current != null ? 2 : null);
         if (_question != null)
         {
@@ -553,7 +574,7 @@ internal sealed class TerminalUi(bool json, bool verbose)
         if (_answer.Length > 0) rows.Add(new Text("● " + Tail(_answer)));
         if (ShowThinking && _taskThought.Length > 0)
         {
-            rows.Add(new ThinkingLine(Tail(_taskThought, 4000), _elapsed.ElapsedMilliseconds, prefix: L.Pick("✳ 思考 ", "✳ Thinking "), hint: L.Pick(" [Ctrl+O 展开]", " [Ctrl+O expand]")));
+            rows.Add(new ThinkingLine(Tail(_taskThought, 4000), _elapsed.ElapsedMilliseconds, prefix: L.Pick("思考 ", "Thinking "), hint: L.Pick(" [Ctrl+O 展开]", " [Ctrl+O expand]")));
         }
         if (_stage != Stage.ExecutingTool || !_codeBlocks.Values.Any(block => block.Ok == null))
             rows.Add(new Markup($"[{AccentMarkup()}]{glyph} {Markup.Escape(displayStage)}…[/] [dim]({(int)_elapsed.Elapsed.TotalSeconds}s · {L.Pick($"{_toolCalls} 个工具", $"{_toolCalls} tools")})[/]"));
@@ -720,9 +741,12 @@ internal sealed class TerminalUi(bool json, bool verbose)
                     (items.Length == 0 ? L.Pick(" · 暂无待办", " · no items") : "\n" + string.Join('\n', items.Select(TodoCommand.Line)));
             }
             if (toolName == "plan_propose")
-                return data.TryGetProperty("approved", out var approved) && approved.ValueKind == JsonValueKind.True
-                    ? L.Pick("计划已批准 · 已切换到完全访问", "Plan approved · switched to full access")
-                    : L.Pick("计划已拒绝 · 继续规划", "Plan rejected · continue planning") + (data.TryGetProperty("feedback", out var feedback) && feedback.ValueKind == JsonValueKind.String ? " · " + feedback.GetString() : "");
+            {
+                var approvedPlan = data.TryGetProperty("approved", out var approved) && approved.ValueKind == JsonValueKind.True;
+                var feedback = data.TryGetProperty("feedback", out var note) && note.ValueKind == JsonValueKind.String ? note.GetString() : null;
+                return (approvedPlan ? L.Pick("计划已批准 · 已切换到完全访问", "Plan approved · switched to full access") : L.Pick("计划已拒绝 · 继续规划", "Plan rejected · continue planning"))
+                    + (string.IsNullOrWhiteSpace(feedback) ? "" : " · " + feedback);
+            }
             if (toolName == "browser" && data.TryGetProperty("browser", out var browser))
             {
                 if (data.TryGetProperty("completed", out var filled) && filled.ValueKind == JsonValueKind.Array)

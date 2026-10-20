@@ -58,8 +58,9 @@ internal sealed class PowerShellStoreBridge(PowerShellModuleStore store)
         var query = (parameters.Query ?? string.Empty).Trim();
         if (query.Length == 0) throw new ArgumentException("请输入要搜索的模块关键词。");
         if (!Regex.IsMatch(query, "^[A-Za-z0-9._-]{1,64}$")) throw new ArgumentException("关键词只能包含字母、数字、点、连字符和下划线。");
-        EnsureWorker();
-        // Find-PSResource returns at most 30 matches; the page lists them and installs by exact version.
+        // Search goes straight to the Gallery API and does not need the bundled SDK worker;
+        // only installs and module import validation do.
+        // The Gallery returns at most 30 matches; the page lists them and installs by exact version.
         var json = await store.ExecuteAsync("search", "*" + query + "*", ct: ct);
         using var document = JsonDocument.Parse(json);
         return document.RootElement.EnumerateArray().Select(item => new PowerShellPackageInfo(

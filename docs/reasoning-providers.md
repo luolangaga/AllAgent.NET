@@ -14,9 +14,11 @@
 | Gemini 3 / 4 | `thinkingLevel`；按 Pro / Flash 等型号区分，并启用 `includeThoughts` |
 | 阿里云百炼 | `enable_thinking` 开关与 `thinking_budget`；支持原生 effort 的型号单独处理，二者不同时发送 |
 | Kimi / GLM 原生兼容接口 | 支持的混合思考型号使用 `thinking.type`；不把开关伪装成多档强度 |
+| WorkBuddy 网关 | 标准 OpenAI `reasoning_effort`（`none` 关闭）；档位按模型族，接口声明的 `reasoningEfforts` 优先，未知模型不显示选择器 |
+| CommandCode | 官方模型目录的 `reasoningEfforts`（`off` 映射为 `none`）；目录缺失或尚未刷新时按厂商族回退，`reasoning` 历史配置升级为 `commandcode` |
 | xAI | Grok 3 Mini 使用 low/high；固定思考型号保留默认 |
 
-不支持思考的目录条目只展示 default。未知代理不会仅因模型名称含有某个厂商名称就收到该厂商专有字段；可显式配置 `ReasoningProtocol`。模型目录已声明的 reasoning 档位覆盖内置族规则，空列表表示不提供可调档位。
+不支持思考的目录条目只展示 default。未知代理不会仅因模型名称含有某个厂商名称就收到该厂商专有字段；可显式配置 `ReasoningProtocol`。模型目录已声明的 reasoning 档位覆盖内置族规则，空列表表示不提供可调档位。账号目录完全没有该模型的档位元数据时，桥接层会先做一次限频 10 分钟的目录刷新，再用刷新结果计算选项；刷新失败则保留厂商族回退。
 
 强度和自定义预算分别存于 `ModelReasoningEfforts`、`ModelThinkingBudgets`，按配置内的模型 ID 保存。非法设置先验证再提交，切换子代理模型也会恢复对应模型设置。旧的 `ThinkingEnabled` / `ThinkingBudget` 输入继续在模型能力允许的范围内兼容。
 

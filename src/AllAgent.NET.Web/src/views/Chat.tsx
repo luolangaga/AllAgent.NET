@@ -23,7 +23,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useNoticesStore } from '@/stores/ui'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useT } from '@/i18n'
-import type { ImageAttachment, ReasoningOptions } from '@/types'
+import type { ImageAttachment } from '@/types'
 
 function ideaCards(tr: (zh: string, en: string) => string) {
   return [
@@ -47,7 +47,6 @@ export default function Chat({ ready, onNavigate, onPalette }: { ready: boolean;
   const [draft, setDraft] = useState('')
   const [attachments, setAttachments] = useState<ImageAttachment[]>([])
   const [visibleCount, setVisibleCount] = useState(30)
-  const [reasoning, setReasoning] = useState<ReasoningOptions | null>(null)
   const scroll = useRef<HTMLDivElement>(null)
   const follow = useRef(true)
 
@@ -95,15 +94,6 @@ export default function Chat({ ready, onNavigate, onPalette }: { ready: boolean;
     setDraft(commands.pendingDraft)
     commands.clearDraft()
   }, [commands.pendingDraft])
-  // Real thinking levels come from the provider's reasoning profile, not a fixed on/off list.
-  useEffect(() => {
-    if (!config?.id) { setReasoning(null); return }
-    let active = true
-    void api.reasoningOptions(config.id)
-      .then(options => { if (active) setReasoning(options) })
-      .catch(() => { if (active) setReasoning(null) })
-    return () => { active = false }
-  }, [config?.id])
   // Long histories render the newest slice first; earlier messages mount on demand.
   const visibleMessages = messages.length > visibleCount ? messages.slice(messages.length - visibleCount) : messages
 
@@ -306,7 +296,6 @@ export default function Chat({ ready, onNavigate, onPalette }: { ready: boolean;
         onSettings={() => onNavigate('settings')}
         onStop={() => void conv.cancelStream().catch(notices.report)}
         pending={conv.pendingInputs}
-        reasoning={reasoning}
         selectedId={modelSelection.configId ?? config?.id ?? null}
       />
       <SessionFooter configId={config?.id ?? null} model={conv.active?.modelId || config?.defaultModel || null} />

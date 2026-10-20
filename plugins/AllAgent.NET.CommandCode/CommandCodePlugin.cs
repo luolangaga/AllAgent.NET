@@ -47,7 +47,7 @@ public sealed class CommandCodeAccount : IAuthenticationProvider, IAccountModelP
         if (client != null) http = client;
         ModelProvider = new CommandCodeProvider(this, http);
     }
-    public ApiConfig CreateConfiguration() => new() { ProviderId = Id, Protocol = Id, AuthenticationProviderId = Id, DisplayName = Name, BaseUrl = Endpoint, ReasoningProtocol = "openai" };
+    public ApiConfig CreateConfiguration() => new() { ProviderId = Id, Protocol = Id, AuthenticationProviderId = Id, DisplayName = Name, BaseUrl = Endpoint, ReasoningProtocol = "commandcode" };
     public void ValidateModelConfiguration(ApiConfig config)
     {
         if (config.Protocol != Id || config.BaseUrl.TrimEnd('/') != Endpoint)

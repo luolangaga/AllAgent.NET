@@ -78,8 +78,8 @@ public sealed class ToolTests
     public async Task ExplicitMissingRuntimeCannotBeSilentlyReplaced()
     {
         using var workspace = new TestWorkspace();
-        var environment = await new EnvironmentDoctor().CheckAsync(Path.Combine(workspace.Root, "missing-python.exe"), workspace.Pwsh);
-        Assert.False(environment.Ready); Assert.Null(environment.Python);
+        var environment = await new EnvironmentDoctor().CheckAsync(Path.Combine(workspace.Root, "missing-pwsh.exe"));
+        Assert.False(environment.Ready); Assert.Null(environment.PowerShell);
     }
 
     [Fact]

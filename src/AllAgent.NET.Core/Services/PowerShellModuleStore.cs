@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Xml.Linq;
 using AllAgent.NET.Core.Runtime;
 
 namespace AllAgent.NET.Core.Services;
@@ -41,7 +42,8 @@ public sealed class PowerShellModuleStore(string sharedDirectory, string? worker
         if (operation is not ("list" or "search" or "install")) throw new ArgumentException("Use list, search or install.");
         if (operation != "list" && (string.IsNullOrWhiteSpace(name) || !Regex.IsMatch(name, operation == "search" ? @"^[A-Za-z0-9.*_-]{1,128}$" : @"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"))) throw new ArgumentException("Invalid module name.");
         if (version != null && !Regex.IsMatch(version, @"^\d+\.\d+(?:\.\d+){0,2}$")) throw new ArgumentException("Use an exact stable version, e.g. 5.7.1.");
-        if (operation != "list") await BootstrapAsync(ct);
+        if (operation == "search") return await SearchGalleryAsync(name!, ct);
+        if (operation == "install") await BootstrapAsync(ct);
         var payload = Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { operation, name, version })));
         var info = BoundedProcess.StartInfo(_worker, ["--modules", payload]);
         info.Environment["ALLAGENT_PS_MODULE_ROOT"] = Root;
@@ -49,29 +51,76 @@ public sealed class PowerShellModuleStore(string sharedDirectory, string? worker
         try { result = await BoundedProcess.RunAsync(info, TimeSpan.FromMinutes(5), ct, limit: 2_000_000); }
         catch (TimeoutException)
         {
-            throw new InvalidOperationException(operation == "search"
-                ? "连接 PowerShell Gallery 超时（5 分钟）。请检查网络、系统代理或 HTTPS_PROXY 后重试。"
-                : "安装 PowerShell 模块超时（5 分钟）。请检查网络后重试，已下载的部分不会注册为能力。");
+            throw new InvalidOperationException("PowerShell 操作超时（5 分钟）。请检查网络或系统代理后重试；已下载的部分不会注册为能力。");
         }
         if (result.ExitCode != 0 || result.Truncated) throw new InvalidOperationException("PowerShell module operation failed: " + result.Stderr + (result.Truncated ? " Catalog exceeds size limit." : ""));
         using var parsed = JsonDocument.Parse(result.Stdout);
         if (parsed.RootElement.ValueKind != JsonValueKind.Array) throw new InvalidOperationException("Module worker returned an invalid catalog.");
-        if (operation != "search")
+        _catalog = result.Stdout;
+        Directory.CreateDirectory(Path.GetDirectoryName(CatalogPath)!);
+        var temp = CatalogPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        await File.WriteAllTextAsync(temp, _catalog, ct);
+        File.Move(temp, CatalogPath, true);
+        if (operation == "install")
         {
-            _catalog = result.Stdout;
-            Directory.CreateDirectory(Path.GetDirectoryName(CatalogPath)!);
-            var temp = CatalogPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            await File.WriteAllTextAsync(temp, _catalog, ct);
-            File.Move(temp, CatalogPath, true);
-            if (operation == "install")
-            {
-                var matches = parsed.RootElement.EnumerateArray().Where(m => string.Equals(m.GetProperty("name").GetString(), name, StringComparison.OrdinalIgnoreCase)).ToArray();
-                if (matches.Length == 0 || matches.All(m => m.GetProperty("error").ValueKind != JsonValueKind.Null))
-                    throw new InvalidOperationException("Module downloaded, but import validation failed. Run powershell list for details; check PowerShell 7 compatibility and module dependencies.");
-            }
+            var matches = parsed.RootElement.EnumerateArray().Where(m => string.Equals(m.GetProperty("name").GetString(), name, StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (matches.Length == 0 || matches.All(m => m.GetProperty("error").ValueKind != JsonValueKind.Null))
+                throw new InvalidOperationException("Module downloaded, but import validation failed. Run powershell list for details; check PowerShell 7 compatibility and module dependencies.");
         }
         return result.Stdout;
     }
+
+    // Find-PSResource builds a compound OData query (tags, inline count, versions) that
+    // PowerShell Gallery rejects with HTTP 500 for broad terms such as Az or Power. The
+    // plain Packages() filter below answers the same substring match in under a second.
+    private static async Task<string> SearchGalleryAsync(string pattern, CancellationToken ct)
+    {
+        var term = pattern.Replace("*", string.Empty).Trim();
+        if (term.Length == 0) throw new ArgumentException("请输入要搜索的模块关键词。");
+        var escaped = term.Replace("'", "''");
+        var select = "&$select=Id,Version,Description,Authors,DownloadCount";
+        var basis = "https://www.powershellgallery.com/api/v2/Packages()?$filter=";
+        // The ranked query keeps the result list useful for broad terms, but a popular
+        // exact name (Az) can rank outside the top 30, so look it up separately.
+        var exact = basis + Uri.EscapeDataString($"IsLatestVersion eq true and Id eq '{escaped}'") + "&$top=1" + select;
+        var ranked = basis + Uri.EscapeDataString($"IsLatestVersion eq true and substringof('{escaped}',Id)") + "&$orderby=DownloadCount desc&$top=30" + select;
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
+        try
+        {
+            var documents = await Task.WhenAll(FetchAsync(client, exact, ct), FetchAsync(client, ranked, ct));
+            var data = XNamespace.Get("http://schemas.microsoft.com/ado/2007/08/dataservices");
+            var items = documents
+                .SelectMany(document => document.Descendants().Where(item => item.Name.LocalName == "entry")
+                    .Select(item => new
+                    {
+                        Name = Value(item, data, "Id"),
+                        Version = Value(item, data, "Version"),
+                        Description = Value(item, data, "Description"),
+                        Author = Value(item, data, "Authors"),
+                    }))
+                .Where(item => item.Name.Length > 0)
+                .DistinctBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
+                .Take(30)
+                .ToArray();
+            return JsonSerializer.Serialize(items);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new InvalidOperationException("连接 PowerShell Gallery 超时。请检查网络或系统代理后重试。");
+        }
+    }
+
+    private static async Task<XDocument> FetchAsync(HttpClient client, string url, CancellationToken ct)
+    {
+        using var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
+        if (!response.IsSuccessStatusCode)
+            throw new InvalidOperationException($"PowerShell Gallery 搜索失败（HTTP {(int)response.StatusCode}）。请稍后重试，或换一个更具体的关键词。");
+        return XDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+    }
+
+    private static string Value(XElement entry, XNamespace data, string name) =>
+        entry.Descendants(data + name).FirstOrDefault()?.Value ?? string.Empty;
+
     public void LoadCatalog()
     {
         if (!File.Exists(CatalogPath)) return;

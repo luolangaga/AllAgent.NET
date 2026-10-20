@@ -1,0 +1,5 @@
+{
+  "sdkVersion": 1,
+  "assembly": "AllAgent.NET.Qoder.dll",
+  "entryType": "AllAgent.NET.Qoder.QoderPlugin"
+}

@@ -82,7 +82,7 @@ export default function Plugins() {
                 <div className="plugin-web-head">
                   <LayoutDashboard aria-hidden className="tool-icon" size={13} />
                   <span className="plugin-web-title">Web 界面</span>
-                  <Badge size="sm" variant="dot">{web.contributes?.pages?.length ?? 0} 页面 · {web.contributes?.toolCards?.length ?? 0} 工具卡</Badge>
+                  <Badge size="sm" variant="dot">{web.contributes?.pages?.length ?? 0} 页面 · {web.contributes?.panels?.length ?? 0} 弹窗 · {web.contributes?.toolCards?.length ?? 0} 工具卡</Badge>
                   {web.capabilities.length ? <span className="plugin-web-caps mono" title={web.capabilities.join(' · ')}>{web.capabilities.join(' · ')}</span> : null}
                 </div>
                 {web.error ? <Alert appearance="warning" dismissible={false} message={web.error} timeout={0} title="Web 扩展未生效" /> : null}

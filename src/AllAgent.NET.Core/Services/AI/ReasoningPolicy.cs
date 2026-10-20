@@ -14,6 +14,13 @@ internal static class ReasoningPolicy
     internal static string Protocol(ApiConfig c)
     {
         var model = Model(c); var transport = ProviderCatalog.ProtocolFor(c);
+        // Older WorkBuddy configs stored "none" because no reasoning profile existed; upgrade
+        // them in place. "None" remains available as an effort level that disables thinking.
+        if (c.ProviderId is "workbuddy" or "workbuddy-intl" && c.ReasoningProtocol == "none") return "workbuddy";
+        // CommandCode serves mixed vendors behind one OpenAI-shaped wire. Configs saved before the
+        // dedicated profile existed carry "openai"; its catalog levels still win once refreshed,
+        // but a stale catalog must not fall back to the GPT family rules for Claude/DeepSeek.
+        if ((c.ProviderId == "commandcode" || c.Protocol == "commandcode") && c.ReasoningProtocol is "auto" or "openai") return "commandcode";
         if (c.ReasoningProtocol != "auto") return c.ReasoningProtocol switch
         {
             "anthropic-adaptive" when model.StartsWith("claude-") && !ClaudeVersion(model, 6) => "anthropic-budget",
@@ -30,6 +37,7 @@ internal static class ReasoningPolicy
         };
         if (provider == "openrouter") return "openrouter";
         if (provider == "deepseek") return "deepseek";
+        if (provider is "workbuddy" or "workbuddy-intl") return "workbuddy";
         if (transport == "anthropic") return model.StartsWith("claude-") && !ClaudeVersion(model, 6) ? "anthropic-budget" : "anthropic-adaptive";
         if (transport == "gemini") return model.StartsWith("gemini-2.5") ? "gemini-budget" : "gemini-level";
         return provider switch
@@ -47,6 +55,10 @@ internal static class ReasoningPolicy
             "deepseek" when model is "deepseek-reasoner" or "deepseek-chat" || model.Contains("deepseek-r1") => [],
             "deepseek" when model.Contains("deepseek-v3") => ["none", "thinking"],
             "deepseek" => ["none", "low", "high", "max"],
+            "workbuddy" => WorkBuddy(model),
+            "commandcode" => CommandCode(model),
+            "qoder" when c.ModelReasoningLevels.TryGetValue(c.DefaultModel, out var qoderLevels) => qoderLevels.Where(level => level is "none" or "low" or "medium" or "high" or "max").Distinct().ToArray(),
+            "qoder" => [],
             "openrouter" when model.StartsWith("gpt-") || Regex.IsMatch(model, @"^o[134](?:-|$)") => OpenAi(model),
             "openrouter" when model.Contains("grok-3-mini") => ["low", "high"],
             "openrouter" when model.Contains("qwen") || model.Contains("kimi") || model.Contains("minimax") || model.Contains("deepseek-r1") || model.Contains("deepseek-reasoner") => [],
@@ -77,7 +89,7 @@ internal static class ReasoningPolicy
         };
         if (ModelCatalog.SupportsReasoning(c) == false) levels = [];
         // The authenticated endpoint's advertised subset takes priority over family fallbacks.
-        if (protocol is "openai" or "openrouter" && c.ModelReasoningLevels.TryGetValue(c.DefaultModel, out var advertised))
+        if (protocol is "openai" or "openrouter" or "workbuddy" or "commandcode" && c.ModelReasoningLevels.TryGetValue(c.DefaultModel, out var advertised))
             levels = advertised.Where(level => level is "none" or "minimal" or "low" or "medium" or "high" or "xhigh" or "max" or "ultra").Distinct().ToArray();
         var min = protocol switch { "anthropic-budget" => 1024, "gemini-budget" when model.Contains("pro") => 128, "gemini-budget" when model.Contains("lite") => 512, _ => 1 };
         var max = protocol switch
@@ -107,6 +119,59 @@ internal static class ReasoningPolicy
         if (id.StartsWith("gpt-5.1")) return ["none", "low", "medium", "high"];
         if (Regex.IsMatch(id, @"^gpt-5[.\-][2-9]")) return ["none", "low", "medium", "high", "xhigh"];
         return id.StartsWith("gpt-5") ? ["minimal", "low", "medium", "high"] : ["low", "medium", "high"];
+    }
+
+    /// <summary>
+    /// WorkBuddy hosts vendor models behind one OpenAI-compatible chat endpoint, so levels follow
+    /// the vendor family and go out as <c>reasoning_effort</c> (its gateway advertises
+    /// <c>supportsReasoningEffort</c>). Unknown families expose no selector instead of guessing.
+    /// </summary>
+    private static string[] WorkBuddy(string id)
+    {
+        if (id.StartsWith("gpt-") || Regex.IsMatch(id, @"^o[134](?:-|$)")) return OpenAi(id);
+        if (id.Contains("deepseek-v4")) return ["none", "low", "high", "max"];
+        if (id.StartsWith("glm-5")) return ["none", "high", "max"];
+        if (id.StartsWith("grok-")) return ["low", "high"];
+        return [];
+    }
+
+    /// <summary>
+    /// CommandCode's official catalog mixes vendors behind one OpenAI-shaped wire. When the saved
+    /// catalog predates the advertised levels (or a refresh fails), these families mirror the
+    /// catalog's effort column; the refreshed <c>reasoningEfforts</c> list always wins.
+    /// </summary>
+    private static string[] CommandCode(string id)
+    {
+        if (id.StartsWith("gpt-6") || id.StartsWith("gpt-5.6")) return ["low", "medium", "high", "xhigh", "max"];
+        if (id.StartsWith("gpt-5.4-mini")) return ["low", "medium", "high"];
+        if (id.StartsWith("gpt-5.5") || id.StartsWith("gpt-5.4") || id.StartsWith("gpt-5.3-codex")) return ["low", "medium", "high", "xhigh"];
+        if (id.StartsWith("gpt-") || Regex.IsMatch(id, @"^o[134](?:-|$)")) return OpenAi(id);
+        if (id.StartsWith("claude-haiku-4-5")) return [];
+        if (id.StartsWith("claude-")) return ["low", "medium", "high", "xhigh", "max"];
+        if (id.StartsWith("gemini-")) return ["low", "medium", "high"];
+        if (id.StartsWith("deepseek-v4.1")) return ["none", "low", "high", "max"];
+        if (id.StartsWith("deepseek-v4-flash-fast")) return ["low", "high", "max"];
+        if (id.StartsWith("deepseek-v4")) return ["none", "high", "max"];
+        if (id.StartsWith("deepseek")) return ["none", "low", "high", "max"];
+        if (id.StartsWith("kimi-k3")) return ["low", "high", "max"];
+        if (id.StartsWith("kimi") || id.StartsWith("mimo") || id.StartsWith("nemotron-3-ultra") || id.StartsWith("inkling") || id.StartsWith("longcat") || id.StartsWith("laguna") || id.StartsWith("hy3") || id.StartsWith("step-3")) return [];
+        if (id.StartsWith("glm-5.3")) return ["low", "high", "max"];
+        if (id.StartsWith("glm-5.2") && !id.Contains("fast")) return ["high", "max"];
+        if (id.StartsWith("glm")) return [];
+        if (id.StartsWith("minimax-m3")) return ["low", "medium", "high"];
+        if (id.StartsWith("qwen3.8")) return ["low", "medium", "xhigh"];
+        if (id.StartsWith("qwen")) return [];
+        if (id.StartsWith("grok-4.6") || id.StartsWith("grok-4.7")) return ["low", "medium", "high", "xhigh"];
+        if (id.StartsWith("grok-4.5")) return ["low", "medium", "high"];
+        if (id.StartsWith("grok")) return [];
+        if (id.StartsWith("fugu-ultra")) return ["high", "xhigh"];
+        if (id.StartsWith("glyph-cluster")) return ["low", "medium", "high", "xhigh"];
+        if (id.StartsWith("cat-jam")) return ["low", "medium", "high", "xhigh", "max"];
+        if (id.StartsWith("muse-spark-1.3")) return ["low", "medium", "high", "xhigh", "max"];
+        if (id.StartsWith("muse-spark-open")) return ["low", "medium", "high"];
+        if (id.StartsWith("muse-")) return ["low", "medium", "high", "xhigh"];
+        if (id.StartsWith("step-5") || id.StartsWith("hy4") || id.StartsWith("nemotron-3.5") || id.StartsWith("ling-") || id.StartsWith("mistral-large-4")) return ["low", "medium", "high"];
+        return [];
     }
     internal static void ValidateBudget(int budget, ReasoningCapabilities profile)
     {
@@ -145,6 +210,11 @@ internal static class ReasoningPolicy
                 if (transport == "responses") body["reasoning"] = new JsonObject { ["effort"] = effort, ["summary"] = "auto" };
                 else { body["reasoning_effort"] = effort; body["max_completion_tokens"] = ModelCatalog.OutputLimit(c); body.Remove("max_tokens"); }
                 body.Remove("temperature"); break;
+            case "commandcode":
+                // The wire spells "off" rather than the host's "none".
+                if (transport == "responses") body["reasoning"] = new JsonObject { ["effort"] = effort };
+                else body["reasoning_effort"] = effort == "none" ? "off" : effort;
+                break;
             case "deepseek":
                 if (transport == "responses") body["reasoning"] = new JsonObject { ["effort"] = effort == "thinking" ? "high" : effort };
                 else
@@ -156,6 +226,10 @@ internal static class ReasoningPolicy
                         else body["reasoning_effort"] = effort;
                     }
                 }
+                body.Remove("temperature"); break;
+            case "workbuddy":
+                // The WorkBuddy gateway maps OpenAI-compatible reasoning_effort; "none" turns it off.
+                body["reasoning_effort"] = effort;
                 body.Remove("temperature"); break;
             case "openrouter":
                 body["reasoning"] = effort == "none" ? new JsonObject { ["enabled"] = false } : new JsonObject { ["effort"] = effort };

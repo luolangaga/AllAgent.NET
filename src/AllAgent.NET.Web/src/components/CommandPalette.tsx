@@ -5,6 +5,7 @@ import { Modal } from '@/components/shared'
 import { useStore } from '@/lib/store'
 import { useCommandsStore } from '@/stores/commands'
 import { useContributionsStore } from '@/stores/contributions'
+import { usePanelsStore } from '@/stores/panels'
 import { useNoticesStore } from '@/stores/ui'
 import { isTerminalOnly, matchCommands, runCommand, WEB_COMMANDS, type CommandHost } from '@/lib/commandRouter'
 import type { CommandInfo } from '@/types'
@@ -15,6 +16,7 @@ import type { CommandInfo } from '@/types'
 export function CommandPalette({ open, host, onClose }: { open: boolean; host: CommandHost; onClose: () => void }) {
   const store = useStore(useCommandsStore)
   const contributions = useStore(useContributionsStore)
+  const panels = useStore(usePanelsStore)
   const notices = useStore(useNoticesStore)
   const [query, setQuery] = useState('')
 
@@ -114,7 +116,11 @@ export function CommandPalette({ open, host, onClose }: { open: boolean; host: C
           {webCommands.map(command => <button
             className="palette-row"
             key={command.key}
-            onClick={() => { host.go(command.route); onClose() }}
+            onClick={() => {
+              if (command.panel) panels.openPanel(command.panel)
+              else if (command.route) host.go(command.route)
+              onClose()
+            }}
             type="button"
           >
             <span className="palette-command mono">{command.title}</span>

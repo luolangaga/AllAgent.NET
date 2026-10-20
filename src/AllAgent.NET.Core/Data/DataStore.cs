@@ -134,6 +134,7 @@ public partial class DataStore : IDisposable
                 ApiConfigs = seed.ApiConfigs,
                 McpServerConfigs = seed.McpServerConfigs,
                 TokenUsageStats = seed.TokenUsageStats,
+                DailyUsageStats = seed.DailyUsageStats,
                 AppSettings = seed.AppSettings,
             };
             _sharedData = _sharedConfig.Data;
@@ -213,7 +214,7 @@ public partial class DataStore : IDisposable
     /// <see cref="StoreData.AppSettings"/> alone are not a profile worth creating.</summary>
     private static bool HasConfiguration(StoreData data) =>
         data.ApiConfigs.Count > 0 || data.Skills.Count > 0 || data.McpServerConfigs.Count > 0 ||
-        data.TokenUsageStats.Count > 0;
+        data.TokenUsageStats.Count > 0 || data.DailyUsageStats.Count > 0;
 
     /// <summary>Share the configuration collections so every existing accessor keeps working.</summary>
     private void AdoptShared()
@@ -223,6 +224,7 @@ public partial class DataStore : IDisposable
         _data.ApiConfigs = _sharedData.ApiConfigs;
         _data.McpServerConfigs = _sharedData.McpServerConfigs;
         _data.TokenUsageStats = _sharedData.TokenUsageStats;
+        _data.DailyUsageStats = _sharedData.DailyUsageStats;
         _data.AppSettings = _sharedData.AppSettings;
     }
 
@@ -249,6 +251,7 @@ public partial class DataStore : IDisposable
                 ApiConfigs = _sharedData.ApiConfigs,
                 McpServerConfigs = _sharedData.McpServerConfigs,
                 TokenUsageStats = _sharedData.TokenUsageStats,
+                DailyUsageStats = _sharedData.DailyUsageStats,
                 AppSettings = _sharedData.AppSettings,
             };
             var json = JsonSerializer.SerializeToUtf8Bytes(snapshot, JsonOptions);
@@ -420,6 +423,14 @@ public partial class DataStore : IDisposable
         finally { _lock.ExitReadLock(); }
     }
 
+    /// <summary>Daily buckets written by <see cref="RecordTokenUsage"/>; older usage has no history.</summary>
+    public IReadOnlyList<DailyUsageStats> GetDailyUsageStats()
+    {
+        _lock.EnterReadLock();
+        try { return _data.DailyUsageStats.OrderBy(s => s.Date, StringComparer.Ordinal).ThenBy(s => s.ProviderId, StringComparer.Ordinal).ThenBy(s => s.ModelId, StringComparer.Ordinal).ToArray(); }
+        finally { _lock.ExitReadLock(); }
+    }
+
     public void RecordTokenUsage(string providerId, string modelId, ModelTokenUsage? usage, Guid? conversationId = null)
     {
         _lock.EnterWriteLock();
@@ -436,6 +447,21 @@ public partial class DataStore : IDisposable
                 RequestsWithUsage = checked(current.RequestsWithUsage + (usage == null ? 0 : 1))
             };
             if (index >= 0) _data.TokenUsageStats[index] = updated; else _data.TokenUsageStats.Add(updated);
+
+            // The panel's activity graph buckets by the user's local calendar day; lifetime totals
+            // above still include usage recorded before daily tracking existed.
+            var date = DateTime.Now.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+            var dailyIndex = _data.DailyUsageStats.FindIndex(s => s.Date == date && s.ProviderId == providerId && s.ModelId == modelId);
+            var daily = dailyIndex >= 0 ? _data.DailyUsageStats[dailyIndex] : new DailyUsageStats(date, providerId, modelId);
+            var dailyUpdated = daily with
+            {
+                InputTokens = checked(daily.InputTokens + Math.Max(0, usage?.InputTokens ?? 0)),
+                OutputTokens = checked(daily.OutputTokens + Math.Max(0, usage?.OutputTokens ?? 0)),
+                Requests = checked(daily.Requests + 1),
+                RequestsWithUsage = checked(daily.RequestsWithUsage + (usage == null ? 0 : 1))
+            };
+            if (dailyIndex >= 0) _data.DailyUsageStats[dailyIndex] = dailyUpdated; else _data.DailyUsageStats.Add(dailyUpdated);
+
             if (conversationId is { } id && usage is { } reported && (reported.CachedInputTokens is not null || reported.CacheWriteInputTokens is not null) &&
                 _data.Conversations.FirstOrDefault(c => c.Id == id) is { } conversation)
             {
@@ -511,6 +537,12 @@ public partial class DataStore : IDisposable
     }
 
     // ── API Configs ────────────────────────────────────────────────────────
+
+    /// <summary>Directory holding this store's manifest and conversations.</summary>
+    public string DirectoryPath => Path.GetDirectoryName(Path.GetFullPath(_filePath))!;
+
+    /// <summary>Directory holding the shared provider/config manifest, when this store uses one.</summary>
+    public string? SharedDirectoryPath => _sharedFilePath == null ? null : Path.GetDirectoryName(Path.GetFullPath(_sharedFilePath));
 
     public IReadOnlyList<ApiConfig> ApiConfigs
     {
@@ -818,6 +850,7 @@ public partial class DataStore : IDisposable
             loaded.AppSettings ??= new Dictionary<string, string>();
             loaded.McpServerConfigs ??= new List<McpServerConfig>();
             loaded.TokenUsageStats ??= new List<ModelUsageStats>();
+            loaded.DailyUsageStats ??= new List<DailyUsageStats>();
             MigrateLegacyOutputLimits(loaded);
 
             Log($"[DataStore] Deserialization OK: {path}. ApiConfigs={loaded.ApiConfigs.Count}, Skills={loaded.Skills.Count}, Conversations={loaded.Conversations.Count}");
@@ -890,6 +923,7 @@ public partial class DataStore : IDisposable
         public List<ApiConfig> ApiConfigs { get; set; } = new();
         public List<McpServerConfig> McpServerConfigs { get; set; } = new();
         public List<ModelUsageStats> TokenUsageStats { get; set; } = new();
+        public List<DailyUsageStats> DailyUsageStats { get; set; } = new();
         public Dictionary<string, string> AppSettings { get; set; } = new();
     }
 }

@@ -15,9 +15,11 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>allagent</ToolCommandName>
     <PackageId>AllAgent.NET.Terminal</PackageId>
+    <PackageId Condition="'$(RuntimeIdentifier)' == 'win-arm64'">AllAgent.NET.Terminal.arm64</PackageId>
     <Version>1.0.7</Version>
     <Authors>AllAgent.NET</Authors>
     <Description>AllAgent.NET terminal AI agent with Hyperlight microVM CodeAct execution for Windows x64.</Description>
+    <Description Condition="'$(RuntimeIdentifier)' == 'win-arm64'">AllAgent.NET terminal AI agent with CodeAct execution for Windows ARM64.</Description>
     <PackageTags>AllAgent.NET;AI;Agent;CLI;CodeAct</PackageTags>
     <PackageLicenseExpression>GPL-3.0-only</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/luolangaga/AllAgent.NET</RepositoryUrl>
@@ -31,6 +33,7 @@
     <ProjectReference Include="../../plugins/AllAgent.NET.GitHub/AllAgent.NET.GitHub.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
     <ProjectReference Include="../../plugins/AllAgent.NET.WorkBuddy/AllAgent.NET.WorkBuddy.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
     <ProjectReference Include="../../plugins/AllAgent.NET.CodeGraph/AllAgent.NET.CodeGraph.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
+    <ProjectReference Include="../../plugins/AllAgent.NET.Qoder/AllAgent.NET.Qoder.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
     <None Include="../../docs/nuget-tool.zh-CN.md" Pack="true" PackagePath="/README.md" />
     <ProjectReference Include="../AllAgent.NET.Core/AllAgent.NET.Core.csproj" />
     <ProjectReference Include="../AllAgent.NET.Gui/AllAgent.NET.Gui.csproj" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" SetTargetFramework="TargetFramework=net10.0-windows" />
@@ -81,6 +84,9 @@
       <CodeGraphPluginFiles Include="../../plugins/AllAgent.NET.CodeGraph/bin/$(Configuration)/$(TargetFramework)/AllAgent.NET.CodeGraph.dll" Condition="Exists('../../plugins/AllAgent.NET.CodeGraph/bin/$(Configuration)/$(TargetFramework)/AllAgent.NET.CodeGraph.dll')" />
       <CodeGraphPluginFiles Include="../../plugins/AllAgent.NET.CodeGraph/allagent-plugin.json" />
       <CodeGraphPluginWebFiles Include="../../plugins/AllAgent.NET.CodeGraph/web/**/*" />
+      <QoderPluginFiles Include="../../plugins/AllAgent.NET.Qoder/bin/$(Configuration)/$(TargetFramework)/AllAgent.NET.Qoder.dll" Condition="Exists('../../plugins/AllAgent.NET.Qoder/bin/$(Configuration)/$(TargetFramework)/AllAgent.NET.Qoder.dll')" />
+      <QoderPluginFiles Include="../../plugins/AllAgent.NET.Qoder/allagent-plugin.json" />
+      <QoderPluginFiles Include="../../plugins/AllAgent.NET.Qoder/README.md" Condition="Exists('../../plugins/AllAgent.NET.Qoder/README.md')" />
     </ItemGroup>
     <Error Condition="'$(CopyGuiShell)' == 'true' and !Exists('../../plugins/AllAgent.NET.CodeGraph/bin/$(Configuration)/$(TargetFramework)/AllAgent.NET.CodeGraph.dll')" Text="Built-in CodeGraph plugin output is missing; build plugins/AllAgent.NET.CodeGraph before copying." />
     <Copy SourceFiles="@(BuiltinPluginFiles)" DestinationFolder="$(OutDir)builtin-plugins/AllAgent.NET.CommandCode/" SkipUnchangedFiles="true" />
@@ -89,6 +95,7 @@
     <Copy SourceFiles="@(WorkBuddyPluginFiles)" DestinationFolder="$(OutDir)builtin-plugins/AllAgent.NET.WorkBuddy/" SkipUnchangedFiles="true" />
     <Copy SourceFiles="@(CodeGraphPluginFiles)" DestinationFolder="$(OutDir)builtin-plugins/AllAgent.NET.CodeGraph/" SkipUnchangedFiles="true" />
     <Copy SourceFiles="@(CodeGraphPluginWebFiles)" DestinationFiles="@(CodeGraphPluginWebFiles->'$(OutDir)builtin-plugins/AllAgent.NET.CodeGraph/web/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(QoderPluginFiles)" DestinationFolder="$(OutDir)builtin-plugins/AllAgent.NET.Qoder/" SkipUnchangedFiles="true" />
   </Target>
   <Target Name="IncludeBuiltinPluginsInToolPackage" AfterTargets="ComputeFilesToPublish" Condition="'$(PackAsTool)' == 'true'">
     <ItemGroup>

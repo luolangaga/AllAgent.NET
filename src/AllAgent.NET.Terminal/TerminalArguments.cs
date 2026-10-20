@@ -26,7 +26,10 @@ internal sealed class TerminalArguments
         valued.Add("host");
         valued.Add("port");
         valued.Add("password");
-        var flagged = new HashSet<string> { "help", "json", "verbose", "install", "inline", "trust-plugin", "full-access", "restricted", "ask", "no-initialize", "guimode", "gui", "gui-devtools", "lan", "no-lan", "clear-password" };
+        valued.Add("source");
+        valued.Add("update-health");
+        valued.Add("update-result");
+        var flagged = new HashSet<string> { "help", "json", "verbose", "install", "inline", "trust-plugin", "full-access", "restricted", "ask", "no-initialize", "guimode", "gui", "gui-devtools", "lan", "no-lan", "clear-password", "check", "yes", "force", "pre", "rollback", "allow-unsigned", "require-signature", "allow-missing-checksum", "no-restart" };
         var index = 0;
         // Options may be spelled with a single dash when the name is registered (-guimode);
         // every other bare token stays the command word or a positional.

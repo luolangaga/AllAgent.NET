@@ -46,7 +46,7 @@ public partial class SystemTools(WorkspacePolicy workspace, RuntimeEnvironment e
             return null;
         }
         if (!environment.Ready) return ToolResult.Failure(
-            $"Runtime environment checks failed: Python={(environment.Python == null ? "missing or unsupported" : "ready")}; embedded PowerShell SDK={(environment.PowerShell == null ? "missing or unsupported" : "ready")}. Run doctor for diagnostics. "
+            $"Runtime environment checks failed: bundled PowerShell SDK worker={(environment.PowerShell == null ? "missing" : "ready")}. Run doctor for diagnostics. "
             + string.Join("; ", environment.Problems));
         var exe = ToolArguments.Get<string>(arguments, "exe");
         if (!ShellExecutablePolicy.TryResolveForExecution(shellAllowlist, exe, out _, out _))

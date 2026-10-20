@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <PackageId>AllAgent.NET.Qoder</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>AllAgent.NET</Authors>
+    <PackageTags>AllAgent.NET;LanAgent;Qoder;Model;Login</PackageTags>
+    <Description>Pure C# Qoder device login and model provider for AllAgent.NET.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/AllAgent.NET.Core/AllAgent.NET.Core.csproj" PrivateAssets="all" />
+    <None Update="allagent-plugin.json" Pack="true" PackagePath="allagent/" />
+    <None Update="README.md" Pack="true" PackagePath="/" />
+    <InternalsVisibleTo Include="AllAgent.NET.Tests" />
+  </ItemGroup>
+</Project>

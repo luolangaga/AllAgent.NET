@@ -1,0 +1,149 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    name: Web frontend
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: src/AllAgent.NET.Web/package-lock.json
+
+      - name: Install dependencies
+        working-directory: src/AllAgent.NET.Web
+        run: npm ci
+
+      - name: Typecheck, build and test
+        working-directory: src/AllAgent.NET.Web
+        run: npm run build; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; npm test
+        shell: pwsh
+
+      - name: Upload web assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: src/AllAgent.NET.Web/dist
+          if-no-files-found: error
+          retention-days: 7
+
+  build:
+    name: Build ${{ matrix.runtime }}
+    needs: web
+    runs-on: windows-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [win-x64, win-arm64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          cache: true
+          cache-dependency-path: '**/*.csproj'
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: src/AllAgent.NET.Web/dist
+
+      - name: Restore for ${{ matrix.runtime }}
+        run: |
+          dotnet restore src/AllAgent.NET.Terminal -r ${{ matrix.runtime }}
+          dotnet restore src/AllAgent.NET.PowerShell -r ${{ matrix.runtime }}
+
+      - name: Build embedded PowerShell worker
+        run: dotnet build src/AllAgent.NET.PowerShell -c Release -r ${{ matrix.runtime }} --no-restore
+
+      - name: Build terminal (${{ matrix.runtime }})
+        run: dotnet build src/AllAgent.NET.Terminal -c Release -r ${{ matrix.runtime }} --no-restore -p:SkipWebBuild=true
+
+      - name: Build NuGet tool package (${{ matrix.runtime }})
+        run: ./tools/build-nuget.ps1 -Runtime ${{ matrix.runtime }} -SkipWebBuild -SkipRestore
+
+  test:
+    name: Tests (win-x64)
+    needs: web
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          cache: true
+          cache-dependency-path: '**/*.csproj'
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: src/AllAgent.NET.Web/dist
+
+      - name: Test
+        run: dotnet test tests/AllAgent.NET.Tests -c Release -p:SkipWebBuild=true --logger "trx;LogFileName=test-results.trx" --results-directory artifacts/test-results
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: artifacts/test-results
+          if-no-files-found: warn
+          retention-days: 7
+
+  # Native ARM64 validation is opt-in because the hosted windows-11-arm runner
+  # is not available to every repository plan. Enable it with the repository
+  # variable ENABLE_ARM64_RUNNER=true.
+  test-arm64:
+    name: Tests (native win-arm64)
+    if: vars.ENABLE_ARM64_RUNNER == 'true'
+    needs: web
+    runs-on: windows-11-arm
+    continue-on-error: true
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          cache: true
+          cache-dependency-path: '**/*.csproj'
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: src/AllAgent.NET.Web/dist
+
+      - name: Test on ARM64
+        run: dotnet test tests/AllAgent.NET.Tests -c Release -p:SkipWebBuild=true --logger "trx;LogFileName=test-results-arm64.trx" --results-directory artifacts/test-results-arm64
+
+      - name: Upload ARM64 test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-arm64
+          path: artifacts/test-results-arm64
+          if-no-files-found: warn
+          retention-days: 7

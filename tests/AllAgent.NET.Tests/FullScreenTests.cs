@@ -125,6 +125,37 @@ public sealed class FullScreenTests
     }
 
     [Fact]
+    public async Task UnmarkedMultilinePasteBecomesOneDraftInsert()
+    {
+        static ConsoleKeyInfo Key(char c) => new(c, c == '\r' ? ConsoleKey.Enter : ConsoleKey.A, false, false, false);
+        static ConsoleKeyInfo Newline() => Key('\r');
+        var keys = new Queue<ConsoleKeyInfo>("first\n/exit\nsecond".Select(c => c == '\n' ? Newline() : Key(c)));
+        var reader = new TerminalKeyReader(() => keys.Count > 0, keys.Dequeue, detectPastes: true);
+        var pasted = await reader.ReadAsync(default);
+        Assert.Equal("first\n/exit\nsecond", pasted.Paste);
+        Assert.False(reader.HasInput);
+        var input = new InputState(); input.Insert(pasted.Paste!);
+        Assert.Equal("first\n/exit\nsecond", input.Text);
+
+        // A single typed character followed by Enter is still a submit, not a pasted newline.
+        keys = new Queue<ConsoleKeyInfo>([Key('a'), Newline()]);
+        reader = new TerminalKeyReader(() => keys.Count > 0, keys.Dequeue, detectPastes: true);
+        var typed = await reader.ReadAsync(default);
+        Assert.Null(typed.Paste); Assert.Equal('a', typed.Key.KeyChar);
+        Assert.Equal(ConsoleKey.Enter, (await reader.ReadAsync(default)).Key.Key);
+
+        // A buffered single line keeps its Enter as a submit; a multiline block keeps its newline.
+        keys = new Queue<ConsoleKeyInfo>("hello\r".Select(Key));
+        reader = new TerminalKeyReader(() => keys.Count > 0, keys.Dequeue, detectPastes: true);
+        Assert.Equal("hello", (await reader.ReadAsync(default)).Paste);
+        Assert.Equal(ConsoleKey.Enter, (await reader.ReadAsync(default)).Key.Key);
+        keys = new Queue<ConsoleKeyInfo>("first\nsecond\n".Select(c => c == '\n' ? Newline() : Key(c)));
+        reader = new TerminalKeyReader(() => keys.Count > 0, keys.Dequeue, detectPastes: true);
+        Assert.Equal("first\nsecond\n", (await reader.ReadAsync(default)).Paste);
+        Assert.False(reader.HasInput);
+    }
+
+    [Fact]
     public void UnicodeCaretEditsWholeGraphemesAndEscRestoresHistoryDraft()
     {
         var input = new InputState(); input.Set("中👩‍💻e\u0301");

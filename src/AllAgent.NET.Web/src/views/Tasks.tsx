@@ -9,6 +9,20 @@ import { formatRelative, taskIsActive, taskState, taskStateLabel, taskStateTone 
 import { useStore } from '@/lib/store'
 import { useTasksStore } from '@/stores/tasks'
 import { useNoticesStore } from '@/stores/ui'
+import type { BackgroundTask } from '@/types'
+
+/** Shell jobs have no child conversation; preview their latest output line instead. */
+function taskPreview(task: BackgroundTask): string {
+  if (task.currentStep) return `当前步骤：${task.currentStep}`
+  if (task.kind === 'shell') {
+    const tail = (task.output ?? '').trim().split('\n').map(line => line.trim()).filter(Boolean).at(-1)
+    if (tail) return tail.length > 160 ? `…${tail.slice(-160)}` : tail
+    if (task.error) return task.error
+    return taskIsActive(task.state) ? '命令已启动，等待输出…' : '命令没有输出。'
+  }
+  if (task.finalOutput) return task.finalOutput.slice(0, 120)
+  return task.error ?? `子代理会话 ${task.sessionId.slice(0, 8)}`
+}
 
 export default function Tasks() {
   const store = useStore(useTasksStore)
@@ -56,13 +70,7 @@ export default function Tasks() {
                 <h3>{task.title}</h3>
                 <Badge size="sm" variant="dot">{task.kind}</Badge>
               </div>
-              <p className="list-description">
-                {task.currentStep
-                  ? `当前步骤：${task.currentStep}`
-                  : task.finalOutput
-                    ? task.finalOutput.slice(0, 120)
-                    : task.error ?? `子代理会话 ${task.sessionId.slice(0, 8)}`}
-              </p>
+              <p className="list-description">{taskPreview(task)}</p>
             </div>
             <div className="list-actions" onClick={event => event.stopPropagation()}>
               <span className="task-state">

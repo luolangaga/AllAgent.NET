@@ -1796,6 +1796,8 @@ export type AIInputProps = {
   /** Setting groups for the settings dropdown (model, effort, etc.). */
   settingGroups?: PromptSettingGroup[];
   defaultSettings?: Record<string, string>;
+  /** Controlled setting values; when provided the parent owns selection state. */
+  settings?: Record<string, string>;
   /** Action items shown at the top of the settings dropdown. */
   menuActions?: PromptMenuAction[];
   /** Items for the plus menu: actions, toggles, separators, and one-level submenus. */
@@ -1829,6 +1831,7 @@ export function AIInput({
   defaultAgent,
   settingGroups = [],
   defaultSettings,
+  settings: controlledSettings,
   menuActions = [],
   menuItems = [],
   placeholder = "Ask for follow-up changes",
@@ -1853,6 +1856,7 @@ export function AIInput({
   const [internalSettings, setInternalSettings] = useState(() =>
     getDefaultSettings(settingGroups, defaultSettings)
   );
+  const settings = controlledSettings ?? internalSettings;
   const nextMessageIdRef = useRef(0);
   const waveTimeoutRef = useRef<number | undefined>(undefined);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -1879,7 +1883,7 @@ export function AIInput({
       ...previous,
       { id: nextMessageIdRef.current, text: trimmed },
     ]);
-    onSend?.(trimmed, { agent, settings: internalSettings });
+    onSend?.(trimmed, { agent, settings: settings });
     setValue("");
 
     requestAnimationFrame(() => {
@@ -1897,7 +1901,7 @@ export function AIInput({
     waveTimeoutRef.current = window.setTimeout(() => {
       setWaveRun(0);
     }, WAVE_DURATION_MS);
-  }, [agent, internalSettings, onSend, reducedMotion, value, disabled]);
+  }, [agent, settings, onSend, reducedMotion, value, disabled]);
 
   const handleKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -1995,11 +1999,11 @@ export function AIInput({
                 groups={settingGroups}
                 menuActions={menuActions}
                 onValueChange={(groupId, val) => {
-                  const next = { ...internalSettings, [groupId]: val };
-                  setInternalSettings(next);
+                  const next = { ...settings, [groupId]: val };
+                  if (!controlledSettings) setInternalSettings(next);
                   onSettingsChange?.(next);
                 }}
-                values={internalSettings}
+                values={settings}
               />
             ) : null}
 

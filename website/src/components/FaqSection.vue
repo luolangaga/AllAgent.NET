@@ -119,7 +119,7 @@ const ANIMATION_DURATION = 240
                 </li>
                 <li>
                   唯一需要额外装东西的场景是缺失环境：<code>allagent doctor</code> 会如实报出缺什么，
-                  <code>doctor install</code> 才经 winget 补装（安装 Python 3.13 / PowerShell 后需要重启）。
+                  <code>doctor install</code> 才经 winget 补装（Python 与 ripgrep；PowerShell 随包分发，无需安装）。
                 </li>
               </ul>
             </div>
@@ -214,7 +214,7 @@ const ANIMATION_DURATION = 240
                 </li>
                 <li>
                   Node 与 npm 只在你自己构建附带的前端资源（<code>src/AllAgent.NET.Web</code>）时才需要；
-                  用 Terminal 本身要的是 .NET 8 SDK、Python 3.10–3.14、PowerShell 7.6 与 ripgrep。
+                  用 Terminal 本身要的是 ripgrep，PowerShell 随包分发，Python 只在 Monty 备用沙箱初始化时需要。
                 </li>
               </ul>
             </div>

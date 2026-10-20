@@ -152,6 +152,7 @@ export interface ApiConfig {
   thinkingEnabled: boolean
   thinkingBudget: number
   contextWindowTokens?: number
+  modelContextWindows?: Record<string, number> | null
   protocol?: string
   reasoningProtocol?: string
   reasoningEffort?: string
@@ -263,6 +264,38 @@ export interface ConversationUsage {
   cacheRequests: number
 }
 
+/** Lifetime per-model usage plus local-day buckets for the settings charts. */
+export interface UsageDay {
+  date: string
+  inputTokens: number
+  outputTokens: number
+  requests: number
+  requestsWithUsage: number
+}
+
+export interface UsageModel {
+  providerId: string
+  modelId: string
+  inputTokens: number
+  outputTokens: number
+  requests: number
+  requestsWithUsage: number
+}
+
+export interface UsageTotals {
+  inputTokens: number
+  outputTokens: number
+  requests: number
+  requestsWithUsage: number
+  activeDays: number
+}
+
+export interface UsageStats {
+  models: UsageModel[]
+  days: UsageDay[]
+  totals: UsageTotals
+}
+
 export interface ApprovalRequest {
   requestId: string
   name: string
@@ -323,6 +356,40 @@ export interface WorkspaceInfo {
   workspacesRoot?: string
 }
 
+/** Auto-update state reported by the host. */
+export interface UpdateStatus {
+  currentVersion: string
+  latestVersion?: string | null
+  updateAvailable: boolean
+  source: string
+  installKind: string
+  architecture: string
+  releaseUrl?: string | null
+  releaseNotes?: string | null
+  error?: string | null
+  lastResult?: string | null
+  lastError?: string | null
+  checkedAt: string
+  fromCache: boolean
+  logPath?: string | null
+}
+
+export interface UpdateSettings {
+  source: string
+  channel: string
+  autoCheck: boolean
+  autoInstall: boolean
+  requireSignature: boolean
+  requireChecksum: boolean
+}
+
+export interface UpdateInvokeResult {
+  started: boolean
+  message: string
+  version?: string | null
+  logPath?: string | null
+}
+
 /** LAN listening and pairing state. Local requests never require the password. */
 export interface WebUiNetworkInfo {
   lan: boolean
@@ -372,6 +439,14 @@ export interface ReasoningOptions {
   minimumBudget: number
   maximumBudget: number
   label: string
+}
+
+/** Effective context window for one model, plus the manual override if one is recorded. */
+export interface ModelContextInfo {
+  model: string
+  capacity: number
+  manual: number | null
+  defaultWindow: number
 }
 
 export interface PluginStatusInfo {
@@ -531,6 +606,7 @@ export interface PluginWebPanel {
   id: string
   title: string
   entry: string
+  icon?: string | null
   order?: number
 }
 
@@ -543,6 +619,7 @@ export interface PluginWebCommand {
   id: string
   title: string
   page?: string | null
+  panel?: string | null
 }
 
 export interface PluginWebSettingField {

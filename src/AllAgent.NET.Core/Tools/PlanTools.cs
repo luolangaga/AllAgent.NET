@@ -15,7 +15,7 @@ public partial class PlanTools(
     private const int MaximumMarkdownCharacters = 64_000;
 
     [AgentTool("plan_propose", Risk = ToolRisk.Read)]
-    [Description("Present a complete implementation plan to the human and wait for approval. Only available in plan mode. Write the full plan in Markdown (goal, context, affected files, ordered steps, risks and verification). The call blocks until the human approves or rejects. If approved, full auto-approval is active: execute the approved plan immediately and do not propose it again. If rejected, revise from the feedback and propose again.")]
+    [Description("Present a complete implementation plan to the human and wait for approval. Only available in plan mode. Write the full plan in Markdown (goal, context, affected files, ordered steps, risks and verification). The call blocks until the human approves or rejects. The decision may carry a human comment: when rejected, revise the plan from that comment and propose it again; when approved, honor the comment while executing. If approved, full auto-approval is active: execute the approved plan immediately and do not propose it again.")]
     public async Task<ToolResult> ProposeAsync(
         [Description("Plan title, 1–200 characters")] string title,
         [Description("Complete plan in Markdown, 1–64000 characters")] string markdown,
@@ -67,20 +67,25 @@ public partial class PlanTools(
         }
 
         var approved = decision.Approved;
+        var feedback = string.IsNullOrWhiteSpace(decision.Feedback) ? null : decision.Feedback.Trim();
         store.SetPlan(conversationId, document with
         {
             Status = approved ? "approved" : "rejected",
-            Feedback = decision.Feedback,
+            Feedback = feedback,
             DecidedAt = DateTime.UtcNow
         });
         return ToolResult.Success(new
         {
             approved,
             mode = approved ? decision.Mode ?? "full" : null,
-            feedback = decision.Feedback,
+            feedback,
             message = approved
-                ? "Plan approved. Full auto-approval is active. Execute the approved plan now; do not call plan_propose again for this plan."
-                : "Plan rejected. Stay in plan mode, revise the plan from the feedback, and call plan_propose again when it is ready."
+                ? feedback == null
+                    ? "Plan approved. Full auto-approval is active. Execute the approved plan now; do not call plan_propose again for this plan."
+                    : "Plan approved with the human's comment. Full auto-approval is active. Execute the approved plan now and satisfy that comment; do not call plan_propose again for this plan."
+                : feedback == null
+                    ? "Plan rejected. Stay in plan mode, revise the plan, and call plan_propose again when it is ready."
+                    : "Plan rejected with the human's comment. Stay in plan mode, revise the plan to address that comment, and call plan_propose again when it is ready."
         });
     }
 }

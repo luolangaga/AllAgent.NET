@@ -22,7 +22,7 @@ public class WorkBuddyPluginTests
             if (path == "/v2/plugin/auth/token") return JsonSerializer.Serialize(new { code = 0, data = new { accessToken = token, refreshToken = "refresh" } });
             Assert.Equal("Bearer", request.Headers.Authorization!.Scheme);
             Assert.Equal("test-account", request.Headers.GetValues("X-User-Id").Single());
-            if (path == "/v3/config") return """{"code":0,"data":{"agents":[{"models":["deepseek","deepseek","qwen"]}]}}""";
+            if (path == "/v3/config") return """{"code":0,"data":{"agents":[{"models":["deepseek","deepseek","qwen"]},{"models":[{"id":"deepseek-v4.1-flash","name":"DeepSeek V4.1 Flash","contextLength":1000000,"maxOutputTokens":128000,"reasoningEfforts":["off","high","max"]}]}]}}""";
             Assert.Equal("www.codebuddy.cn", request.RequestUri.Host);
             return """{"code":0,"data":{"Response":{"Data":{"Accounts":[{"CycleCapacityRemainPrecise":"12.5","CycleCapacityUsed":7.5}]}}}}""";
         }));
@@ -34,12 +34,25 @@ public class WorkBuddyPluginTests
             Assert.Equal("www.codebuddy.cn", browser!.Host);
             Assert.Equal(token, await account.GetAccessTokenAsync(default));
             var models = await account.ModelProvider.ListModelsAsync(account.CreateConfiguration());
-            Assert.Equal(2, models.Count);
+            Assert.Equal(3, models.Count);
+            var flash = models.Single(model => model.Id == "deepseek-v4.1-flash");
+            Assert.Equal(1000000, flash.ContextTokens);
+            Assert.Equal(128000, flash.OutputTokens);
+            Assert.Equal(new[] { "none", "high", "max" }, flash.ReasoningLevels);
             Assert.Contains("12.5", await account.QuotaAsync(default));
             await account.LogoutAsync(default);
             Assert.Null(await account.GetAccessTokenAsync(default));
         }
         finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    }
+
+    [Fact]
+    public void ConfigurationDefinesThe300kContextDefault()
+    {
+        using var account = new WorkBuddyAccount(Path.GetTempPath());
+        var config = account.CreateConfiguration();
+        Assert.Equal(300000, config.ContextWindowTokens);
+        Assert.Equal(300000, AllAgent.NET.Core.Services.AI.ModelContext.Capacity(config));
     }
 
     [Fact]

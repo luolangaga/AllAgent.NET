@@ -22,9 +22,9 @@ function createFrame() {
   return { element, posted, frameWindow }
 }
 
-function deliver(frameWindow: unknown, type: string, payload: unknown, origin = ORIGIN) {
+function deliver(frameWindow: unknown, type: string, payload: unknown, origin = ORIGIN, id?: string) {
   window.dispatchEvent(new MessageEvent('message', {
-    data: { allagent: 1, type, payload },
+    data: { allagent: 1, type, id, payload },
     origin,
     source: frameWindow as MessageEventSource,
   }))
@@ -66,6 +66,23 @@ describe('plugin frame runtime', () => {
     })
   })
 
+  it('hands the frame an init payload that structured clone accepts', async () => {
+    const runtime = await import('../src/lib/pluginRuntime')
+    const frame = createFrame()
+    // The contributions store wraps arrays in Proxies; postMessage rejects them with a
+    // DataCloneError that the sender used to swallow, leaving the frame stuck in handshake.
+    const capabilities = new Proxy(['notifications'], {}) as unknown as string[]
+    runtime.registerFrame(frame.element, {
+      plugin: { ...plugin(), capabilities },
+      view: { kind: 'settings', id: 'codegraph' },
+    }, { src: 'about:blank', token: 'tok', origin: ORIGIN })
+
+    deliver(frame.frameWindow, 'hello', { token: 'tok' })
+    const init = frame.posted[0]
+    expect(() => structuredClone(init)).not.toThrow()
+    expect(init.payload.capabilities).toEqual(['notifications'])
+  })
+
   it('routes own-namespace calls to the bridge and gates host.* behind capabilities', async () => {
     const runtime = await import('../src/lib/pluginRuntime')
     const frame = createFrame()
@@ -75,11 +92,11 @@ describe('plugin frame runtime', () => {
     const methods: string[] = []
     handle = request => { methods.push(request.method); return reply(request, { echo: request.params?.value ?? null }) }
 
-    deliver(frame.frameWindow, 'invoke', { id: '1', method: 'plugin.AllAgent.NET.SamplePlugin.history', params: { value: 7 } })
-    deliver(frame.frameWindow, 'invoke', { id: '2', method: 'host.notify', params: { title: '来自插件' } })
-    deliver(frame.frameWindow, 'invoke', { id: '3', method: 'host.storage.set', params: { key: 'k', value: 'v' } })
-    deliver(frame.frameWindow, 'invoke', { id: '4', method: 'plugin.other.package.method', params: {} })
-    deliver(frame.frameWindow, 'invoke', { id: '5', method: 'conversations.delete', params: {} })
+    deliver(frame.frameWindow, 'invoke', { method: 'plugin.AllAgent.NET.SamplePlugin.history', params: { value: 7 } }, ORIGIN, '1')
+    deliver(frame.frameWindow, 'invoke', { method: 'host.notify', params: { title: '来自插件' } }, ORIGIN, '2')
+    deliver(frame.frameWindow, 'invoke', { method: 'host.storage.set', params: { key: 'k', value: 'v' } }, ORIGIN, '3')
+    deliver(frame.frameWindow, 'invoke', { method: 'plugin.other.package.method', params: {} }, ORIGIN, '4')
+    deliver(frame.frameWindow, 'invoke', { method: 'conversations.delete', params: {} }, ORIGIN, '5')
     await settle()
 
     expect(methods).toEqual(['plugin.AllAgent.NET.SamplePlugin.history'])
