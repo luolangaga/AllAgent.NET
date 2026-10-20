@@ -8,4 +8,8 @@ public sealed record PluginTaskRequest(string Workspace, string Title, string Pr
 public sealed record PluginTaskResult(string Workspace, Guid ConversationId, string StreamId);
 public sealed record PluginWorkspaceTasks(
     Func<IReadOnlyList<PluginWorkspace>> List,
-    Func<PluginTaskRequest, CancellationToken, Task<PluginTaskResult>> StartAsync);
+    Func<PluginTaskRequest, CancellationToken, Task<PluginTaskResult>> StartAsync)
+{
+    /// <summary>Workspace the terminal currently has open; null in hosts without a terminal view.</summary>
+    public Func<string?>? Current { get; init; }
+}

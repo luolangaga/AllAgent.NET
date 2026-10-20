@@ -17,4 +17,22 @@ public sealed class AgentQuestionTests
         Assert.Equal("小岛", answer[1].GetString());
     }
 
+    [Fact]
+    public async Task UnansweredQuestionTimesOutAndIsSkipped()
+    {
+        var cancelled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tools = new AgentInteractionTools(async (_, ct) =>
+        {
+            try { await Task.Delay(Timeout.InfiniteTimeSpan, ct); }
+            catch (OperationCanceledException) { cancelled.TrySetResult(true); }
+            return null;
+        }, TimeSpan.FromMilliseconds(50));
+
+        var result = await tools.AskAsync("Continue?", []);
+
+        Assert.False(result.Ok);
+        Assert.Contains("skipped", result.Error);
+        Assert.True(await cancelled.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+    }
+
 }

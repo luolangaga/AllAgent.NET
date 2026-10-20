@@ -9,6 +9,10 @@ public class Conversation
     public Guid? ParentConversationId { get; set; }
     public string? AgentRole { get; set; }
     public Guid? SubAgentConfigId { get; set; }
+    public AllAgent.NET.Core.Services.SubAgentTaskContract? Delegation { get; set; }
+    public AllAgent.NET.Core.Runtime.PermissionMode? SubAgentPermission { get; set; }
+    public AllAgent.NET.Core.Services.AgentRoleDefinition? SubAgentRoleGrant { get; set; }
+    public IReadOnlyList<string>? SubAgentHostToolsGrant { get; set; }
     public Guid Id { get; set; } = Guid.NewGuid();
     public string Title { get; set; } = "New Conversation";
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
@@ -27,6 +31,7 @@ public class Conversation
     public long CacheUsageRequests { get; set; }
     public List<Message> Messages { get; set; } = new();
     public List<TodoItem> Todos { get; set; } = new();
+    public PlanDocument? Plan { get; set; }
     public SessionRevertState? Revert { get; set; }
     public List<Guid> InvalidatedCheckpoints { get; set; } = new();
 }

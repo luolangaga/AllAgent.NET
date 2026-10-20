@@ -12,8 +12,8 @@ import { useNoticesStore } from '@/stores/ui'
 import { useToolsStore } from '@/stores/tools'
 import type { ToolInfo } from '@/types'
 
-const sourceLabels: Record<string, string> = { host: '内置', plugin: '插件', mcp: 'MCP 服务', skill: '技能' }
-const sourceBadge: Record<string, 'green' | 'blue' | 'gray'> = { host: 'green', plugin: 'blue', mcp: 'gray', skill: 'green' }
+const sourceLabels: Record<string, string> = { host: '内置', plugin: '插件', mcp: 'MCP 服务', skill: '技能', 'on-demand': '按需' }
+const sourceBadge: Record<string, 'green' | 'blue' | 'gray'> = { host: 'green', plugin: 'blue', mcp: 'gray', skill: 'green', 'on-demand': 'blue' }
 const riskInfo: Record<string, { label: string; color: 'green' | 'gray' | 'red' }> = {
   read: { label: '读取', color: 'green' },
   write: { label: '写入', color: 'gray' },
@@ -66,7 +66,7 @@ export default function Tools() {
       ? <EmptyState title="工具目录不可用">{store.errors[0] ?? '此宿主未提供工具清单。'}</EmptyState>
       : <>
         <div className="section-meta">
-          <span>{store.tools.length} 个工具{store.tools.length ? ` · 内置 ${counts.get('host') ?? 0} · 插件 ${counts.get('plugin') ?? 0} · MCP ${counts.get('mcp') ?? 0} · 技能 ${counts.get('skill') ?? 0}` : ''}</span>
+          <span>{store.tools.length} 个工具{store.tools.length ? ` · 内置 ${counts.get('host') ?? 0} · 插件 ${counts.get('plugin') ?? 0} · MCP ${counts.get('mcp') ?? 0} · 技能 ${counts.get('skill') ?? 0} · 按需 ${counts.get('on-demand') ?? 0}` : ''}</span>
           <span>来源标注与权限风险来自宿主注册；插件前缀由插件包自带</span>
         </div>
         {store.errors.map(error => <Alert

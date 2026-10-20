@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AllAgent.NET.Core.Tools;
+using L = AllAgent.NET.Core.Localization.HostText;
 using Spectre.Console;
 using Spectre.Console.Rendering;
 
@@ -14,7 +15,7 @@ internal static class ManagementUi
         if (ui.Json) Console.WriteLine(JsonSerializer.Serialize(value, ToolResult.JsonOptions)); else human();
     }
     public static void Success(TerminalUi ui, string text) => Output(ui, new { ok = true, message = text }, () => TerminalOutput.MarkupLine("[green]✓ " + Markup.Escape(text) + "[/]"));
-    public static string Require(IReadOnlyList<string> args, int index, string label) => args.ElementAtOrDefault(index) ?? throw new ArgumentException("缺少" + label + "。输入 /help 查看用法。");
+    public static string Require(IReadOnlyList<string> args, int index, string label) => args.ElementAtOrDefault(index) ?? throw new ArgumentException(L.Pick("缺少" + label + "。输入 /help 查看用法。", "Missing " + label + ". Run /help for usage."));
     public static async Task<string> Text(string label, string? defaultValue = null, bool secret = false, bool empty = false)
     {
         if (FullScreenTerminal.Current is { } screen) return await screen.TextAsync(label, defaultValue, secret, empty);
@@ -23,7 +24,7 @@ internal static class ManagementUi
         if (secret) prompt.Secret(); if (empty) prompt.AllowEmpty();
         return await AnsiConsole.PromptAsync(prompt);
     }
-    public static void Interactive(TerminalUi ui) { if (!ui.Interactive || ui.Json) throw new ArgumentException("此操作需要交互终端；命令行模式请填写参数。"); }
+    public static void Interactive(TerminalUi ui) { if (!ui.Interactive || ui.Json) throw new ArgumentException(L.Pick("此操作需要交互终端；命令行模式请填写参数。", "This action needs an interactive terminal; pass the arguments in command-line mode.")); }
     public static async Task<bool> Confirm(TerminalUi ui, string text) => ui.Interactive && !ui.Json && (FullScreenTerminal.Current is { } screen ? await screen.ConfirmAsync(text) : await AnsiConsole.PromptAsync(new ConfirmationPrompt(Markup.Escape(text)) { DefaultValue = false }));
     public static T Clone<T>(T value) => JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(value))!;
     public static string Choose(string title, params string[] choices) => Choose(title, choices, c => c);

@@ -11,17 +11,27 @@ public enum PermissionMode { Restricted, Full, Ask }
 
 public sealed record AgentOptions
 {
+    /// <summary>Migration selector. The environment override accepts legacy or framework.</summary>
+    public string AgentKernel { get; init; } = "framework";
     public SandboxMode SandboxMode { get; init; } = SandboxMode.Auto;
     public ComputerUseState ComputerUse { get; init; } = new();
     public BrowserUseState BrowserUse { get; init; } = new();
     public AllAgent.NET.Core.Services.BackgroundTasks? BackgroundTasks { get; init; }
     public bool IsSubAgent { get; init; }
+    public Func<bool>? ReadOnlyProvider { get; init; }
+    public Func<AllAgent.NET.Core.Services.SubAgentTaskContract?>? TaskContractProvider { get; init; }
     public string? WebSearchBaseUrl { get; init; }
     public AllAgent.NET.Core.Extensions.HookPipeline? Hooks { get; init; }
     public AllAgent.NET.Core.Extensions.AgentExtensionPipeline? Extensions { get; init; }
     public AllAgent.NET.Core.Services.SkillCatalog? Skills { get; init; }
+    /// <summary>On-demand capability record shared across turns of one conversation, so a skill
+    /// disclosure outlives the per-turn runtime. A host that omits it gets a fresh surface per turn.</summary>
+    public ToolSurface? ToolSurface { get; init; }
     public AllAgent.NET.Core.Services.WorkspaceCheckpoints? Checkpoints { get; init; }
     public Func<AgentQuestion, CancellationToken, Task<string?>>? QuestionHandler { get; init; }
+    /// <summary>Blocks a plan-mode turn until the human approves or rejects the proposed plan.
+    /// Hosts wire this to their terminal prompt or browser approval broker.</summary>
+    public Func<AllAgent.NET.Core.Models.PlanProposal, CancellationToken, Task<AllAgent.NET.Core.Models.PlanDecision>>? PlanHandler { get; init; }
     public Func<string>? InstructionsProvider { get; init; }
     /// <summary>Volatile instruction tail (preferences, learned policies) kept out of stable prompt cache breakpoints.</summary>
     public Func<string>? VolatileInstructionsProvider { get; init; }
@@ -81,6 +91,7 @@ public sealed record AgentOptions
     internal void Validate()
     {
         if (!Enum.IsDefined(SandboxMode)) throw new ArgumentException("Invalid sandbox mode.");
+        if (AgentKernel is not ("legacy" or "framework")) throw new ArgumentException("AgentKernel must be legacy or framework.");
         if (!Enum.IsDefined(Permission)) throw new ArgumentException("Invalid permission mode.");
         if (FileReadMaxBytes < 256 || FileReadMaxBytes > 1_000_000 || FileReadMaxLines < 1 ||
             MaxCodeCharacters < 1 || MaxCodeCharacters > 128_000 || MaxToolResultCharacters < 4096 || MaxToolResultCharacters > 4_000_000 ||

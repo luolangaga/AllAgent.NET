@@ -57,18 +57,21 @@ public sealed class NativeRuntimeIntegrationTests
         await File.WriteAllTextAsync(Path.Combine(w.Root, "source.txt"), "needle evidence\n");
         await File.WriteAllTextAsync(Path.Combine(w.Root, "source.log"), "needle ignored\n");
         var conversation = new Conversation(); store.AddConversation(conversation);
-        var provider = new FixtureProvider("print(call_tool('file_search', pattern='needle', path='.', file_pattern='*.txt'))\nprint(call_tool('everything_search', query='*.txt', path='.'))\nprint(call_tool('run_shell', exe='dotnet', args=['--version'], timeout_seconds=30))");
+        var provider = new FixtureProvider("print(call_tool('file_search', pattern='needle', path='.', file_pattern='*.txt'))\nprint(call_tool('file_search', names_only=True, file_pattern='*.txt'))\nprint(call_tool('run_shell', exe='dotnet', args=['--version'], timeout_seconds=30))");
         var options = w.Options with { Permission = PermissionMode.Full, CodeTimeout = TimeSpan.FromMinutes(3) };
         await using var runtime = await AgentRuntime.CreateAsync(options);
         var events = new List<AgentEvent>();
         await foreach (var evt in new AgentEngine(store, provider, runtime.CodeAct, options).RunAsync(conversation.Id, "Native tool checks", new ApiConfig { DefaultModel = "fixture" })) events.Add(evt);
-        foreach (var name in new[] { "file_search", "everything_search", "run_shell" })
+        var searches = events.OfType<ToolCallCompleted>().Where(item => item.ToolName == "file_search").Select(item => item.ResultJson).ToArray();
+        Assert.Equal(2, searches.Length);
+        foreach (var result in searches)
         {
-            var result = Assert.Single(events.OfType<ToolCallCompleted>(), item => item.ToolName == name).ResultJson;
             using var document = JsonDocument.Parse(result);
             Assert.True(document.RootElement.GetProperty("ok").GetBoolean(), result);
-            if (name is "file_search" or "everything_search") { Assert.Contains("source.txt", result); Assert.DoesNotContain("source.log", result); }
+            Assert.Contains("source.txt", result); Assert.DoesNotContain("source.log", result);
         }
+        var shell = Assert.Single(events.OfType<ToolCallCompleted>(), item => item.ToolName == "run_shell").ResultJson;
+        using (var document = JsonDocument.Parse(shell)) Assert.True(document.RootElement.GetProperty("ok").GetBoolean(), shell);
         Assert.Equal("stop", Assert.IsType<AgentDone>(events.Last()).FinishReason);
     }
 
@@ -117,7 +120,7 @@ public sealed class NativeRuntimeIntegrationTests
         Assert.Contains("Workspace-specific rule", instructions.Content);
         Assert.DoesNotContain("Project-specific", Assert.Single(provider.Requests).Messages[0].Content);
         Assert.Contains(runtime.Tools.Definitions, tool => tool.Name == "file_search");
-        Assert.Contains(runtime.Tools.Definitions, tool => tool.Name == "everything_search");
+        Assert.DoesNotContain(runtime.Tools.Definitions, tool => tool.Name == "everything_search");
         Assert.DoesNotContain(runtime.Tools.Definitions, tool => tool.Name is "bash" or "powershell");
     }
 

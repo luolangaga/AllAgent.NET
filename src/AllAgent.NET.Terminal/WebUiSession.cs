@@ -4,11 +4,13 @@ using System.Text.Json;
 using AllAgent.NET.Core.Bridge;
 using AllAgent.NET.Core.Data;
 using AllAgent.NET.Core.Extensions;
+using AllAgent.NET.Core.Localization;
 using AllAgent.NET.Core.Models;
 using AllAgent.NET.Core.Runtime;
 using AllAgent.NET.Core.Services;
 using AllAgent.NET.Core.Services.AI;
 using AllAgent.NET.Core.Tools;
+using L = AllAgent.NET.Core.Localization.HostText;
 
 namespace AllAgent.NET.Terminal;
 
@@ -59,7 +61,7 @@ public sealed record CommandInfo(string Text, string Description, string Usage =
 public sealed record WorkspaceEntry(string Workspace, string Name, string DataDirectory, int SessionCount, bool IsCurrent, int RunningCount = 0);
 public sealed record WorkbenchConversation(Guid Id, string Title, string ModelId, string ProviderId, DateTime CreatedAt, DateTime UpdatedAt, string Workspace, string WorkspaceName, string? AgentRole, Guid? ParentId);
 /// <summary>A conversation with a run in flight, in any workspace opened this session. State is one of
-/// running, awaiting-approval, awaiting-answer.</summary>
+/// running, awaiting-approval, awaiting-answer, awaiting-plan.</summary>
 public sealed record RunningConversation(Guid ConversationId, string Title, string Workspace, string WorkspaceName, string DataDirectory, string State);
 
 // Instruction-skill catalog (SKILL.md), the system the terminal's /skills manages.
@@ -68,6 +70,9 @@ public sealed record SkillCatalogSnapshot(IReadOnlyList<SkillInfo> Skills, IRead
 public sealed record SkillNameParams(string Name);
 public sealed record SkillToggleParams(string Name, bool Enabled);
 public sealed record SkillCreateParams(string Name, string Description, string Instructions, string Scope);
+public sealed record PluginSettingsQuery(string PackageId);
+public sealed record PluginSettingsSnapshot(string PackageId, IReadOnlyDictionary<string, string> Values);
+public sealed record PluginSettingsSave(string PackageId, string Key, string Value);
 public sealed record SkillImportParams(string Content, string Scope);
 public sealed record SkillInvokeParams(string Name, string Arguments);
 public sealed record SkillInvokeResult(string Text, IReadOnlyList<ImageAttachment> Images);
@@ -138,16 +143,30 @@ internal sealed class WebUiSession : IAsyncDisposable
     public int Port => _server.Port;
     public int ConnectedClients => _server.ConnectedClients;
 
+    /// <summary>The terminal changed the shared language setting: apply it to every open page.</summary>
+    public void PushSettingsChanged()
+    {
+        var store = _current?.Store;
+        if (store == null) return;
+        var language = LanguageSetting.Current(store);
+        _pusher.Push(JsonSerializer.Serialize(new
+        {
+            type = "settings.changed",
+            language,
+            languageResolved = HostText.ResolvedCode,
+        }, JsonOptions.Default));
+    }
+
     /// <summary>Launch through the workspace's normal bridge so persistence, replay, approvals and
     /// background lifetime are identical to an ordinary chat, without changing the visible workspace.</summary>
     internal async Task<PluginTaskResult> StartPluginTaskAsync(PluginTaskRequest request, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(request.Title) || request.Title.Length > 240 || string.IsNullOrWhiteSpace(request.Prompt) || request.Prompt.Length > 250_000 || request.Message?.Length > 20_000)
-            throw new ArgumentException("插件任务标题或提示词无效。");
+            throw new ArgumentException(L.Pick("插件任务标题或提示词无效。", "The plugin task title or prompt is invalid."));
         var bundle = CreateBundle(request.Workspace);
         var config = bundle.Store.ApiConfigs.FirstOrDefault(c => c.IsEnabled && c.Id.ToString() == bundle.Store.GetSetting("terminal:lastConfig"))
             ?? bundle.Store.ApiConfigs.FirstOrDefault(c => c.IsEnabled && !string.IsNullOrWhiteSpace(c.DefaultModel))
-            ?? throw new InvalidOperationException("请先在模型与 API 中配置并启用一个模型。");
+            ?? throw new InvalidOperationException(L.Pick("请先在模型与 API 中配置并启用一个模型。", "Configure and enable a model in Models & API first."));
         var conversation = new Conversation { Title = request.Title, WorkspaceRoot = bundle.Workspace, ModelId = config.DefaultModel, ProviderId = config.ProviderId };
         bundle.Store.AddConversation(conversation);
         try
@@ -182,6 +201,12 @@ internal sealed class WebUiSession : IAsyncDisposable
         {
             PlanMode = () => controls?.PlanMode() ?? false,
             FullAccess = () => controls?.FullAccess() ?? false,
+        };
+        _approvals.OnPlanApproved = async ct =>
+        {
+            if (_controls == null) throw new InvalidOperationException(L.Pick("当前宿主不支持计划审批。", "This host does not support plan approval."));
+            await _controls.SetPermission("full");
+            PushControls();
         };
         _approvals.Changed += PushRuns;
     }
@@ -218,7 +243,9 @@ internal sealed class WebUiSession : IAsyncDisposable
         }
     }
 
-    public string StatusText() => $"工作区：{_current.Workspace}\n数据目录：{_current.DataDirectory}\n打开的工作区：{_bundles.Count} 个 · 后台运行 {RunningList().Count} 个会话\n地址：{_server.Url}\n浏览器连接：{_server.ConnectedClients} 个\n停止：/web-ui stop";
+    public string StatusText() => L.Pick(
+        $"工作区：{_current.Workspace}\n数据目录：{_current.DataDirectory}\n打开的工作区：{_bundles.Count} 个 · 后台运行 {RunningList().Count} 个会话\n地址：{_server.Url}\n浏览器连接：{_server.ConnectedClients} 个\n停止：/web-ui stop",
+        $"Workspace: {_current.Workspace}\nData directory: {_current.DataDirectory}\nOpen workspaces: {_bundles.Count} · {RunningList().Count} background sessions\nURL: {_server.Url}\nBrowser connections: {_server.ConnectedClients}\nStop: /web-ui stop");
 
     /// <summary>Rebuilds the browser runtime so a terminal-side change (plan mode, sandbox, …) takes effect immediately.</summary>
     public async Task RefreshRuntimeAsync()
@@ -260,14 +287,21 @@ internal sealed class WebUiSession : IAsyncDisposable
     {
         Bundle[] bundles;
         lock (_bundlesGate) bundles = _bundles.Values.ToArray();
-        var awaiting = _approvals.PendingConversations().ToDictionary(item => item.Conversation, item => item.Question);
+        var awaiting = _approvals.PendingConversations().ToDictionary(item => item.Conversation, item => item.Kind);
         var runs = new List<RunningConversation>();
         foreach (var bundle in bundles)
             foreach (var id in bundle.Agents.RunningConversations)
             {
-                var state = awaiting.TryGetValue(id, out var question) ? question ? "awaiting-answer" : "awaiting-approval" : "running";
+                var state = awaiting.TryGetValue(id, out var kind)
+                    ? kind switch
+                    {
+                        PendingPromptKind.Plan => "awaiting-plan",
+                        PendingPromptKind.Question => "awaiting-answer",
+                        _ => "awaiting-approval"
+                    }
+                    : "running";
                 var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(bundle.Workspace));
-                runs.Add(new RunningConversation(id, bundle.Store.GetConversation(id)?.Title ?? "会话", bundle.Workspace, string.IsNullOrEmpty(name) ? bundle.Workspace : name, bundle.DataDirectory, state));
+                runs.Add(new RunningConversation(id, bundle.Store.GetConversation(id)?.Title ?? L.Pick("会话", "Conversation"), bundle.Workspace, string.IsNullOrEmpty(name) ? bundle.Workspace : name, bundle.DataDirectory, state));
             }
         return runs;
     }
@@ -293,7 +327,7 @@ internal sealed class WebUiSession : IAsyncDisposable
     private Bundle CreateBundle(string workspace)
     {
         var full = Path.GetFullPath(workspace);
-        if (!Directory.Exists(full)) throw new InvalidOperationException("工作区目录不存在：" + full);
+        if (!Directory.Exists(full)) throw new InvalidOperationException(L.Pick("工作区目录不存在：", "The workspace directory does not exist: ") + full);
         // A bundle is identified by the data directory it owns; the terminal's own workspace
         // shares the terminal's store, jobs and checkpoints instead of opening a second copy.
         var shared = string.Equals(full, _terminal.Workspace, StringComparison.OrdinalIgnoreCase);
@@ -358,6 +392,10 @@ internal sealed class WebUiSession : IAsyncDisposable
             QuestionHandler = (question, ct) => _server?.ConnectedClients > 0
                 ? _approvals.AskAsync(question, ct)
                 : UseTerminalPrompts ? _baseOptions().QuestionHandler?.Invoke(question, ct) ?? Task.FromResult<string?>(null) : Task.FromResult<string?>(null),
+            PlanHandler = (plan, ct) => _server?.ConnectedClients > 0
+                ? _approvals.ProposePlanAsync(plan, ct)
+                : UseTerminalPrompts ? _baseOptions().PlanHandler?.Invoke(plan, ct) ?? Task.FromResult(new PlanDecision(false, "Plan approval is unavailable."))
+                    : Task.FromResult(new PlanDecision(false, "No browser is connected; stay in plan mode.")),
             InstructionsProvider = () => TerminalApp.Instructions(workspace, catalog, _approvals.PlanMode?.Invoke() == true),
         };
         var agents = new AgentService(store, _factory, options, mcp);
@@ -393,10 +431,10 @@ internal sealed class WebUiSession : IAsyncDisposable
         _dispatcher.Register<WorkspaceCreateParams, WorkspaceInfo>("workspace.create", (parameters, _) =>
         {
             var name = (parameters.Name ?? string.Empty).Trim();
-            if (name.Length == 0) throw new ArgumentException("请输入工作区名称。");
-            if (name.Length > 64) throw new ArgumentException("工作区名称最长 64 个字符。");
+            if (name.Length == 0) throw new ArgumentException(L.Pick("请输入工作区名称。", "Enter a workspace name."));
+            if (name.Length > 64) throw new ArgumentException(L.Pick("工作区名称最长 64 个字符。", "The workspace name can be at most 64 characters."));
             if (name is "." or ".." || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
-                throw new ArgumentException("名称不能包含 \\ / : * ? \" < > | 等字符。");
+                throw new ArgumentException(L.Pick("名称不能包含 \\ / : * ? \" < > | 等字符。", "The name cannot contain \\ / : * ? \" < > | or similar characters."));
             var directory = Path.Combine(WorkspacesRoot, name);
             Directory.CreateDirectory(directory);
             return SwitchWorkspaceAsync(directory, false);
@@ -414,13 +452,17 @@ internal sealed class WebUiSession : IAsyncDisposable
         // methods contributed by plugins live in the plugin-web slot and are re-synced on change.
         _dispatcher.Register<PluginWebSnapshot>("web.contributions", _ => Task.FromResult(_plugins.WebSnapshot(_pluginAssets?.BaseUrl)));
         _dispatcher.Register<PluginToggleParams, bool>("web.setEnabled", (parameters, _) => { _plugins.SetWebEnabled(parameters.PackageId, parameters.Enabled); return Task.FromResult(true); });
+        _dispatcher.Register<PluginSettingsQuery, PluginSettingsSnapshot>("web.settings.get", (parameters, _) =>
+            Task.FromResult(new PluginSettingsSnapshot(parameters.PackageId, _plugins.SettingsSnapshot(parameters.PackageId))));
+        _dispatcher.Register<PluginSettingsSave, bool>("web.settings.set", (parameters, _) =>
+            Task.FromResult(_plugins.SetSetting(parameters.PackageId, parameters.Key, parameters.Value)));
         _dispatcher.Register<PluginToggleParams, bool>("plugins.setEnabled", async (parameters, _) => { await _plugins.SetEnabledAsync(parameters.PackageId, parameters.Enabled); return true; });
         _dispatcher.Register<PluginRemoveParams, bool>("plugins.remove", async (parameters, _) => { await _plugins.RemoveAsync(parameters.PackageId); return true; });
         _dispatcher.Register<PluginSearchParams, PluginSearchResult>("plugins.search", (parameters, ct) => installer.SearchAsync(parameters.Query, parameters.Skip, parameters.Take, ct));
         _dispatcher.Register<PluginInstallParams, InstalledPlugin>("plugins.install", async (parameters, ct) => await Adopt(await installer.InstallAsync(parameters.Id, parameters.Version, ct), ct));
         _dispatcher.Register<PluginRunCommandParams, string>("plugins.runCommand", async (parameters, ct) =>
         {
-            var command = _plugins.Commands.SingleOrDefault(c => c.Name == parameters.Name) ?? throw new ArgumentException("插件命令不存在；请先在插件页启用对应插件。");
+            var command = _plugins.Commands.SingleOrDefault(c => c.Name == parameters.Name) ?? throw new ArgumentException(L.Pick("插件命令不存在；请先在插件页启用对应插件。", "Plugin command not found; enable the plugin on the Plugins page first."));
             return ToolResult.Clip(await command.Execute(parameters.Args.ToArray(), ct), 16000);
         });
         _dispatcher.Register<PluginImportParams, InstalledPlugin>("plugins.import", async (parameters, ct) => await Adopt(await installer.ImportAsync(WriteImportFile(parameters), ct), ct));
@@ -446,13 +488,14 @@ internal sealed class WebUiSession : IAsyncDisposable
         });
         _dispatcher.Register<SessionPermissionParams, SessionControlState>("session.setPermission", async (parameters, _) =>
         {
-            if (_controls == null) throw new InvalidOperationException("当前宿主不支持权限切换。");
+            if (_controls == null) throw new InvalidOperationException(L.Pick("当前宿主不支持权限切换。", "This host does not support switching permissions."));
             await _controls.SetPermission(parameters.Mode);
+            PushControls();
             return ControlState();
         });
         _dispatcher.Register<SessionSandboxParams, SessionControlState>("session.setSandbox", async (parameters, _) =>
         {
-            if (_controls == null) throw new InvalidOperationException("当前宿主不支持沙箱切换。");
+            if (_controls == null) throw new InvalidOperationException(L.Pick("当前宿主不支持沙箱切换。", "This host does not support switching the sandbox."));
             await _controls.SetSandbox(parameters.Mode);
             return ControlState();
         });
@@ -473,7 +516,7 @@ internal sealed class WebUiSession : IAsyncDisposable
             {
                 var config = bundle.Store.GetApiConfig(parameters.Id) ?? throw new Exception("ApiConfig not found");
                 var models = await _providerResolver(config).ListModelsAsync(config, ct);
-                if (models.Count == 0) throw new InvalidOperationException("接口返回了空模型列表，已有列表未修改。");
+                if (models.Count == 0) throw new InvalidOperationException(L.Pick("接口返回了空模型列表，已有列表未修改。", "The endpoint returned an empty model list; the existing list was not changed."));
                 config.Models = models.Select(model => model.Id).ToList();
                 ModelCatalog.Remember(config, models);
                 bundle.Store.UpdateApiConfig(config);
@@ -494,12 +537,12 @@ internal sealed class WebUiSession : IAsyncDisposable
         // bridge stays responsive while the user browses folders.
         bindings.Register<bool>("workspace.pickFolder", _ =>
         {
-            if (Interlocked.CompareExchange(ref _picking, 1, 0) != 0) throw new InvalidOperationException("文件夹选择窗口已经打开。");
+            if (Interlocked.CompareExchange(ref _picking, 1, 0) != 0) throw new InvalidOperationException(L.Pick("文件夹选择窗口已经打开。", "A folder picker is already open."));
             Task.Run(() =>
             {
                 string? path = null;
                 string? error = null;
-                try { path = NativeFolderPicker.Pick("选择工作区目录"); }
+                try { path = NativeFolderPicker.Pick(L.Pick("选择工作区目录", "Choose a workspace directory")); }
                 catch (Exception ex) { error = ex.Message; }
                 Interlocked.Exchange(ref _picking, 0);
                 if (path == null && error == null) error = NativeFolderPicker.LastError;
@@ -617,7 +660,7 @@ internal sealed class WebUiSession : IAsyncDisposable
         var config = (apiConfigId is { Length: > 0 } requested ? configs.FirstOrDefault(item => item.Id.ToString() == requested) : null)
             ?? configs.FirstOrDefault(item => item.Id.ToString() == bundle.Store.GetSetting("terminal:lastConfig"))
             ?? configs.FirstOrDefault(item => !string.IsNullOrWhiteSpace(item.DefaultModel))
-            ?? throw new InvalidOperationException("请先在「模型与 API」中配置并启用一个模型，再使用 AI 生成提交信息。");
+            ?? throw new InvalidOperationException(L.Pick("请先在「模型与 API」中配置并启用一个模型，再使用 AI 生成提交信息。", "Configure and enable a model in Models & API before generating a commit message."));
         IAiProvider provider;
         try
         {
@@ -625,19 +668,21 @@ internal sealed class WebUiSession : IAsyncDisposable
         }
         catch (ArgumentException ex) when (ex.Message.Contains("Unknown AI provider", StringComparison.Ordinal))
         {
-            throw new InvalidOperationException($"模型配置「{config.DisplayName}」的插件提供商「{config.ProviderId}」当前不可用（插件未启用或未登录）。请在设置里换一个模型，或启用对应插件后重试。");
+            throw new InvalidOperationException(L.Pick($"模型配置「{config.DisplayName}」的插件提供商「{config.ProviderId}」当前不可用（插件未启用或未登录）。请在设置里换一个模型，或启用对应插件后重试。", $"The plugin provider \"{config.ProviderId}\" for model configuration \"{config.DisplayName}\" is unavailable (the plugin is disabled or not signed in). Choose another model in Settings or enable the plugin and retry."));
         }
         var request = new ChatRequest(config,
         [
-            new ChatMessage("system", "You draft Git commit messages from diffs. Match the repository's recent commit style and language. Output only the commit message, never explanations or code fences."),
+            new ChatMessage("system", "You draft Git commit messages from diffs. Match the repository's recent commit style and format. " +
+                (HostText.Language == UiLanguage.Zh ? "Write the commit message in Simplified Chinese. " : "Write the commit message in English. ") +
+                "Output only the commit message, never explanations or code fences."),
             new ChatMessage("user", prompt),
         ], []);
         var text = new StringBuilder();
         await foreach (var chunk in provider.StreamChatAsync(request, ct))
         {
             if (chunk.Type == ChunkType.TextDelta) text.Append(chunk.TextDelta);
-            else if (chunk.Type == ChunkType.Error) throw new InvalidOperationException("生成提交信息失败：" + chunk.ErrorMessage);
-            else if (chunk.Type is ChunkType.ToolCallDelta or ChunkType.ToolCallComplete) throw new InvalidOperationException("模型意外返回工具调用；请重试。");
+            else if (chunk.Type == ChunkType.Error) throw new InvalidOperationException(L.Pick("生成提交信息失败：", "Failed to generate a commit message: ") + chunk.ErrorMessage);
+            else if (chunk.Type is ChunkType.ToolCallDelta or ChunkType.ToolCallComplete) throw new InvalidOperationException(L.Pick("模型意外返回工具调用；请重试。", "The model unexpectedly returned a tool call; retry."));
             if (text.Length > 8000) break;
         }
         return text.ToString();
@@ -648,9 +693,9 @@ internal sealed class WebUiSession : IAsyncDisposable
         var commands = CommandCatalog.Builtins
             .Select(hint => new CommandInfo(hint.Text, hint.Description, hint.Usage, hint.Advanced, hint.IsSkill, hint.Aliases))
             .ToList();
-        commands.AddRange(_plugins.Commands.Select(command => new CommandInfo("/ext " + command.Name, command.Description, "参数", Advanced: true)));
+        commands.AddRange(_plugins.Commands.Select(command => new CommandInfo("/ext " + command.Name, command.Description, L.Pick("参数", "arguments"), Advanced: true)));
         commands.AddRange(bundle.Catalog.List().Where(skill => skill.Enabled && skill.UserInvocable)
-            .Select(skill => new CommandInfo("/" + skill.Name, skill.Description, "任务参数", Advanced: true, IsSkill: true)));
+            .Select(skill => new CommandInfo("/" + skill.Name, skill.Description, L.Pick("任务参数", "task arguments"), Advanced: true, IsSkill: true)));
         return commands;
     }
 
@@ -672,7 +717,7 @@ internal sealed class WebUiSession : IAsyncDisposable
     {
         if (!string.IsNullOrWhiteSpace(conversation.Title) && conversation.Title != "New Conversation") return conversation.Title;
         var prompt = bundle.Store.GetVisibleMessages(conversation.Id).FirstOrDefault(message => message.Role == "user")?.Content;
-        if (string.IsNullOrWhiteSpace(prompt)) return "新对话";
+        if (string.IsNullOrWhiteSpace(prompt)) return L.Pick("新对话", "New conversation");
         var line = prompt.Replace('\n', ' ').Trim();
         return line.Length > 40 ? string.Concat(line.AsSpan(0, 40), "…") : line;
     }
@@ -729,8 +774,8 @@ internal sealed class WebUiSession : IAsyncDisposable
 
     private static void ImportSkillText(SkillCatalog catalog, string content, string scope)
     {
-        if (string.IsNullOrWhiteSpace(content)) throw new ArgumentException("请提供 SKILL.md 内容（YAML frontmatter + 指令）。");
-        if (content.Length > 1_000_000) throw new ArgumentException("SKILL.md 超过 1 MB。");
+        if (string.IsNullOrWhiteSpace(content)) throw new ArgumentException(L.Pick("请提供 SKILL.md 内容（YAML frontmatter + 指令）。", "Provide SKILL.md content (YAML frontmatter + instructions)."));
+        if (content.Length > 1_000_000) throw new ArgumentException(L.Pick("SKILL.md 超过 1 MB。", "SKILL.md exceeds 1 MB."));
         var staging = Path.Combine(Path.GetTempPath(), "allagent-skill-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(staging);
         try
@@ -746,12 +791,12 @@ internal sealed class WebUiSession : IAsyncDisposable
 
     private async Task<WorkspaceInfo> SwitchWorkspaceAsync(string path, bool create)
     {
-        if (string.IsNullOrWhiteSpace(path)) throw new ArgumentException("请提供工作区目录路径。");
+        if (string.IsNullOrWhiteSpace(path)) throw new ArgumentException(L.Pick("请提供工作区目录路径。", "Provide a workspace directory path."));
         var full = Path.GetFullPath(path.Trim());
         if (string.Equals(full, _current.Workspace, StringComparison.OrdinalIgnoreCase)) return Info();
         if (!Directory.Exists(full))
         {
-            if (!create) throw new InvalidOperationException("目录不存在：" + full + "。可以改用「新建并切换」来创建它。");
+            if (!create) throw new InvalidOperationException(L.Pick("目录不存在：", "Directory does not exist: ") + full + L.Pick("。可以改用「新建并切换」来创建它。", ". Use \"Create and switch\" to create it."));
             Directory.CreateDirectory(full);
         }
         // Switching never stops a run: the previous workspace keeps its agents, jobs and journals.
@@ -794,9 +839,9 @@ internal sealed class WebUiSession : IAsyncDisposable
     private bool OpenPath(string path)
     {
         var raw = (path ?? string.Empty).Trim().Trim('"');
-        if (raw.Length == 0) throw new ArgumentException("路径为空。");
+        if (raw.Length == 0) throw new ArgumentException(L.Pick("路径为空。", "The path is empty."));
         var full = Path.GetFullPath(raw, _current.Workspace);
-        if (!File.Exists(full) && !Directory.Exists(full)) throw new FileNotFoundException($"找不到路径：{full}");
+        if (!File.Exists(full) && !Directory.Exists(full)) throw new FileNotFoundException(L.Pick($"找不到路径：{full}", $"Path not found: {full}"));
         return PathOpener.Open(full);
     }
 
@@ -833,9 +878,13 @@ internal sealed class WebUiSession : IAsyncDisposable
     private SessionControlState ControlState()
     {
         var running = _current.Agents.HasActiveRuns || _current.Tasks.Active || RunningList().Count > 0;
-        if (_controls == null) return new SessionControlState("restricted", "限制模式", "auto", "首次任务时验证", running);
+        if (_controls == null) return new SessionControlState("restricted", L.Pick("限制模式", "Restricted"), "auto", L.Pick("首次任务时验证", "Verified on the first task"), running);
         return _controls.Snapshot() with { Running = running };
     }
+
+    /// <summary>Broadcasts a host-side permission change (plan approval, terminal command) so every
+    /// connected page updates its picker without waiting for a reload.</summary>
+    private void PushControls() => _pusher.Push(JsonSerializer.Serialize(new { type = "session.controls", data = ControlState() }, JsonOptions.Default));
 
     private async Task<InstalledPlugin> Adopt(InstalledPlugin installed, CancellationToken ct)
     {
@@ -848,9 +897,9 @@ internal sealed class WebUiSession : IAsyncDisposable
 
     private static string WriteImportFile(PluginImportParams parameters)
     {
-        if (parameters.Base64.Length > 90_000_000) throw new InvalidDataException("插件包超过 64MB。");
+        if (parameters.Base64.Length > 90_000_000) throw new InvalidDataException(L.Pick("插件包超过 64MB。", "The plugin package exceeds 64 MB."));
         var name = Path.GetFileName(parameters.FileName);
-        if (string.IsNullOrWhiteSpace(name) || !name.EndsWith(".nupkg", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("请选择 .nupkg 插件包。");
+        if (string.IsNullOrWhiteSpace(name) || !name.EndsWith(".nupkg", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException(L.Pick("请选择 .nupkg 插件包。", "Choose a .nupkg plugin package."));
         var path = Path.Combine(Path.GetTempPath(), "allagent-plugin-" + Guid.NewGuid().ToString("N") + ".nupkg");
         File.WriteAllBytes(path, Convert.FromBase64String(parameters.Base64));
         return path;

@@ -12,13 +12,18 @@ public sealed class MontyProcessSandbox(AgentOptions options) : ICodeSandbox
     private readonly SemaphoreSlim _gate = new(1, 1);
     private bool _disposed;
     private string? _python;
+    private bool _prepared;
     private const string Guidance = """
         Active sandbox: Monty (no hardware virtualization required). Each execution has fresh state.
         Only a subset of Python is implemented. Use simple functions, loops, lists and dicts.
-        Do not assume CPython's os.path or host filesystem APIs exist. Use file tools for paths and metadata; an AttributeError for a module member indicates an unsupported sandbox API.
-        Modules are not automatically imported. Write import json before using json.loads or json.dumps in each execution.
-        No third-party imports, struct, generators/yield, inheritance or match. Unsupported modules fail at runtime.
-        There are no filesystem mounts or network capabilities. Use call_tool(name, **kwargs) for ALL host I/O.
+        Shared standard-library modules for both sandboxes: base64, binascii, collections, copy, dataclasses, functools, itertools, json, math, os, random, re, sys, time, typing, unicodedata.
+        Monty additionally supports asyncio, datetime and pathlib, but the Hyperlight guest does not; keep portable code inside the shared list.
+        Import every module inside each execution before use, for example: import json. Monty has no automatic import and no sys.modules cache.
+        Common CPython modules that are NOT available: argparse, array, bisect, csv, decimal, enum, fractions, hashlib, heapq, hmac, http, inspect, io, logging, operator, pickle, socket, string, struct, subprocess, tempfile, threading, tomllib, traceback, unittest, urllib, uuid, warnings, zipfile, zlib.
+        Do not assume CPython's full os.path or host filesystem APIs. os exists for path manipulation only; there are no filesystem mounts and no network. Use call_tool(name, **kwargs) for ALL host I/O and external data.
+        Host-side automation belongs to the host tools, primarily powershell_script on Windows; Python is the small data-processing and orchestration layer, not a replacement for PowerShell modules, registry, services, processes or network access.
+        No third-party imports, struct, generators/yield, inheritance or match. Do not use pip, uv, conda or host Python. Unsupported modules fail at runtime with ModuleNotFoundError.
+        After a failed import do not retry a different module name: use the matching host tool or implement the logic with the shared modules above.
         call_tool returns the standard AllAgent ok/data/error/truncated object. Print essential output.
         Host Python libraries are separate and remain accessible only through approved host tools.
         """;
@@ -26,11 +31,15 @@ public sealed class MontyProcessSandbox(AgentOptions options) : ICodeSandbox
     public async Task<CodeSandboxContext?> PrepareAsync(IReadOnlyList<AgentToolDescriptor> tools, CancellationToken ct)
     {
         await EnsureInstalledAsync(ct);
+        if (_prepared) return Context();
         var probe = await ExecuteAsync("print(1 + 1)", tools,
             (_, _, _) => new(ToolResult.Failure("Host calls unavailable during preparation.")), ct);
         if (!probe.Ok) throw new InvalidOperationException(probe.Error);
-        return new(Guidance, "Execute Python subset in an isolated Monty interpreter.");
+        _prepared = true;
+        return Context();
     }
+    private static CodeSandboxContext Context() => new(Guidance, "Execute Python subset in an isolated Monty interpreter.")
+    { Capabilities = new("monty", false, false, false, false) };
 
     private async Task EnsureInstalledAsync(CancellationToken ct)
     {
@@ -76,9 +85,10 @@ public sealed class MontyProcessSandbox(AgentOptions options) : ICodeSandbox
             deadline.CancelAfter(options.SandboxStartupTimeout);
             var stderr = BoundedProcess.DrainAsync(worker.StandardError, 4000, CancellationToken.None);
             var active = Stopwatch.StartNew();
-            async Task Send(object message)
+            var executionId = Guid.NewGuid().ToString("N");
+            async Task Send(object message, string? callId = null)
             {
-                await worker.StandardInput.WriteLineAsync(JsonSerializer.Serialize(message, ToolResult.JsonOptions).AsMemory(), deadline.Token);
+                await worker.StandardInput.WriteLineAsync(SandboxProtocol.Encode(message, executionId, callId).AsMemory(), deadline.Token);
                 await worker.StandardInput.FlushAsync(deadline.Token);
             }
             try
@@ -89,10 +99,9 @@ public sealed class MontyProcessSandbox(AgentOptions options) : ICodeSandbox
                 deadline.CancelAfter(budget);
                 while (true)
                 {
-                    var line = await worker.StandardOutput.ReadLineAsync(deadline.Token);
-                    if (line == null) throw new IOException("Monty worker exited: " + (await stderr).Text);
-                    using var message = JsonDocument.Parse(line);
+                    using var message = await SandboxProtocol.ReadAsync(worker.StandardOutput.BaseStream, deadline.Token);
                     var root = message.RootElement;
+                    SandboxProtocol.Validate(root, executionId);
                     switch (root.GetProperty("kind").GetString())
                     {
                         case "call":
@@ -106,7 +115,7 @@ public sealed class MontyProcessSandbox(AgentOptions options) : ICodeSandbox
                             var remaining = budget - active.Elapsed;
                             if (remaining <= TimeSpan.Zero) throw new OperationCanceledException(deadline.Token);
                             deadline.CancelAfter(remaining);
-                            await Send(new { kind = "tool_result", result = reply });
+                            await Send(new { kind = "tool_result", result = reply }, root.GetProperty("callId").GetString());
                             break;
                         case "result":
                             return root.GetProperty("result").Deserialize<ToolResult>(ToolResult.JsonOptions) ?? ToolResult.Failure("Invalid Monty result.");

@@ -4,7 +4,10 @@ namespace AllAgent.NET.Core.Tools;
 
 public partial class SystemTools
 {
-    [AgentTool("everything_search"), Description("Fast Windows file/folder NAME search using the bundled portable Everything indexer (no install, no admin). query is literal text or a wildcard such as *.pdf, not Everything operators. Does not read contents or respect .gitignore; use file_search for code. Path defaults to the workspace; external directories need approval. Page with nextOffset when hasMore=true.")]
+    // Not registered as a model tool: file_search(names_only=true) covers name searches through
+    // ripgrep. The bundled Everything engine stays in the package for hosts that prefer the
+    // Windows-only index; restoring [AgentTool("everything_search")] plus a Description is the
+    // only change needed to expose it again.
     public async Task<ToolResult> SearchEverythingAsync(
         [Description("Nonempty filename text or wildcard, e.g. invoice, *.pdf or *合同*.docx")] string query,
         [Description("Directory to search recursively; '.' is workspace. Use an explicit drive/directory for broader searches")] string path = ".",

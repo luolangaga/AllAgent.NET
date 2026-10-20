@@ -5,6 +5,7 @@ import { formatRelative, taskIsActive, taskState, taskStateLabel, taskStateTone 
 import { useStore } from '@/lib/store'
 import { useTasksStore } from '@/stores/tasks'
 import { parseArguments } from '@/utils/execution'
+import { useT, t } from '@/i18n'
 import type { BackgroundTask, ToolCall } from '@/types'
 
 /** Expected children parsed from the call's arguments while the task list has not caught up. */
@@ -26,17 +27,17 @@ function clip(text: string): string {
 
 /** The live step line shown under a row, mirroring the tasks page wording. */
 function stepLine(task: BackgroundTask): string {
-  if (taskIsActive(task.state)) return task.currentStep ? `当前步骤：${task.currentStep}` : '等待执行'
-  if (taskState(task.state) === 'failed') return task.error ? clip(task.error) : '执行失败'
-  if (taskState(task.state) === 'cancelled') return '已停止'
-  return task.finalOutput ?? task.output ? clip(task.finalOutput ?? task.output ?? '') : '已完成'
+  if (taskIsActive(task.state)) return task.currentStep ? t('当前步骤：', 'Current step: ') + task.currentStep : t('等待执行', 'Waiting to run')
+  if (taskState(task.state) === 'failed') return task.error ? clip(task.error) : t('执行失败', 'Execution failed')
+  if (taskState(task.state) === 'cancelled') return t('已停止', 'Stopped')
+  return task.finalOutput ?? task.output ? clip(task.finalOutput ?? task.output ?? '') : t('已完成', 'Completed')
 }
 
 function summary(rows: BackgroundTask[]): string {
   const active = rows.filter(task => taskIsActive(task.state)).length
   const done = rows.filter(task => taskState(task.state) === 'completed').length
-  if (active) return `${rows.length} 个子任务 · ${done} 完成 · ${active} 进行中`
-  return `${rows.length} 个子任务 · ${done} 完成`
+  if (active) return t(`${rows.length} 个子任务 · ${done} 完成 · ${active} 进行中`, `${rows.length} child tasks · ${done} done · ${active} active`)
+  return t(`${rows.length} 个子任务 · ${done} 完成`, `${rows.length} child tasks · ${done} done`)
 }
 
 /**
@@ -44,6 +45,7 @@ function summary(rows: BackgroundTask[]): string {
  * their live step here and every row opens the shared task-detail dialog.
  */
 export function SubagentCard({ call }: { call: ToolCall }) {
+  const tr = useT()
   const tasks = useStore(useTasksStore)
   const running = call.status === 'running'
   // A chat page can render cards before the task list has ever loaded, and the child task may
@@ -64,12 +66,12 @@ export function SubagentCard({ call }: { call: ToolCall }) {
   return <div className="subagent-card">
     <div className="subagent-card-head">
       <Users aria-hidden className="tool-icon" size={15} />
-      <span className="subagent-title">子代理</span>
+      <span className="subagent-title">{tr('子代理', 'Child agents')}</span>
       {call.rejected
-        ? <span className="subagent-note">已拒绝</span>
+        ? <span className="subagent-note">{tr('已拒绝', 'Rejected')}</span>
         : related.length
           ? <span className="subagent-count">{summary(related)}</span>
-          : <span className="subagent-count">{running ? '正在派生…' : '已结束'}</span>}
+          : <span className="subagent-count">{running ? tr('正在派生…', 'Dispatching…') : tr('已结束', 'Finished')}</span>}
       {running ? <StatusDot animate size="sm" tone="active" /> : null}
     </div>
     <div className="subagent-rows">
@@ -93,7 +95,7 @@ export function SubagentCard({ call }: { call: ToolCall }) {
           <StatusDot animate={running} size="sm" tone={running ? 'active' : 'neutral'} />
           <span className="subagent-row-main">
             <span className="subagent-row-title">{row.title}</span>
-            <span className="subagent-row-detail">{running ? '准备中…' : '没有留下任务记录'}</span>
+            <span className="subagent-row-detail">{running ? tr('准备中…', 'Preparing…') : tr('没有留下任务记录', 'No task record was left')}</span>
           </span>
         </div>)}
     </div>

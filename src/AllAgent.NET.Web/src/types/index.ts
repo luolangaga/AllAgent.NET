@@ -67,6 +67,17 @@ export interface Message {
   images?: ImageAttachment[] | null
 }
 
+/** How input submitted during a run is delivered: steer the current turn or wait for idle. */
+export type InputDelivery = 'steer' | 'queue'
+
+/** A prompt parked in the host inbox while a turn is already running. */
+export interface PendingInput {
+  id: string
+  draft: string
+  delivery: InputDelivery
+  createdAt: string
+}
+
 /** Inline image carried by a user message. */
 export interface ImageAttachment {
   name: string
@@ -82,6 +93,23 @@ export interface WorkspaceFileEntry {
 }
 
 export type ToolCallStatus = 'running' | 'done' | 'error' | 'cancelled'
+
+/** Host-neutral card a tool attached to ToolResult.Card; both the collapsed row and the body use it. */
+export interface AgentToolCardField {
+  label: string
+  value: string
+  tone?: 'ok' | 'error' | 'add' | 'del' | 'muted' | string | null
+}
+
+export interface AgentToolCard {
+  badge?: string | null
+  title?: string | null
+  summary?: string | null
+  body?: 'text' | 'code' | 'paths' | 'search' | 'json' | string | null
+  text?: string | null
+  paths?: string[] | null
+  fields?: AgentToolCardField[] | null
+}
 
 export interface ToolCall {
   id: string
@@ -135,13 +163,19 @@ export interface ApiConfig {
   effectiveMaxTokens?: number
 }
 
+export type Language = 'zh' | 'en'
+/** Persisted preference; auto follows the operating system language. */
+export type LanguageSetting = 'auto' | Language
+
 export interface AppSettings {
   browserUseEnabled: boolean
   browserUseMode: 'builtin' | 'chromium'
   browserExecutablePath: string
   browserCdpUrl: string
   theme: 'light' | 'dark' | 'system'
-  language: 'zh' | 'en'
+  language: LanguageSetting
+  /** Resolved by the host so auto follows the same system language in TUI and GUI. */
+  languageResolved: Language
   defaultModel: string
   streamingEnabled: boolean
   defaultProviderId: string
@@ -238,6 +272,29 @@ export interface ApprovalRequest {
   requiresExplicitApproval?: boolean
 }
 
+export type PlanStatus = 'proposed' | 'approved' | 'rejected'
+
+/** The latest plan stored with a conversation. Markdown is the single content source. */
+export interface PlanDocument {
+  id: string
+  title: string
+  markdown: string
+  status: PlanStatus | string
+  feedback?: string | null
+  createdAt: string
+  decidedAt?: string | null
+}
+
+/** A plan waiting for the person to approve or reject it. */
+export interface PlanProposalRequest {
+  id: string
+  conversationId?: string
+  title: string
+  markdown: string
+  status: PlanStatus | string
+  createdAt: string
+}
+
 export interface AgentQuestionRequest {
   id: string
   question: string
@@ -282,7 +339,7 @@ export interface RunningConversation {
   workspace: string
   workspaceName: string
   dataDirectory: string
-  state: 'running' | 'awaiting-approval' | 'awaiting-answer' | string
+  state: 'running' | 'awaiting-approval' | 'awaiting-answer' | 'awaiting-plan' | string
 }
 
 export interface SessionControlState {
@@ -410,7 +467,7 @@ export interface AuthProviderInfo {
   pending?: boolean
 }
 
-// Tool catalog entry with source attribution (host / plugin package / MCP server / skill).
+// Tool catalog entry with source attribution (host / plugin package / MCP server / skill / on-demand).
 export interface ToolInfo {
   name: string
   description: string
@@ -481,12 +538,21 @@ export interface PluginWebSettingField {
   type?: string
   options?: string[] | null
   default?: string | null
+  description?: string | null
+  placeholder?: string | null
 }
 
 export interface PluginWebSettingsSection {
   id: string
   title: string
   fields?: PluginWebSettingField[] | null
+  /** Optional plugin-rendered frame for status and actions, shown below the native fields. */
+  entry?: string | null
+}
+
+export interface PluginSettingsSnapshot {
+  packageId: string
+  values: Record<string, string>
 }
 
 export interface PluginWebComposerAction {

@@ -35,7 +35,7 @@
 | 会话 | 恢复、搜索、命名、分支、历史、JSON 导出 | 持久化与深复制测试 |
 | 上下文 | 底栏 xk/xk，API usage / 明确估算，按模型保存容量预设和自由输入；自动总结保留原历史，手动压缩归档，AGENTS.md | 三种厂商实际用量解析、缓存输入、容量持久化、总结恢复 |
 | 文件引用 | `@path` 或 `@"path with spaces"`；后台索引补全、缓存刷新保留候选、独立滚轮与点击；有界预览自动加入任务 | 越界/不存在拒绝、4000 字符限制；索引复用测试和真实候选滚轮/点击验收 |
-| 只读规划 | Tab、`/plan`、`/permissions plan`；拒绝写入/Shell/MCP | 主机审批边界，不依赖模型听话 |
+| 计划模式 | Shift+Tab、`/plan`、`/permissions plan`；只读调研，`plan_propose` 提交 Markdown 计划；TUI 用 Markdown 审批，Web 用 HTML 审批卡片；批准后切换完全访问并继续执行 | 主机审批边界；计划持久化、刷新重放与同回合执行测试 |
 | 撤销/重做 | `/diff`、`/checkpoints`、`/undo`、`/redo`；文件工具和对话快照 | 跨重启、原始 BOM/换行、多次写入、冲突预检、中断测试 |
 | 主题 | `/themes night|warm|light`，持久化选择 | 相同真实布局组件生成的 HTML 渲染预览 |
 | 沙箱与审计 | 实际 Hyperlight；源生成器 Schema；AST 限制；结构化结果和审计 | 实际 microVM 回调、恢复、取消、超时、输出上限 |

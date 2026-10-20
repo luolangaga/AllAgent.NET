@@ -11,8 +11,8 @@ public partial class SystemTools
 {
     private static readonly string[] SearchIgnored = [".git", "bin", "obj", "node_modules", ".venv", "__pycache__", ".mimosa", "dist", ".allagent"];
 
-    [AgentTool("file_search"), Description("Search text using ripgrep, respecting .gitignore and skipping symlinks, binary files and build/cache directories. No file-size or scan-time cap. Returns 1-based line numbers and bounded context. nextOffset pages matches; linesTruncated/contextTruncated indicate clipped output. Requires installed rg.")]
-    public async Task<ToolResult> SearchFilesAsync([Description("Nonempty text or ripgrep regex")] string pattern,
+    [AgentTool("file_search"), Description("Search text with ripgrep (default) or list file names with names_only=true. Content mode respects .gitignore, skips symlinks, binary files and build/cache directories, and returns 1-based line numbers with bounded context. Name mode lists files whose name matches file_pattern without reading contents; pattern then filters names (literal text, or regex when regex=true) and may be empty. Both page with nextOffset; linesTruncated/contextTruncated indicate clipped output. Requires installed rg.")]
+    public async Task<ToolResult> SearchFilesAsync([Description("Content mode: nonempty text or ripgrep regex. Name mode: optional name filter (literal text, or regex when regex=true); empty lists every file matching file_pattern")] string pattern = "",
         [Description("File or directory path; '.' is workspace root")] string path = ".",
         [Description("Enable ripgrep regular expressions")] bool regex = false,
         [Description("Case-sensitive matching")] bool case_sensitive = false,
@@ -21,10 +21,11 @@ public partial class SystemTools
         [Description("Nonnegative requested matching-line count; 0 means unlimited matches. Output is still paginated by budget")] int limit = 50,
         [Description("Nonnegative number of matching lines to skip")] int offset = 0,
         [Description("Bypass ignore rules and include build/cache directories")] bool include_ignored = false,
+        [Description("List file names instead of matching contents: find files by file_pattern/pattern without reading them; directories are not listed")] bool names_only = false,
         CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-        if (string.IsNullOrWhiteSpace(pattern)) return ToolResult.Failure("pattern must be nonempty.");
+        if (!names_only && string.IsNullOrWhiteSpace(pattern)) return ToolResult.Failure("pattern must be nonempty; pass names_only=true to list files by name instead.");
         if (string.IsNullOrEmpty(file_pattern)) return ToolResult.Failure("file_pattern must be nonempty.");
         if (context_lines < 0) return ToolResult.Failure("context_lines must be nonnegative.");
         if (limit < 0) return ToolResult.Failure("limit must be nonnegative (0 means unlimited matches).");
@@ -33,6 +34,7 @@ public partial class SystemTools
         var root = workspace.Resolve(path);
         if (!File.Exists(root) && !Directory.Exists(root)) return ToolResult.Failure("Search path does not exist.");
         var scope = Directory.Exists(root) ? root : Path.GetDirectoryName(root)!;
+        if (names_only) return await SearchNamesAsync(path, root, scope, pattern, regex, case_sensitive, file_pattern, pageLimit, offset, include_ignored, ct);
         var candidates = new List<(string Path, int Line, string Text)>(); var found = 0; var hasMore = false; var linesTruncated = false;
         var filter = GlobExpression(file_pattern, !case_sensitive);
         var pathFilter = file_pattern.Contains('/') || file_pattern.Contains('\\');
@@ -106,6 +108,44 @@ public partial class SystemTools
     }
 
     private sealed record SearchContext(int line, string text, bool match);
+
+    /// <summary>Name search: rg --files (ignore rules, no link traversal) plus the same glob/name filtering as content mode.</summary>
+    private async Task<ToolResult> SearchNamesAsync(string path, string root, string scope, string pattern, bool regex, bool caseSensitive,
+        string filePattern, int pageLimit, int offset, bool includeIgnored, CancellationToken ct)
+    {
+        var filter = GlobExpression(filePattern, !caseSensitive);
+        var pathFilter = filePattern.Contains('/') || filePattern.Contains('\\');
+        var nameFilter = regex && !string.IsNullOrWhiteSpace(pattern)
+            ? new Regex(pattern, RegexOptions.NonBacktracking | (caseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase))
+            : null;
+        var textFilter = nameFilter == null && !string.IsNullOrWhiteSpace(pattern) ? pattern : null;
+        var comparison = caseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+        var files = new List<string>(); var seen = 0; var hasMore = false; var outputBytes = 0; var outputTruncated = false;
+        var args = RipgrepArgs(includeIgnored); args.AddRange(["--files", "--", root]);
+        var run = await RunRipgrepAsync(args, value =>
+        {
+            if (string.IsNullOrWhiteSpace(value)) return true;
+            string target;
+            try { target = Path.GetFullPath(value); } catch { return true; }
+            // rg --no-follow never traverses links; listing still stays inside the approved scope.
+            if (!ExternalDirectoryPermissions.Contains(scope, target)) return true;
+            var name = Path.GetFileName(target);
+            if (!filter.IsMatch(pathFilter ? Path.GetRelativePath(scope, target).Replace('\\', '/') : name)) return true;
+            var matchesName = nameFilter != null ? nameFilter.IsMatch(name) : textFilter == null || name.IndexOf(textFilter, comparison) >= 0;
+            if (!matchesName) return true;
+            if (seen++ < offset) return true;
+            if (files.Count == pageLimit) { hasMore = true; return false; }
+            var relative = Path.GetRelativePath(workspace.Root, target).Replace('\\', '/');
+            var size = Encoding.UTF8.GetByteCount(JsonSerializer.Serialize(relative, ToolResult.JsonOptions)) + 2;
+            if (outputBytes + size > ToolOutputWindow.MaxBytes) { outputTruncated = true; hasMore = true; return false; }
+            outputBytes += size; files.Add(relative);
+            return true;
+        }, ct);
+        if (run.Error != null) return ToolResult.Failure(run.Error);
+        return ToolResult.Success(new { mode = "names", pattern, path, file_pattern = filePattern, files,
+            nextOffset = offset + files.Count, hasMore, outputTruncated,
+            notice = hasMore ? $"Continue with offset={offset + files.Count}." : "Search complete." }, hasMore);
+    }
 
     private static List<string> RipgrepArgs(bool includeIgnored)
     {

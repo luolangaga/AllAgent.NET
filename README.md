@@ -1,85 +1,219 @@
 <div align="center">
 
+<img src="docs/screenshots/allagent-logo.png" width="104" alt="AllAgent.NET logo" />
+
 # AllAgent.NET
+
+**A Windows-native AI agent that stops fighting PowerShell.**
+
+CodeAct · Windows Computer Use · bundled PowerShell 7.6 · TUI + GUI
 
 [![Release](https://img.shields.io/github/v/release/luolangaga/AllAgent.NET?style=for-the-badge&labelColor=1f2937&color=3b82f6&logo=github&logoColor=white)](https://github.com/luolangaga/AllAgent.NET/releases/latest)
 [![NuGet](https://img.shields.io/nuget/v/AllAgent.NET.Terminal?style=for-the-badge&labelColor=1f2937&color=8b5cf6&logo=nuget&logoColor=white)](https://www.nuget.org/packages/AllAgent.NET.Terminal)
-[![Platform](https://img.shields.io/badge/Windows-x64-0078d6?style=for-the-badge&labelColor=1f2937&logo=windows&logoColor=white)](#环境要求)
-[![.NET](https://img.shields.io/badge/.NET-10-512bd4?style=for-the-badge&labelColor=1f2937&logo=dotnet&logoColor=white)](#从源码构建)
-[![License](https://img.shields.io/badge/License-GPL--3.0--only-0078d6?style=for-the-badge&labelColor=1f2937)](LICENSE)
+[![NuGet downloads](https://img.shields.io/nuget/dt/AllAgent.NET.Terminal?style=for-the-badge&labelColor=1f2937&color=8b5cf6&logo=nuget&logoColor=white)](https://www.nuget.org/packages/AllAgent.NET.Terminal)
+[![Stars](https://img.shields.io/github/stars/luolangaga/AllAgent.NET?style=for-the-badge&labelColor=1f2937&color=f59e0b&logo=github&logoColor=white)](https://github.com/luolangaga/AllAgent.NET/stargazers)
+[![Issues](https://img.shields.io/github/issues/luolangaga/AllAgent.NET?style=for-the-badge&labelColor=1f2937&color=ef4444&logo=github&logoColor=white)](https://github.com/luolangaga/AllAgent.NET/issues)
+[![Platform](https://img.shields.io/badge/Windows-x64-0078d6?style=for-the-badge&labelColor=1f2937&logo=windows&logoColor=white)](#requirements)
+[![.NET](https://img.shields.io/badge/.NET-10-512bd4?style=for-the-badge&labelColor=1f2937&logo=dotnet&logoColor=white)](#build-from-source)
+[![License](https://img.shields.io/badge/License-GPL--3.0--only-22c55e?style=for-the-badge&labelColor=1f2937)](LICENSE)
+[![CodeAct](https://img.shields.io/badge/CodeAct-Python%20orchestration-0ea5e9?style=for-the-badge&labelColor=1f2937)](#the-comparison)
+[![Sandbox](https://img.shields.io/badge/Sandbox-Hyperlight%20%C2%B7%20Monty-14b8a6?style=for-the-badge&labelColor=1f2937)](#the-comparison)
 
-**在 Windows 上，用一句自然语言驱动你的开发工作流。**
-
-面向 Windows 本机开发的终端 AI Agent：它读写工作区文件、调用本机开发工具、运行验证，并把模型生成的计算代码放进隔离沙箱执行。
-
-[快速开始](#快速开始) · [核心能力](#核心能力一览) · [安全与隔离](#安全与隔离) · [开发与构建](#开发与构建) · [文档](#更多文档) · [许可证](#许可证)
+**English** · [简体中文](README.zh-CN.md)
 
 </div>
 
 ---
 
-## 核心能力一览
+## AI is fighting PowerShell again
 
-- **CodeAct 执行**：模型只拿到一个 `execute_code` 工具，用 Python 组织步骤；文件、搜索、Shell 等 I/O 全部回到 C# 宿主工具。见 [CodeAct 与 Hyperlight 接入](docs/codeact.zh-CN.md)。
-- **沙箱双后端**：优先 Hyperlight 微虚拟机，初始化失败自动切换到 Monty 软件沙箱；两个后端都不可用时阻止执行。
-- **本机工具**：`run_shell` 通过随包的 PowerShell SDK worker 调度受信程序；`powershell_script` 在具名持久会话中执行 PowerShell 代码并返回结构化对象。见 [宿主工具](docs/host-tools.zh-CN.md) 与 [PowerShell 持久会话](docs/powershell-session.zh-CN.md)。
-- **文件与搜索**：`file_read` / `file_write` / `file_edit` / `list_directory`；按名称查找用内置 Everything 便携索引（`everything_search`），按内容搜索用 ripgrep（`file_search`）。见 [文件搜索](docs/file-search.zh-CN.md)。
-- **会话与子代理**：历史分支、时间线、检查点与撤回；子代理提供调查、修改、审查、验证等角色，支持单任务、并行和串行链派发。见 [子代理配置](docs/subagent-configuration.zh-CN.md)。
-- **浏览器与桌面操作**：Browser Use 由 C# 实现，走内置 WebView2 或外置 Chrome/Edge，`web_search` 借它打开搜索页取结果、`web_fetch` 读取网页正文；Computer Use 用 FlaUI 操作 Windows 界面，无需开关，技能按需加载。
-- **三种界面**：终端（Spectre.Console）、`/web-ui` 浏览器工作台、`allagent gui` 原生窗口（WPF + WebView2），共享同一份工作区、会话与权限。
-- **Web 工作台三件套**：顶栏浮窗提供工作区文件预览、完整的 Git 管理（源代码管理布局、AI 生成提交信息、彩色提交图、分支/贮藏/推送拉取）和集成终端（ConPTY + xterm.js，多标签且刷新不中断）。见 [Web 工作台：文件、Git 与终端](docs/webui-files-git-terminal.zh-CN.md)。
-- **插件 Web 扩展**：插件通过 `allagent-plugin.json` 的 `web` 块向工作台贡献页面、自定义工具卡与命令面板入口；插件界面在独立源的沙箱 iframe 中自绘（任意框架），经 SDK 双向通信并实时同步主题与上下文。见 [插件 Web 前端扩展](docs/plugin-web-ui.zh-CN.md)。
-- **多模型**：OpenAI Chat / Responses、Anthropic、Gemini、Ollama，以及兼容 OpenAI 协议的服务；也可用 `login` 登录受支持的账号或插件。
+Ask a traditional agent to do something real on Windows and it will often emit a 100-line PowerShell script. It mixes `cmd` and PowerShell syntax, forgets `-ErrorAction`, quotes a path with spaces incorrectly, or trips over encoding. Then it retries with another giant script. Every retry costs time and tokens.
 
-## 为什么适合在 Windows 上工作
+The same agents usually have three more problems:
 
-### 直接调用已安装的开发工具
+- **No native Computer Use on Windows.** They stop at the shell, or rely on fragile Python automation.
+- **A heavy runtime before the first task.** Electron/Node agents bundle Chromium and Node; Python-based agents add another interpreter.
+- **One JSON tool call per step.** A complex task becomes a long chain of model round trips.
 
-`git`、`rg`、`dotnet`、`node` 以及 `npm` / `npx` / `pnpm` / `yarn` 会被自动发现为可信别名，可直接检查 .NET 项目、修复构建、整理代码并跑验证；其他程序用 `--allow-shell 别名=绝对可执行文件路径` 加入可信列表。工具卡片显示实际参数、工作目录和结果。
+AllAgent.NET was built to remove these four problems. It is a .NET agent for real Windows workflows: CodeAct orchestration, native Computer Use, a bundled PowerShell 7.6 environment, and a TUI plus GUI that share the same kernel.
 
-### 隔离模型代码，保留宿主工具能力
+## The comparison
 
-模型的计算代码在沙箱里运行，文件、网络和进程操作通过受控工具交回宿主；每次执行使用干净会话。Monty 默认不挂载宿主文件、不开放网络，只通过 `call_tool` 桥接 C# 工具，并限制内存（128 MiB）、时间与输出。
+| Problem | Traditional tool-calling agent | AllAgent.NET |
+|---|---|---|
+| **Complex Windows task** | Model writes a long PowerShell script; quoting and encoding errors; retries | Model writes one Python CodeAct program; typed host tools do the Windows work |
+| **Complex task cost** | One JSON tool call per step; many model round trips | One orchestration program; fewer round trips and fewer tokens |
+| **Windows automation** | Often none, or Python `pyautogui` / `uiautomation` | 12 `computer_*` tools on FlaUI / UIA3, plus browser control |
+| **PowerShell** | `powershell.exe -Command "..."` strings; encoding problems | In-process .NET + bundled PowerShell 7.6 SDK; typed objects |
+| **Runtime footprint** | Electron/Node + Python + bundled Chromium | .NET host + system WebView2 + one shared runtime |
+| **UI** | Chat only, or an IDE plugin | TUI, GUI, and Web workbench share one kernel |
+| **Git and terminal** | Separate apps | Built-in Git panel and integrated terminal |
+| **Extensibility** | MCP/tools with their own auth and config | .NET plugins, distributed as NuGet packages |
 
-### Windows 路径与目录授权交给宿主
+## Seven advantages
 
-文件工具由 C# 宿主解析路径，默认围绕当前工作区；访问外部目录时按权限模式询问，可以只允许本次，也可以在会话内记住该目录。Windows 备用数据流（ADS）会被拒绝。处理 `C:\Projects\...` 这类本机路径时，边界规则明确。
+### 1. CodeAct: one Python program instead of a chain of JSON tool calls
 
-### 截图可以直接进入对话
+A normal agent calls tools through JSON. If you ask it to read a file, analyze the content, and save the result, it may need three or more tool calls — and three or more model round trips.
 
-复制 Windows 截图后，在输入框按 **Ctrl+V** 或 **Shift+Insert** 暂存图片，回车提交给支持视觉的模型；也可以直接引用路径：
+With CodeAct, the model writes one Python program that performs the whole sequence. The program does not need to be a long PowerShell script, and it does not need Git Bash or a POSIX shell to make the script work. It calls typed host tools for the actual Windows operations: read the file, run the command, write the result. The model handles the orchestration; the host handles the side effects.
 
-```text
-帮我分析这个报错 @截图.png
-检查这张界面的排版 @"C:\Pictures\界面截图.png"
+```
+Model → execute_code (Python orchestration) → host tools (C#) → Windows
 ```
 
-图片随消息一起提交给支持视觉的模型，排查窗口报错和界面问题不必另开网页上传。
+This is the main reason CodeAct exists:
 
-### 环境问题在动手前暴露
+- **It stops the model from writing complex PowerShell.** The model no longer has to produce a fragile 100-line script with quoting, encoding, and `cmd`/PowerShell syntax mixed together. The host tool receives paths and arguments as data.
+- **It reduces token consumption on complex tasks.** There is no repeated JSON tool-call envelope, no giant PowerShell script in the prompt or response, and fewer retries caused by quoting errors.
+- **It keeps one permission boundary.** Every side effect still passes through a typed C# host tool, so approvals, path rules, and audit are not scattered across tools.
 
-`allagent doctor` 检查 Browser Use / WebView2、宿主 Python 3.10–3.14、内嵌 PowerShell SDK、ripgrep、PowerShell 能力、执行模式与工作区；`doctor --install` 在确认后通过 winget 补齐 Python 和 ripgrep。缺少必需环境时，Agent 会停止执行并说明原因，避免把配置错误当成任务失败。
+### 2. Windows Computer Use and browser control
 
-## 快速开始
+Most agents on Windows stop at the shell. Native desktop automation is missing because it needs UIA/FlaUI integration, window and session management, and per-action approvals — not just another Python package.
 
-### 环境要求
+AllAgent.NET includes it:
 
-| 项目 | 要求 |
+- **12 `computer_*` tools** built on FlaUI / UIA3.
+- **Three modes**: `background` (UIA semantic actions, no focus), `foreground` (physical keyboard and mouse), and `isolated` (a separate Windows session worker).
+- **Browser control**: embedded WebView2 or external Chrome/Edge, implemented in C#. No Python browser library and no extra Chromium download.
+- **Approval and audit**: desktop actions still go through the same host gateway.
+
+### 3. A real PowerShell 7.6 environment, hosted by .NET
+
+PowerShell and this app are both .NET. That is not a coincidence:
+
+- The app ships a bundled, nearly complete PowerShell 7.6.x environment, including its modules. You do not need a system PowerShell installation, and it does not fall back to PowerShell 5.1.
+- The PowerShell worker hosts the engine directly in a .NET process through `System.Management.Automation` and a runspace. Paths, arguments, and results stay typed objects. Nothing is re-encoded through `powershell.exe -Command "..."`, so the classic quoting and encoding failures disappear.
+- `powershell_script` runs in named persistent sessions. Variables, functions, imports, and the working directory survive between calls.
+- The PowerShell management page can search PowerShell Gallery, install modules, and inspect validated exported commands.
+
+This is the difference between "call a PowerShell process and hope the string survives" and "host the PowerShell engine and exchange typed objects."
+
+### 4. Beginner-friendly TUI and GUI, installed together
+
+You do not choose between a terminal and a desktop app:
+
+- **TUI**: full-screen terminal, F1 common actions, F2 model picker, F3 sessions, Ctrl+P command search, approval cards, plan mode, and background sessions.
+- **GUI**: a native WPF + WebView2 window with the same workspace, sessions, permissions, and background tasks.
+- **One installer**: the Windows installer ships both and can create both shortcuts.
+- **Same data**: closing the window ends the host; the terminal and GUI read the same workspace data.
+
+### 5. Multiple providers
+
+The provider layer supports:
+
+- OpenAI Chat / Responses
+- Anthropic
+- Gemini
+- Ollama
+- OpenAI-compatible services
+
+Provider presets and OpenAI-compatible endpoints cover services such as CommandCode, Codex, and DeepSeek. Press F2 or use `/providers` and `/model` to switch; the terminal remembers the last choice.
+
+### 6. Git and terminal integration
+
+The GUI/Web workbench is not just a chat page:
+
+- **Workspace files**: browse and preview files, then reference them in the conversation.
+- **Git management**: staging, commits, branches, commit graph, stash, push/pull, and AI-generated commit messages.
+- **Integrated terminal**: ConPTY + xterm.js, multiple tabs, and a session that survives a page refresh.
+- **TUI equivalents**: `/diff`, `/undo`, `/redo`, `/checkpoints`, and `@file` references.
+
+### 7. Plugin extensibility
+
+Plugins are .NET packages, not a separate scripting layer:
+
+- Register tools with `[AgentTool]` and `[Description]`.
+- Extend the Web workbench through the plugin `web` block: pages, custom tool cards, and command-palette entries in a sandboxed iframe.
+- Publish plugins to NuGet or install them from the plugin manager.
+- Built-in examples include CommandCode, GitHub, WorkBuddy, and CodeGraph.
+
+## Why .NET, not Electron or Node
+
+The .NET choice is not cosmetic. It is the reason the runtime is smaller and the PowerShell integration is cleaner.
+
+| Concern | Electron/Node agent | AllAgent.NET |
+|---|---|---|
+| **UI runtime** | Bundled Chromium + Node | .NET host + system WebView2 |
+| **Agent host** | Node process | .NET process |
+| **Workers** | Separate runtimes and processes | Host and workers share one self-contained .NET runtime |
+| **PowerShell** | Subprocess and command strings | In-process `System.Management.Automation` + runspace |
+| **Windows APIs** | FFI / native addons | Direct C# / Win32 / COM / UIA |
+| **Deployment** | Ship Chromium, Node, and app | Ship one self-contained output directory |
+
+What this means in practice:
+
+- **Lower memory baseline.** There is no bundled Chromium and no Node runtime in the agent host. The GUI uses the system WebView2 runtime, and the host and workers share one .NET runtime instead of starting a new stack for every component.
+- **No PowerShell encoding roulette.** The PowerShell engine is hosted inside the .NET worker. Arguments are passed as objects, not concatenated into a command line, so paths with spaces, Unicode, and quotes do not get re-parsed by a shell.
+- **Native Windows access.** C# can call Win32, COM, UIA, WebView2, and process/job APIs directly. The same language is used for the host tools, workers, and GUI shell.
+- **Self-contained deployment.** The terminal host, GUI, browser, sandbox, PowerShell, and desktop workers live in one output directory and share one runtime.
+
+Python is still used for the execution environment (3.10–3.14), but it is not the agent host. The point is to avoid stacking Electron + Node + Python + a bundled browser before the first task.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  U[You] --> S[TUI · GUI · Web]
+  S --> K[Agent Kernel]
+  K --> E[execute_code]
+  E --> H[Hyperlight microVM]
+  E --> M[Monty fallback]
+  H --> T[C# host tools]
+  M --> T
+  T --> W[Files · Shell · PowerShell<br/>Browser · Desktop]
+  T --> A[Approvals · Audit · Checkpoints]
+```
+
+- **Agent Kernel**: Microsoft Agent Framework drives the loop, the per-call authorization gateway, the cross-surface session runtime, and scoped sub-agent handoff.
+- **CodeAct**: the CodeAct execution path exposes only `execute_code` to the model.
+- **Sandbox**: Hyperlight first, Monty fallback, execution blocked when neither is available.
+- **Host tools**: 30+ `[AgentTool]` implementations covering files, search, shell, PowerShell, browser, desktop, tasks, and plans.
+- **Data layer**: `DataStore` is the only history writer; atomic replacement, fsync, checksum read-back, and cross-process transactions.
+
+## Screenshots
+
+### TUI
+
+![AllAgent.NET TUI](docs/screenshots/tui.png)
+
+*TUI command overview, organized from the actual `allagent --help` commands. Chat, approvals, plans, and background sessions all live in the same terminal.*
+
+### GUI workbench
+
+![AllAgent.NET GUI](docs/screenshots/gui-chat.png)
+
+*GUI workbench (demo data): workspace, model configuration, conversation list, permission mode, task status, and composer in one window.*
+
+### GUI Git management
+
+![AllAgent.NET Git panel](docs/screenshots/gui-git.png)
+
+*Git management (demo data): staging, commits, branches, commit graph, stash, push/pull, and AI-generated commit messages.*
+
+> The screenshots show the current Chinese UI. "Demo data" means the page is rendered through the built-in mock transport to show layout and interaction; connect a local host to see real workspace data. The TUI image is organized from the actual `allagent --help` commands.
+
+## Quick start
+
+### Requirements
+
+| Item | Requirement |
 |---|---|
-| 系统 | Windows x64（Agent 执行目前只支持 Windows x64） |
-| .NET | 源码构建需要 .NET 10 SDK；运行时要求 .NET 10 或更高（工具已允许主版本向前滚动） |
-| Python | 3.10–3.14，需可执行；缺失或版本不符时按提示用 winget 安装 Python 3.13 |
-| 虚拟化 | Hyperlight 需要硬件虚拟化与 Windows Hypervisor Platform；没有时自动使用 Monty，无需虚拟化 |
-| PowerShell | 无需安装，随包嵌入 PowerShell SDK 7.6.7，由独立 worker 运行 |
-| ripgrep | 内容搜索依赖它，`allagent doctor --install` 可补齐 |
-| Node.js / npm | 只有构建 React 前端时需要，终端 Agent 执行不依赖 Node.js |
-| 图形界面 | 原生窗口需要 Microsoft Edge WebView2 Runtime |
+| OS | Windows x64 (agent execution currently supports Windows x64 only) |
+| .NET | .NET 10 SDK for source builds; .NET 10 or newer at runtime |
+| Python | 3.10–3.14, executable; winget can install Python 3.13 when missing or mismatched |
+| Virtualization | Hyperlight needs hardware virtualization and Windows Hypervisor Platform; without it, Monty is used automatically |
+| PowerShell | Not required separately; PowerShell SDK 7.6.x is bundled and runs in its own worker |
+| ripgrep | Required for content search; `allagent doctor --install` can install it |
+| Node.js / npm | Only needed to build the React frontend |
+| GUI | Microsoft Edge WebView2 Runtime for the native window |
 
-### 安装
+### Install
 
-**Windows 安装包（推荐）**：从 [Releases](https://github.com/luolangaga/AllAgent.NET/releases) 下载 `AllAgent.NET-<版本>-win-x64-setup.exe`。安装时可以选择创建「终端」和「桌面端」两个桌面快捷方式，并自动补齐 WebView2 运行时、Python 3.13 与 ripgrep；自包含发布，无需预装 .NET 运行时。详见 [Windows 安装包](docs/windows-installer.zh-CN.md)。
+**Windows installer (recommended)**: download `AllAgent.NET-<version>-win-x64-setup.exe` from [Releases](https://github.com/luolangaga/AllAgent.NET/releases). The installer can create "Terminal" and "Desktop" shortcuts and install WebView2, Python 3.13, and ripgrep. It is self-contained; no .NET runtime is required. See [Windows installer](docs/windows-installer.zh-CN.md).
 
-**通过 .NET Tool 安装**：
+**Install as a .NET Tool**:
 
 ```powershell
 dotnet tool install --global AllAgent.NET.Terminal
@@ -87,44 +221,44 @@ allagent --help
 allagent doctor
 ```
 
-升级或卸载：
+Upgrade or uninstall:
 
 ```powershell
 dotnet tool update --global AllAgent.NET.Terminal
 dotnet tool uninstall --global AllAgent.NET.Terminal
 ```
 
-从源码打包并用本地 NuGet 源安装的流程见 [.NET Tool 打包与安装](docs/nuget-tool.zh-CN.md)，本地构建 exe 安装包的流程见 [Windows 安装包](docs/windows-installer.zh-CN.md)。
+For local NuGet packaging and installation, see [.NET Tool packaging](docs/nuget-tool.zh-CN.md). For building the EXE installer locally, see [Windows installer](docs/windows-installer.zh-CN.md).
 
-### 首次运行与初始化
+### First run
 
 ```powershell
 allagent chat --workspace C:\Projects\MyProject
 ```
 
-第一次进入聊天会初始化环境：内嵌 PowerShell SDK worker 实际启动自检，检查 ripgrep 与宿主 Python 版本，缺失时给出 winget 命令并在安装后提示重启。模型与扩展管理不需要启动沙箱，首次执行任务时才校验执行环境。离线或只改配置时可用 `--no-initialize` 跳过初始化。
+The first chat initializes the environment: the bundled PowerShell SDK worker starts and self-checks, ripgrep and the host Python version are checked, and missing pieces produce winget commands with a restart prompt after installation. Model and extension management do not start the sandbox; the execution environment is validated on the first task. Use `--no-initialize` when offline or when you only want to change configuration.
 
-### 配置模型
+### Configure a model
 
-进入聊天后按 **F2** 选择提供商与模型，或用 `login` 登录受支持账号；`/providers edit 配置名` 编辑地址、Key、协议与参数，`/model` 随时切换。终端会记住上次的选择。
+In chat, press **F2** to choose a provider and model, or use `login` for a supported account. `/providers edit <name>` edits the endpoint, key, protocol, and parameters; `/model` switches at any time. The terminal remembers your last choice.
 
-也可以临时用环境变量配置，不把 API Key 写进项目：
+You can also configure temporarily with environment variables, keeping the API key out of the project:
 
 ```powershell
 $env:ALLAGENT_PROVIDER = 'openai'
 $env:ALLAGENT_BASE_URL = 'https://api.openai.com/v1'
-$env:ALLAGENT_MODEL = '<模型 ID>'
-$env:ALLAGENT_API_KEY = '<你的 API Key>'
+$env:ALLAGENT_MODEL = '<model id>'
+$env:ALLAGENT_API_KEY = '<your API key>'
 allagent chat --workspace C:\Projects\MyProject
 ```
 
-### 图形界面与 Web 工作台
+### GUI and Web workbench
 
-| 入口 | 行为 |
+| Entry | Behavior |
 |---|---|
-| `allagent -guimode` | 校验参数后派生一个隐藏宿主进程并立即返回，关闭窗口即结束 |
-| `allagent gui` | 前台运行同一个窗口，Ctrl+C 结束；`--gui-url` 指向 Vite 开发服务器，`--gui-devtools` 打开窗口内开发者工具 |
-| 聊天内 `/web-ui`（或 `allagent web-ui`） | 在浏览器打开 Web 工作台，与终端共享工作区、模型配置、权限和后台任务 |
+| `allagent -guimode` | Validates arguments, spawns a hidden host, and returns immediately; closing the window ends it |
+| `allagent gui` | Runs the same window in the foreground; Ctrl+C exits. `--gui-url` points at a Vite dev server; `--gui-devtools` opens in-window developer tools |
+| `/web-ui` in chat (or `allagent web-ui`) | Opens the Web workbench in a browser, sharing workspace, model configuration, permissions, and background tasks with the terminal |
 
 ```powershell
 allagent -guimode
@@ -132,227 +266,181 @@ allagent gui --gui-url http://127.0.0.1:5173/
 allagent web-ui
 ```
 
-窗口是随包分发的 WPF + WebView2 外壳（`AllAgent.NET.Gui.exe`），同一数据目录只允许一个窗口。工作台页面包括对话、模型与 API、技能、工具、PowerShell、插件、MCP 服务、任务与设置；「PowerShell」页与终端的 `/powershell` 面板共享同一份模块目录，可以在浏览器里搜索 PowerShell Gallery、安装模块并查看导入验证后的导出命令。
+The window is a bundled WPF + WebView2 shell (`AllAgent.NET.Gui.exe`), with one window per data directory. Its pages cover chat, models and APIs, skills, tools, PowerShell, plugins, MCP servers, tasks, and settings. The PowerShell page shares its module directory with the terminal's `/powershell` panel.
 
-## 日常使用
+## Permission modes and security boundaries
 
-### 常用快捷键
-
-| 操作 | 快捷键 |
+| Mode | Behavior |
 |---|---|
-| 切换模型 | F2、`/model` |
-| 打开常用操作 | F1 |
-| 选择或恢复会话 | F3、`/session` |
-| 搜索全部命令 | Ctrl+P |
-| 引用项目文件 | `@路径`，路径含空格用 `@"路径"` |
-| 输入多行 | Ctrl+J、Shift+Enter |
-| 搜索输入历史 | Ctrl+R |
-| 显示或隐藏侧栏 | Ctrl+B |
-| 粘贴文本或截图 | Ctrl+V、Shift+Insert |
-| 停止当前任务 | Esc |
-| 退出 | `/exit`、Ctrl+D、空输入时按两次 Ctrl+C |
+| **restricted (default)** | File reads/writes inside the workspace and trusted shell aliases (`git`, `rg`, `dotnet`, `node`, `npm`, and more via `--allow-shell`) run directly. Paths outside the workspace, untrusted programs, and MCP / desktop / plugin tools still require per-call approval |
+| **full** | Host tools generally no longer require per-call approval and may access paths outside the workspace. Sandbox isolation still applies; administrator rights are never granted |
+| **ask** | Per-call approval, including writes inside the workspace. The approval card defaults to "allow this time": `Enter` confirms, `Y` allows, `N` or `Esc` rejects, and `A` remembers the directory |
+| **plan** | Read-only investigation. The model submits a Markdown plan through `plan_propose`; the TUI shows Markdown and the Web shows an HTML approval card. Approval switches to full access and starts execution in the same turn; rejection continues revision |
+| **simple** | Only `powershell_script`, `file_read`, and `file_edit` remain. Skills, MCP, sub-agents, plugins, browser, and desktop tools are disabled; creating files/directories and executing are delegated to PowerShell |
 
-### 常用命令
+Key boundaries:
 
-| 命令 | 用途 |
+- The model organizes actions through `execute_code`; file, network, and process operations are all performed by host tools, and the model cannot call them directly.
+- `run_shell` accepts only programs on the trusted list. The executable path and arguments are passed separately; command strings are never concatenated.
+- Approved programs still run with the current user's privileges. The sandbox does not isolate approved shell or MCP processes and cannot undo their side effects.
+- `/undo` only reverts file-tool changes that have checkpoints. It cannot revert shell, MCP, or out-of-workspace side effects.
+- Approvals, audit, and tool results are written to the project data directory. Requests send the task content to the selected model service; remove secrets and personal data before filing an issue.
+
+## Daily use
+
+### Shortcuts
+
+| Action | Shortcut |
 |---|---|
-| `/model`、`/models`、`/providers` | 切换模型、查看可用模型、管理提供商配置 |
-| `/permissions restricted\|ask\|full\|plan`、`/plan` | 切换权限模式 |
-| `/sandbox status\|auto\|hyperlight\|monty` | 查看或切换沙箱 |
-| `/questions default\|minimal\|balanced\|proactive\|status` | 调整 Agent 主动提问的倾向（0–3） |
-| `/new`、`/session`、`/branch`、`/fork`、`/timeline` | 新建、恢复、复制与定位历史 |
-| `/compact`、`/context`、`/stats`、`/cache` | 总结较早上下文（完整历史保留）、查看占用与累计 Token 用量、缓存策略 |
-| `/diff`、`/undo`、`/redo`、`/checkpoints` | 查看文件修改、撤回与重做 |
-| `/background`、`/tasks`、`/steer`、`/queue` | 后台任务、结果与授权、步骤边界指导、排队输入 |
-| `/agents`、`/subagents`、`/parent`、`/children` | 子代理配置与父子会话切换 |
-| `/skills`、`/plugins`、`/mcp`、`/hooks`、`/powershell` | 技能、插件、MCP、生命周期 Hook 与 PowerShell 能力 |
-| `/browser`、`/computer` | 浏览器操作与桌面操作开关 |
-| `/tools`、`/status`、`/doctor` | 工具契约、当前状态、环境检查 |
-| `/help all` | 查看全部内置命令 |
+| Switch model | F2, `/model` |
+| Open common actions | F1 |
+| Choose or resume a conversation | F3, `/session` |
+| Search all commands | Ctrl+P |
+| Reference a project file | `@path`; use `@"path with spaces"` |
+| Multi-line input | Ctrl+J, Shift+Enter |
+| Search input history | Ctrl+R |
+| Show/hide sidebar | Ctrl+B |
+| Paste text or a screenshot | Ctrl+V, Shift+Insert |
+| Stop the current task | Esc |
+| Exit | `/exit`, Ctrl+D, or double Ctrl+C on an empty input |
 
-### 权限模式
+### Common commands
 
-- **restricted（默认）**：限制模式。工作区内的文件读写和可信 Shell 别名（`git`、`rg`、`dotnet`、`node`、`npm` 等，可用 `--allow-shell` 扩展）直接执行；工作区外的路径、未信任的程序以及 MCP / 桌面 / 插件工具仍逐次授权。也可显式写 `--restricted` 或 `/permissions restricted`。
-- **full**：完全访问。宿主工具通常不再逐次审批，允许工作区外路径；沙箱隔离仍然生效，且不授予管理员权限。`--full-access` 或 `/permissions full`。
-- **ask**：`--ask` 或 `/permissions ask` 打开逐次审批，工作区内的写入也要询问。审批卡片默认选中「允许这一次」，`Enter` 确认、`Y` 允许、`N` 或 `Esc` 拒绝、`A` 记住该目录。
-- **plan**：`/permissions plan` 或 `/plan` 进入只读规划，文件读取可用，写入、Shell 和 MCP 操作停用。
-- **simple**：`/permissions simple` 或 `/simple` 进入简单模式，只保留 `powershell_script`、`file_read`、`file_edit` 三个宿主工具；技能、MCP、子代理、插件、浏览器与桌面工具停用，新建文件、建目录和执行都交给 PowerShell。Web 工作台输入框的权限菜单同样可选。
-- 单次代码执行超时默认 600 秒（`--ask` 下 60 秒），用 `--code-timeout` 调整。
-
-### 会话、分支与子代理
-
-任务运行中可用 `/steer` 在模型步骤边界补充指导，用 `/queue add 任务` 显式排队下一条任务。会话支持历史分支（`/branch`、`/fork`）、时间线（`/timeline`）和检查点（`/checkpoints`）；`/compact` 让模型总结较早的上下文并保留完整历史（终端、GUI 与 `/web-ui` 都可用）。
-
-子代理由 `/agents` 配置模型、权限、预算与失败策略，`/subagents` 设置默认模型（默认跟随当前模型）。子代理不会直接向用户提问，而是把结果和阻塞原因返回主代理；停止会等待实际收尾。`/parent`、`/children` 在父子会话之间切换。
-
-### 多开终端
-
-每个 `allagent` 实例拥有独立的输入框、当前会话、模型选择和窗口尺寸，同一工作区共享 `.allagent/data/` 内的项目历史，保存走跨进程事务。后台任务只归当前实例所有，关闭窗口会结束该实例，遗留任务在下次启动时标记为中断（可用 `--resume ID` 恢复历史）；所有终端关闭后不驻留后台。
-
-### 多会话后台运行
-
-一个会话正在执行时，切走不会再中断它：`/new`、`/session <ID>`、`/parent`、`/children`、F3 或直接切到另一个会话都可以随时进行，正在跑的会话继续在后台执行，多个主会话可以同时跑。
-
-- **标记**：终端侧栏（右下角「后台会话」）常驻列出其他正在运行的会话；最近会话列表、F3 选择器与 Web 侧栏会标出「运行中 / 需要授权 / 需要回答」；Web/图形界面右下角有浮层，可直接跳转或停止某个后台会话。
-- **回到实时视图**：切回正在跑的会话会重放该轮已产生的输出并继续实时渲染，不会丢失或重复内容。
-- **输入即指导**：给正在运行的会话发文本会作为指导注入当前任务（等同 `/steer`），不会另起一轮；要另起任务先停止它（Esc）。
-- **需要你时挂起**：后台会话遇到授权或提问会挂起等待并在列表打标记，切回该会话立刻弹出对话框继续；不会代替你批准或拒绝。
-- **完成提示**：后台会话结束时状态行/侧栏提示一次（Web 端为提示条），不自动跳转。
-- **跨工作区**：`/workspace` 切换后，旧工作区的会话继续执行；侧栏会显示其他工作区的运行中数量，切回去用 `/session <ID>` 回到实时视图。
-- **运行中可用**：`/new`、`/session [ID]`、`/sessions`、`/resume`、`/parent`、`/children`、`/todo`、`/status`、`/copy`、`/export`、`/tasks`、`/queue`、`/steer`、`/help`、`/thinking`、`/details`、`/web-ui status`；权限、沙箱与撤回类命令（`/undo`、`/redo`、`/rewind`）需要先停止全部会话。
-
-## 安全与隔离
-
-### 沙箱选择
-
-- 首次执行前优先验证 Hyperlight（需要硬件虚拟化与 Windows Hypervisor Platform）；缺少 worker、虚拟化不可用或初始化失败时，自动安装并验证 Monty 1.1.0，运行时位于共享目录下的 `runtimes/monty-1.1.0/`，首次安装需要联网，不需要 Docker、管理员权限或重启电脑。
-- Monty 是 Rust 实现的 Python 子集解释器，不是完整 CPython：不支持第三方包、`struct`、生成器等；默认不挂载宿主文件、不开放网络，只有 `call_tool` 桥接 C# 工具，继续经过宿主权限与审计。
-- 沙箱只在初始化阶段切换；执行中失败不会换后端重放代码，避免重复修改文件或重复执行命令。
-- `/sandbox` 或 `/sandbox status` 查看选择与实际后端，`/sandbox auto`（默认）优先 Hyperlight 并兜底 Monty，`/sandbox hyperlight` / `/sandbox monty` 强制指定后端。选择保存在当前工作区，切换会释放当前运行时，需先停止正在运行的任务。
-
-### 宿主工具边界
-
-- 模型只能调用 `execute_code`；文件、网络和进程操作全部由 `[AgentTool]` 标注的 C# 工具完成，权限与路径规则由宿主执行。
-- `run_shell` 只接受可信列表中的程序，程序路径与参数分别传入，不拼接命令字符串；`powershell_script` 通过 worker 的 `--serve` 协议运行。
-- 获准运行的程序仍具有当前用户的权限；沙箱不隔离已批准的 Shell 或 MCP 进程，也不会撤回它们产生的副作用。
-- `/undo` 只能撤回带检查点的文件工具修改，不能撤回 Shell、MCP 或工作区外的副作用。细节见 [执行与权限](docs/execution.zh-CN.md)。
-- 审批、审计与工具结果写入项目数据目录；请求会把任务所需内容发送给所选模型服务，提 Issue 前请移除密钥与个人数据。
-
-## 数据与迁移
-
-### 目录规则
-
-| 内容 | 默认位置 |
+| Command | Purpose |
 |---|---|
-| 项目数据（清单、会话、任务、审计 `audit.jsonl`） | `<工作区>/.allagent/data/` |
-| 覆盖项目数据目录 | `--data-dir <路径>` |
-| 工作区到数据目录的映射 | 程序目录下的 `allagent-projects.json` |
-| 插件、OAuth 凭据、用户技能、共享运行时 | `%APPDATA%\AllAgent.NET`（显式指定 `--data-dir` 时改用该目录） |
-| 日志 | `%APPDATA%\AllAgent.NET\allagent.log` |
+| `/model`, `/models`, `/providers` | Switch models, list available models, manage provider configurations |
+| `/permissions restricted\|ask\|full\|plan\|simple`, `/plan` | Switch permission mode |
+| `/sandbox status\|auto\|hyperlight\|monty` | Inspect or switch the sandbox |
+| `/new`, `/session`, `/branch`, `/fork`, `/timeline` | Create, resume, copy, and navigate history |
+| `/compact`, `/context`, `/stats`, `/cache` | Summarize earlier context, inspect usage and cumulative tokens, cache policy |
+| `/diff`, `/undo`, `/redo`, `/checkpoints` | Inspect file changes, undo, redo |
+| `/background`, `/tasks`, `/steer`, `/queue` | Background tasks, results and approvals, step-boundary guidance, queued input |
+| `/agents`, `/subagents`, `/parent`, `/children` | Sub-agent configuration and parent/child conversation switching |
+| `/skills`, `/plugins`, `/mcp`, `/hooks`, `/powershell` | Skills, plugins, MCP, lifecycle hooks, PowerShell capabilities |
+| `/browser`, `/computer` | Browser and desktop automation toggles |
+| `/tools`, `/status`, `/doctor` | Tool contract, current status, environment check |
+| `/help all` | Show every built-in command |
 
-用户目录下的外部技能只自动扫描 `~/.agents/skills/`；AllAgent.NET 自身技能目录和项目级技能按原规则加载。
+## Data and migration
 
-### 清单与修订
+### Directory rules
 
-`allagent.json` 是 v3 清单/设置文件，每个会话的不可变修订单独保存在 `conversations/`，保存当前会话不会重写其他历史。写入使用原子替换、fsync 与校验和回读，保留主清单与备份清单引用的会话版本；坏文件不会被静默替换成空数据库。
+| Content | Default location |
+|---|---|
+| Project data (manifest, conversations, tasks, audit `audit.jsonl`) | `<workspace>/.allagent/data/` |
+| Override project data directory | `--data-dir <path>` |
+| Workspace-to-data-directory mapping | `allagent-projects.json` in the program directory |
+| Plugins, OAuth credentials, user skills, shared runtime | `%APPDATA%\AllAgent.NET` (or the explicit `--data-dir`) |
+| Logs | `%APPDATA%\AllAgent.NET\allagent.log` |
 
-### 旧数据迁移
+External user skills are scanned only from `~/.agents/skills/`; AllAgent.NET's own skill directory and project skills follow the existing rules.
 
-首次为某个工作区建立项目数据目录时，会自动导入旧 AppData 数据库中属于该工作区的会话，以及未记录工作区的旧会话和配置，旧目录保持可恢复。旧版单文件数据库在写入时转换为拆分格式，并保留 `allagent.legacy-v2.json.bak`。旧版本程序不支持新格式，请用新版本读取。
+### Manifest and revisions
 
-## 开发与构建
+`allagent.json` is a v3 manifest/settings file. Each conversation's immutable revisions live in `conversations/`; saving the current conversation does not rewrite other history. Writes use atomic replacement, fsync, and checksum read-back, preserving versions referenced by the main and backup manifests. A corrupt file is never silently replaced with an empty database.
 
-### 从源码运行
+### Legacy migration
+
+The first time a project data directory is created for a workspace, conversations from the legacy AppData database that belong to that workspace — plus legacy conversations and settings without a recorded workspace — are imported automatically. The old directory remains recoverable. A legacy single-file database is converted to the split format on write, with `allagent.legacy-v2.json.bak` retained.
+
+## Build from source
+
+### Development environment
 
 ```powershell
-.\agent.ps1 chat --workspace C:\Projects\MyProject
-dotnet run --project src/AllAgent.NET.Terminal -- chat --workspace C:\Projects\MyProject
-```
-
-### 开发环境（Vite + 原生窗口）
-
-```powershell
+# Full dev environment (Vite + native window)
 .\dev.ps1
+
+# Build the terminal host only, skipping the web build
+dotnet build src/AllAgent.NET.Terminal -p:SkipWebBuild=true
+
+# Build the web bundle first, then copy dist/ into web/ next to the host
+dotnet build src/AllAgent.NET.Terminal
 ```
 
-`dev.ps1` 启动 Vite 开发服务器（`http://localhost:5173`），再用 `dotnet run ... gui --gui-url http://127.0.0.1:5173/` 打开窗口。也可以分两个终端手动启动，或用 `dev.bat`。
-
-### Web 前端
+### Web frontend
 
 ```powershell
 npm --prefix src/AllAgent.NET.Web install
 npm --prefix src/AllAgent.NET.Web run dev
 
 cd src/AllAgent.NET.Web
-npm run build      # tsc --noEmit && vite build，产物在 dist/
-npx tsc --noEmit   # 只做类型检查
+npm run build      # tsc --noEmit && vite build, output in dist/
+npx tsc --noEmit   # typecheck only
 npm test           # vitest run
 ```
 
-### 构建与测试
+### Tests and publish
 
 ```powershell
-# 跳过 Web 构建，只编译终端宿主
-dotnet build src/AllAgent.NET.Terminal -p:SkipWebBuild=true
-
-# 默认先 npm run build，再把 dist/ 拷到宿主旁边的 web/
-dotnet build src/AllAgent.NET.Terminal
-
 dotnet test tests/AllAgent.NET.Tests
 
-# 发布 Windows x64 自包含版本
+# Publish a self-contained Windows x64 build
 dotnet publish src/AllAgent.NET.Terminal -c Release -r win-x64 --self-contained true -o artifacts/allagent-win-x64
 ```
 
-发布后请保留整个输出目录：终端宿主与各 worker（`AllAgent.NET.Gui.exe`、`AllAgent.NET.Browser.exe`、`AllAgent.NET.ComputerUse.exe`、`AllAgent.NET.Sandbox.exe`、`AllAgent.NET.PowerShell.exe`）同目录共享一份运行时，另有 `Modules/`、`web/`、`everything/` 与 `builtin-plugins/`；缺少 `AllAgent.NET.PowerShell.exe` 或 `Modules/` 时需重新安装或修复工具包。`AllAgent.NET.Core` 可嵌入其他 .NET 应用，扩展工具用 `[AgentTool]` 和 `[Description]` 注册，生成器产出 `IAgentToolSet`。
+Keep the entire output directory after publishing: the terminal host and all workers (`AllAgent.NET.Gui.exe`, `AllAgent.NET.Browser.exe`, `AllAgent.NET.ComputerUse.exe`, `AllAgent.NET.Sandbox.exe`, `AllAgent.NET.PowerShell.exe`) share one runtime in the same directory, alongside `Modules/`, `web/`, `everything/`, and `builtin-plugins/`. `AllAgent.NET.Core` can be embedded in other .NET applications; register extension tools with `[AgentTool]` and `[Description]`, and the generator emits `IAgentToolSet`.
 
-### 解决方案结构
+### Solution layout
 
-| 项目 | 职责 |
+| Project | Responsibility |
 |---|---|
-| `src/AllAgent.NET.Core` | UI 无关的 Agent 引擎、模型服务、数据存储、桥接与技能 |
-| `src/AllAgent.NET.Terminal` | Spectre.Console 终端宿主（`chat`、`web-ui`、`-guimode`） |
-| `src/AllAgent.NET.Gui` | WPF + WebView2 原生窗口外壳，不依赖 Core |
-| `src/AllAgent.NET.Web` | React 19 + Iconiq UI + Vite 5 + TypeScript 聊天界面 |
-| `src/AllAgent.NET.Sandbox` | Hyperlight 隔离执行 worker，随包与宿主同目录 |
-| `src/AllAgent.NET.PowerShell` | 嵌入的 PowerShell SDK worker，随包与宿主同目录（模块在 `Modules/`） |
-| `src/AllAgent.NET.Browser` | C# 浏览器运行时（WebView2 与外置浏览器） |
-| `src/AllAgent.NET.ComputerUse` | 基于 FlaUI 的桌面操作 worker |
-| `src/AllAgent.NET.ToolGenerator` | Roslyn 增量生成器：JSON Schema 与类型化分发 |
-| `tests/AllAgent.NET.Tests` | xUnit：工具边界、Agent 生命周期与实际微虚拟机测试 |
+| `src/AllAgent.NET.Core` | UI-agnostic agent engine, model services, data store, bridge, and skills |
+| `src/AllAgent.NET.Terminal` | Spectre.Console terminal host (`chat`, `web-ui`, `-guimode`) |
+| `src/AllAgent.NET.Gui` | WPF + WebView2 native window shell, independent of Core |
+| `src/AllAgent.NET.Web` | React 19 + Iconiq UI + Vite 5 + TypeScript chat UI |
+| `src/AllAgent.NET.Sandbox` | Hyperlight isolated execution worker, shipped next to the host |
+| `src/AllAgent.NET.PowerShell` | Bundled PowerShell SDK worker, shipped next to the host (modules in `Modules/`) |
+| `src/AllAgent.NET.Browser` | C# browser runtime (WebView2 and external browsers) |
+| `src/AllAgent.NET.ComputerUse` | FlaUI-based desktop automation worker |
+| `src/AllAgent.NET.ToolGenerator` | Roslyn incremental generator: JSON Schema and typed dispatch |
+| `tests/AllAgent.NET.Tests` | xUnit: tool boundaries, agent lifecycle, and real microVM tests |
 
-## 常见问题与排错
+## Troubleshooting
 
-| 现象 | 处理 |
+| Symptom | Fix |
 |---|---|
-| 不确定缺什么环境 | `allagent doctor`（聊天内 `/doctor`）看检查表；`doctor --install` 在确认后装依赖 |
-| 内容搜索不可用 | 安装 ripgrep：`winget install --id BurntSushi.ripgrep.MSVC` |
-| 提示宿主 Python 缺失或版本不符 | 需要 3.10–3.14；按提示用 winget 安装 Python 3.13，安装后重启软件 |
-| 沙箱启动失败 | `/sandbox status` 查看实际后端与兜底原因；没有虚拟化时用 `/sandbox monty` |
-| PowerShell 工具报 worker 缺失 | worker 随包分发，报缺失说明安装损坏，重新安装 AllAgent.NET |
-| 模型连不上 | `/login status` 查看账号与连接状态，`/providers show 配置名` 查看脱敏配置 |
-| 只想改配置，不想初始化环境 | 加 `--no-initialize` |
-| 需要查看日志 | `%APPDATA%\AllAgent.NET\allagent.log`，其中包含 `[Gui]`、`[GuiHost]` 与桥接调用记录 |
+| Not sure what is missing | Run `allagent doctor` (or `/doctor` in chat); `doctor --install` installs dependencies after confirmation |
+| Content search unavailable | Install ripgrep: `winget install --id BurntSushi.ripgrep.MSVC` |
+| Host Python missing or mismatched | Requires 3.10–3.14; install Python 3.13 with winget as prompted and restart the app |
+| Sandbox fails to start | `/sandbox status` shows the effective backend and fallback reason; use `/sandbox monty` when virtualization is unavailable |
+| PowerShell tool reports a missing worker | The worker is bundled; a missing worker means a damaged install — reinstall AllAgent.NET |
+| Cannot connect to a model | `/login status` for account and connection state; `/providers show <name>` for the redacted configuration |
+| Need logs | `%APPDATA%\AllAgent.NET\allagent.log`, including `[Gui]`, `[GuiHost]`, and bridge call records |
 
-## 更多文档
+## More documentation
 
-- [CodeAct 与 Hyperlight 接入](docs/codeact.zh-CN.md)
-- [Python 执行过程与权限模式](docs/execution.zh-CN.md)
-- [宿主文件与命令工具](docs/host-tools.zh-CN.md)
-- [文件搜索与工具输出](docs/file-search.zh-CN.md)
-- [执行预算与重试](docs/runtime-output-budgets.zh-CN.md)
-- [内置 Browser Use](docs/browser-use.zh-CN.md) · [Windows Computer Use](docs/computer-use.zh-CN.md)
-- [PowerShell 持久会话](docs/powershell-session.zh-CN.md) · [PowerShell 能力商店](docs/powershell-store.zh-CN.md)
-- [账号登录与模型连接](docs/login.zh-CN.md)
-- [子代理独立配置](docs/subagent-configuration.zh-CN.md) · [自定义代理角色示例](docs/agent-roles.example.json)
-- [终端交互与任务控制](docs/terminal-followup.zh-CN.md) · [TODO 执行清单](docs/todo.zh-CN.md)
-- [多会话后台运行与跨工作区](docs/multi-session-runs.zh-CN.md)
-- [Web 工作台：文件浏览、Git 管理与集成终端](docs/webui-files-git-terminal.zh-CN.md)
-- [.NET Tool 打包与安装](docs/nuget-tool.zh-CN.md)
-- [插件开发指南](docs/plugins.zh-CN.md) · [插件开发入门](docs/plugin-development-beginner.zh-CN.md) · [插件 Web 前端扩展](docs/plugin-web-ui.zh-CN.md) · [执行积极度插件](plugins/AllAgent.NET.Diligence/README.md)
+> The detailed reference docs are currently written in Chinese; this README is the English overview.
 
-## 许可证
+- [Architecture and migration](docs/agent-architecture.zh-CN.md) · [System prompts](docs/agent-prompts.zh-CN.md) · [Dispatch contract](docs/subagent-contract.zh-CN.md) · [Validation report](docs/agent-kernel-validation.zh-CN.md)
+- [On-demand tool disclosure](docs/on-demand-tools.zh-CN.md)
+- [CodeAct and Hyperlight integration](docs/codeact.zh-CN.md)
+- [Python execution and permission modes](docs/execution.zh-CN.md)
+- [Host file and command tools](docs/host-tools.zh-CN.md)
+- [File search and tool output](docs/file-search.zh-CN.md)
+- [Built-in Browser Use](docs/browser-use.zh-CN.md) · [Windows Computer Use](docs/computer-use.zh-CN.md)
+- [PowerShell persistent sessions](docs/powershell-session.zh-CN.md) · [PowerShell capability store](docs/powershell-store.zh-CN.md)
+- [Sub-agent configuration](docs/subagent-configuration.zh-CN.md) · [Custom agent role examples](docs/agent-roles.example.json)
+- [Web workbench: files, Git, and integrated terminal](docs/webui-files-git-terminal.zh-CN.md)
+- [.NET Tool packaging and installation](docs/nuget-tool.zh-CN.md)
+- [Plugin development guide](docs/plugins.zh-CN.md) · [Plugin development for beginners](docs/plugin-development-beginner.zh-CN.md) · [Plugin web UI extensions](docs/plugin-web-ui.zh-CN.md)
 
-本项目采用 **GPL-3.0-only** 开源协议。
+## License
 
-- 源代码可自由使用、修改和分发
-- 衍生作品必须以相同协议开源
-- 详见 [LICENSE](LICENSE)；第三方代码的声明与许可证见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)
+This project is licensed under **GPL-3.0-only**.
+
+- Source code may be used, modified, and distributed freely
+- Derivative works must be released under the same license
+- See [LICENSE](LICENSE) for details; third-party notices are in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)
 
 ---
 
 <div align="center">
 
-欢迎通过 [Issues](https://github.com/luolangaga/AllAgent.NET/issues) 报告问题或提出建议。提交改动时请说明复现步骤、行为变化与验证方式；环境或沙箱问题请附上 `doctor` 输出，并移除密钥和个人数据。
+Report issues or suggest improvements through [Issues](https://github.com/luolangaga/AllAgent.NET/issues). When submitting a change, include reproduction steps, behavior changes, and validation. For environment or sandbox problems, attach the `doctor` output and remove secrets and personal data.
 
-**如果觉得有用，给个 Star 吧！**
+**If this is useful, give it a star.**
 
 <sub>Windows x64 · .NET 10 · GPL-3.0-only</sub>
 
 </div>
-
-
-
-
-
-

@@ -16,9 +16,18 @@ public sealed class HyperlightProcessSandbox(AgentOptions options) : ICodeSandbo
     private bool _disposed;
     private string? _toolsFingerprint;
     private CodeSandboxContext? _context;
+    private string? _executionId;
+    private Timer? _idle;
+    private long _lastUse = Stopwatch.GetTimestamp();
 
     public async Task<CodeSandboxContext?> PrepareAsync(IReadOnlyList<AgentToolDescriptor> tools, CancellationToken ct)
     {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            if (!_disposed && _worker is { HasExited: false } && _context != null && _toolsFingerprint == Fingerprint(tools)) return _context;
+        }
+        finally { _gate.Release(); }
         var result = await ExecuteAsync("print('allagent-context-ready')", tools,
             (_, _, _) => new(ToolResult.Failure("Host operations are unavailable during context preparation.")), ct);
         if (!result.Ok) throw new InvalidOperationException(result.Error);
@@ -34,7 +43,8 @@ public sealed class HyperlightProcessSandbox(AgentOptions options) : ICodeSandbo
         deadline.CancelAfter(options.SandboxStartupTimeout);
         try
         {
-            var fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(tools, ToolResult.JsonOptions))));
+            _idle ??= new Timer(_ => ReleaseIdle(), null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
+            var fingerprint = Fingerprint(tools);
             if (_toolsFingerprint != fingerprint) StopWorker();
             if (_worker == null || _worker.HasExited)
             {
@@ -51,13 +61,16 @@ public sealed class HyperlightProcessSandbox(AgentOptions options) : ICodeSandbo
                 _worker = Process.Start(info) ?? throw new InvalidOperationException("Cannot start sandbox worker.");
                 _toolsFingerprint = fingerprint;
                 _stderr = BoundedProcess.DrainAsync(_worker.StandardError, 4000, CancellationToken.None);
+                _executionId = null;
                 await WriteAsync(new { kind = "init", guestPath = options.PythonGuestPath, tools }, deadline.Token);
                 using var ready = await ReadAsync(deadline.Token);
                 if (ready.RootElement.GetProperty("kind").GetString() != "ready")
                     throw new InvalidOperationException(ready.RootElement.TryGetProperty("error", out var initError) ? initError.GetString() : "Sandbox initialization failed.");
-                _context = new(ready.RootElement.GetProperty("instructions").GetString()!, ready.RootElement.GetProperty("description").GetString()!);
+                _context = new(ready.RootElement.GetProperty("instructions").GetString()!, ready.RootElement.GetProperty("description").GetString()!)
+                { Capabilities = new("hyperlight", true, false, false, false) };
             }
             activeTime.Start(); deadline.CancelAfter(options.CodeTimeout);
+            _executionId = Guid.NewGuid().ToString("N");
             await WriteAsync(new { kind = "execute", code }, deadline.Token);
             while (true)
             {
@@ -67,6 +80,8 @@ public sealed class HyperlightProcessSandbox(AgentOptions options) : ICodeSandbo
                 {
                     case "call":
                         var name = root.GetProperty("name").GetString()!;
+                        if (!tools.Any(tool => tool.Name == name)) throw new InvalidDataException("Unknown sandbox host tool.");
+                        var callId = root.GetProperty("callId").GetString() ?? throw new InvalidDataException("Missing host call ID.");
                         // The guest is suspended during a host call. Human questions and approval waits
                         // must not consume the Python execution budget; the overall agent token still applies.
                         deadline.Token.ThrowIfCancellationRequested();
@@ -76,7 +91,7 @@ public sealed class HyperlightProcessSandbox(AgentOptions options) : ICodeSandbo
                         var remaining = options.CodeTimeout - activeTime.Elapsed;
                         if (remaining <= TimeSpan.Zero) throw new OperationCanceledException(deadline.Token);
                         deadline.CancelAfter(remaining);
-                        await WriteAsync(new { kind = "tool_result", result }, deadline.Token);
+                        await WriteAsync(new { kind = "tool_result", result }, deadline.Token, callId);
                         break;
                     case "result":
                         var execution = root.GetProperty("result").Deserialize<ToolResult>(ToolResult.JsonOptions) ?? ToolResult.Failure("Invalid sandbox result.");
@@ -103,7 +118,7 @@ public sealed class HyperlightProcessSandbox(AgentOptions options) : ICodeSandbo
             StopWorker();
             return ToolResult.Failure("Hyperlight unavailable: " + ex.Message);
         }
-        finally { _gate.Release(); }
+        finally { _lastUse = Stopwatch.GetTimestamp(); _gate.Release(); }
     }
 
     private static bool IsNativeRuntimeFailure(ToolResult result)
@@ -118,9 +133,9 @@ public sealed class HyperlightProcessSandbox(AgentOptions options) : ICodeSandbo
             error.Contains("restore failed", StringComparison.OrdinalIgnoreCase));
     }
 
-    private async Task WriteAsync(object value, CancellationToken ct)
+    private async Task WriteAsync(object value, CancellationToken ct, string? callId = null)
     {
-        await _worker!.StandardInput.WriteLineAsync(JsonSerializer.Serialize(value, ToolResult.JsonOptions).AsMemory(), ct);
+        await _worker!.StandardInput.WriteLineAsync(SandboxProtocol.Encode(value, _executionId, callId).AsMemory(), ct);
         await _worker.StandardInput.FlushAsync(ct);
     }
 
@@ -128,10 +143,9 @@ public sealed class HyperlightProcessSandbox(AgentOptions options) : ICodeSandbo
     {
         // Call frames carry tool inputs, including complete file contents. Output
         // preview budgets must not become an input-size restriction on this channel.
-        var line = await _worker!.StandardOutput.ReadLineAsync(ct);
-        if (line != null) return JsonDocument.Parse(line);
-        var details = _stderr == null ? "" : (await _stderr).Text;
-        throw new IOException("Sandbox worker exited. " + ToolResult.Clip(details));
+        var frame = await SandboxProtocol.ReadAsync(_worker!.StandardOutput.BaseStream, ct);
+        try { SandboxProtocol.Validate(frame.RootElement, _executionId); return frame; }
+        catch { frame.Dispose(); throw; }
     }
 
     private void StopWorker()
@@ -149,7 +163,15 @@ public sealed class HyperlightProcessSandbox(AgentOptions options) : ICodeSandbo
     public async ValueTask DisposeAsync()
     {
         await _gate.WaitAsync();
-        try { _disposed = true; StopWorker(); if (_stderr != null) await _stderr; }
+        try { _disposed = true; _idle?.Dispose(); StopWorker(); if (_stderr != null) await _stderr; }
+        finally { _gate.Release(); }
+    }
+
+    private static string Fingerprint(IReadOnlyList<AgentToolDescriptor> tools) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(tools, ToolResult.JsonOptions))));
+    private void ReleaseIdle()
+    {
+        if (!_gate.Wait(0)) return;
+        try { if (!_disposed && Stopwatch.GetElapsedTime(_lastUse) >= TimeSpan.FromMinutes(5)) StopWorker(); }
         finally { _gate.Release(); }
     }
 }

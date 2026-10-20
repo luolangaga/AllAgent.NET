@@ -699,6 +699,37 @@ button.subagent-row:hover { background: color-mix(in oklab, var(--muted) 62%, tr
   .todo-current { display: none; }
 }
 
+/* ── Plan panel ──────────────────────────────────────────────────────────── */
+/* The plan card shares the transcript width with the TODO bar. Markdown body reuses
+   the global .markdown typography; only the shell and status colors live here. */
+.chat > .plan-panel-shell {
+  width: min(840px, 100%); margin: 0 auto; padding: 10px 24px 0; flex-shrink: 0;
+}
+.plan-panel {
+  display: flex; flex-direction: column; overflow: hidden;
+  border: 1px solid var(--border); border-radius: 14px; background: var(--surface);
+  transition: border-color 0.2s ease, box-shadow 0.24s ease;
+}
+.plan-panel.plan-proposed { border-color: color-mix(in oklab, #f59e0b 38%, var(--border)); }
+.plan-panel.plan-approved { border-color: color-mix(in oklab, #10b981 38%, var(--border)); }
+.plan-panel.plan-rejected { border-color: color-mix(in oklab, #ef4444 30%, var(--border)); }
+.plan-panel-head {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  background: transparent; border: 0; border-radius: 0;
+  padding: 9px 12px 9px 13px; cursor: pointer;
+  color: var(--foreground); font-size: 12.5px; text-align: left;
+  transition: background-color 0.16s ease;
+}
+.plan-panel-head:hover { background: color-mix(in oklab, var(--muted) 62%, transparent); }
+.plan-panel-head:focus-visible { outline: 2px solid var(--ring-color); outline-offset: -2px; }
+.plan-panel-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; letter-spacing: 0.01em; }
+.plan-panel-chevron { flex: none; color: var(--muted-foreground); }
+.plan-panel-body { border-top: 1px solid color-mix(in oklab, var(--border) 80%, transparent); padding: 12px 16px 16px; max-height: min(52vh, 560px); overflow-y: auto; }
+.plan-panel-body .markdown { font-size: 13.5px; line-height: 1.7; }
+.plan-feedback { margin: 0; padding: 0 16px 12px; color: var(--muted-foreground); font-size: 12.5px; }
+.plan-dialog-body { max-height: min(58vh, 600px); overflow-y: auto; padding-right: 4px; }
+.plan-dialog-body .markdown { font-size: 13.5px; line-height: 1.7; }
+
 .composer-wrap { flex-shrink: 0; width: min(840px, 100%); margin: 0 auto; padding: 8px 24px 14px; display: flex; flex-direction: column; gap: 8px; }
 .composer-area { display: flex; flex-direction: column; position: relative; }
 .composer-area [aria-label="Use voice input"] { display: none; }
@@ -708,6 +739,39 @@ button.subagent-row:hover { background: color-mix(in oklab, var(--muted) 62%, tr
 }
 .composer-model { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .composer-meta-actions { display: flex; align-items: center; gap: 8px; min-width: 0; }
+/* Delivery choice shown while a turn is running: steer now or wait for the next turn. */
+.delivery-toggle {
+  display: inline-flex; align-items: center; padding: 2px; gap: 1px;
+  border: 1px solid color-mix(in oklab, var(--border) 88%, transparent);
+  border-radius: 999px; background: color-mix(in oklab, var(--surface) 92%, transparent);
+}
+.delivery-toggle button {
+  padding: 2px 8px; border: 0; border-radius: 999px; background: transparent;
+  color: var(--muted-foreground); font: inherit; font-size: 11px; font-weight: 500; cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+.delivery-toggle button:hover { color: var(--foreground); }
+.delivery-toggle button.is-active { background: var(--foreground); color: var(--background); }
+/* Prompts parked in the host inbox while the current turn keeps working. */
+.composer-pending { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 0 2px 8px; }
+.pending-label { font-size: 10.5px; color: var(--muted-foreground); white-space: nowrap; }
+.pending-chip {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 320px;
+  padding: 3px 5px 3px 4px; border: 1px solid var(--border); border-radius: 999px;
+  background: color-mix(in oklab, var(--surface) 92%, transparent); font-size: 11px;
+}
+.pending-mode {
+  flex-shrink: 0; padding: 1px 6px; border-radius: 999px;
+  background: color-mix(in oklab, var(--brand) 16%, transparent);
+  color: color-mix(in oklab, var(--brand) 78%, var(--foreground)); font-size: 10px; font-weight: 600;
+}
+.pending-mode.is-queue { background: var(--accent); color: var(--muted-foreground); }
+.pending-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--foreground); }
+.pending-remove {
+  display: inline-grid; place-items: center; flex-shrink: 0; width: 16px; height: 16px;
+  border: 0; border-radius: 50%; background: transparent; color: var(--muted-foreground); cursor: pointer;
+}
+.pending-remove:hover { background: var(--accent); color: var(--foreground); }
 .permission-picker { position: relative; display: inline-flex; min-width: 0; }
 .permission-chip {
   display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 172px;

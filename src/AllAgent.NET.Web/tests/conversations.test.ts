@@ -14,6 +14,7 @@ beforeEach(() => {
   handle = request => {
     if (request.method === 'conversations.create') reply(request, createdConversation)
     else if (request.method === 'chat.startStream') reply(request, 'stream-1')
+    else if (request.method === 'chat.pendingInputs') reply(request, [])
     else reply(request, true)
   }
 })
@@ -220,6 +221,69 @@ describe('conversation streaming', () => {
     expect(store.messages).toHaveLength(2)
     event('agent.done', { reason: 'stop' })
   })
+
+  it('parks a steer while a run is active and folds it into the transcript at the step boundary', async () => {
+    const { useConversationsStore } = await import('../src/stores/conversations')
+    const store = useConversationsStore()
+    handle = request => {
+      if (request.method === 'conversations.create') return reply(request, createdConversation)
+      if (request.method === 'chat.startStream') return reply(request, 'stream-1')
+      if (request.method === 'chat.pendingInputs') return reply(request, [])
+      if (request.method === 'chat.enqueueInput') {
+        expect(request.params).toMatchObject({ conversationId: 'conv-1', message: '先别改前端', delivery: 'steer' })
+        return reply(request, { id: 'steer-1', draft: '先别改前端', delivery: 'steer', createdAt: '' })
+      }
+      reply(request, true)
+    }
+    await store.sendMessage('实现登录页', 'config-1')
+    event('agent.token', { text: '先看一下代码' })
+    await store.enqueueMessage('先别改前端', 'steer')
+    expect(store.pendingInputs).toHaveLength(1)
+    event('agent.inputAdmitted', { message: { id: 'steer-1', role: 'user', content: '先别改前端', createdAt: '' } })
+    expect(store.pendingInputs).toHaveLength(0)
+    expect(store.messages.map(message => message.role)).toEqual(['user', 'assistant', 'user', 'assistant'])
+    expect(store.messages[1]).toMatchObject({ content: '先看一下代码', status: 'done' })
+    event('agent.token', { text: '改动已停在方案层面' })
+    expect(store.messages[3].content).toBe('改动已停在方案层面')
+    event('agent.done', { reason: 'stop' })
+    expect(store.streamingMessageId).toBeNull()
+  })
+
+  it('queues a prompt and starts it as a new turn once the active run ends', async () => {
+    const { useConversationsStore } = await import('../src/stores/conversations')
+    const store = useConversationsStore()
+    let parked: Array<{ id: string; draft: string; delivery: string; createdAt: string }> = []
+    handle = request => {
+      if (request.method === 'conversations.create') return reply(request, createdConversation)
+      if (request.method === 'chat.startStream') return reply(request, 'stream-1')
+      if (request.method === 'chat.pendingInputs') return reply(request, parked)
+      if (request.method === 'chat.enqueueInput') {
+        const item = { id: 'queued-1', draft: request.params.message, delivery: request.params.delivery, createdAt: '' }
+        parked = [item]
+        return reply(request, item)
+      }
+      if (request.method === 'chat.runPending') {
+        expect(request.params).toMatchObject({ conversationId: 'conv-1', apiConfigId: 'config-1' })
+        parked = []
+        return reply(request, 'stream-2')
+      }
+      reply(request, true)
+    }
+    await store.sendMessage('先做后端', 'config-1')
+    event('agent.token', { text: '后端完成' })
+    await store.enqueueMessage('再做前端', 'queue')
+    expect(store.pendingInputs).toHaveLength(1)
+    event('agent.done', { reason: 'stop' })
+    expect(store.streamingMessageId).toBeNull()
+
+    await store.runPending('config-1')
+    expect(store.activeStreamId).toBe('stream-2')
+    event('agent.inputAdmitted', { message: { id: 'queued-1', role: 'user', content: '再做前端', createdAt: '' } }, 'stream-2')
+    event('agent.token', { text: '开始前端' }, 'stream-2')
+    expect(store.messages.at(-1)!.content).toBe('开始前端')
+    event('agent.done', { reason: 'stop' }, 'stream-2')
+    expect(store.streamingMessageId).toBeNull()
+  })
 })
 
 describe('conversation history races', () => {
@@ -229,6 +293,7 @@ describe('conversation history races', () => {
     handle = request => {
       if (request.method === 'conversations.getMessages') return reply(request, [{ id: 'partial', role: 'assistant', content: 'already persisted partial iteration' }])
       if (request.method === 'todos.get') return reply(request, [])
+      if (request.method === 'chat.pendingInputs') return reply(request, [])
       if (request.method === 'chat.getStreamState') {
         event('agent.token', { text: '前言' }, 'stream-1', 1)
         reply(request, { streamId: 'stream-1', history: [], input: 'task', createdAt: '', events: [
@@ -350,12 +415,14 @@ describe('conversation history races', () => {
     const second = store.selectConversation('second')
     const requestFor = (id: string, method: string) => requests.find(request => request.method === method && request.params.conversationId === id)!
     reply(requestFor('second', 'chat.getStreamState'), null)
+    reply(requestFor('second', 'chat.pendingInputs'), [])
     reply(requestFor('second', 'todos.get'), [{ id: 'todo-new', content: '新清单', status: 'pending' }])
     await vi.waitFor(() => expect(requestFor('second', 'conversations.getMessages')).toBeDefined())
     reply(requestFor('second', 'conversations.getMessages'), [{ id: 'new', role: 'user', content: 'new' }])
     await second
     reply(requestFor('first', 'todos.get'), [{ id: 'todo-old', content: '旧清单', status: 'pending' }])
     reply(requestFor('first', 'chat.getStreamState'), null)
+    reply(requestFor('first', 'chat.pendingInputs'), [])
     await vi.waitFor(() => expect(requestFor('first', 'conversations.getMessages')).toBeDefined())
     reply(requestFor('first', 'conversations.getMessages'), [{ id: 'old', role: 'user', content: 'old' }])
     await first
@@ -372,6 +439,7 @@ describe('TODO tracking', () => {
     const pending = [{ id: '1', content: '验证', status: 'pending' as const }]
     handle = request => {
       if (request.method === 'conversations.getMessages') reply(request, [])
+      else if (request.method === 'chat.pendingInputs') reply(request, [])
       else if (request.method === 'todos.get') reply(request, pending)
       else if (request.method === 'todos.set') reply(request, request.params.todos)
       else if (request.method === 'chat.startStream') reply(request, 'stream-1')

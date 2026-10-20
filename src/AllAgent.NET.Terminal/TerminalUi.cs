@@ -3,9 +3,11 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
+using AllAgent.NET.Core.Models;
 using AllAgent.NET.Core.Runtime;
 using AllAgent.NET.Core.Services;
 using AllAgent.NET.Core.Tools;
+using L = AllAgent.NET.Core.Localization.HostText;
 using Spectre.Console;
 using Spectre.Console.Rendering;
 
@@ -22,7 +24,12 @@ internal sealed class ToolsApproval(TerminalUi ui)
     public PermissionMode Permission { get; set; } = PermissionMode.Restricted;
     public bool FullAccess => Permission == PermissionMode.Full;
     public string ModeKey => Permission switch { PermissionMode.Full => "full", PermissionMode.Restricted => "restricted", _ => "ask" };
-    public string ModeLabel => PlanMode ? "只读规划" : SimpleMode ? "简单模式" : Permission switch { PermissionMode.Full => "完全访问", PermissionMode.Restricted => "限制模式", _ => "逐次授权" };
+    public string ModeLabel => PlanMode ? L.Pick("计划模式", "Plan mode") : SimpleMode ? L.Pick("简单模式", "Simple mode") : Permission switch
+    {
+        PermissionMode.Full => L.Pick("完全访问", "Full access"),
+        PermissionMode.Restricted => L.Pick("限制模式", "Restricted"),
+        _ => L.Pick("逐次授权", "Ask each time")
+    };
     public WorkspaceCheckpoints? Checkpoints { get; set; }
     public async ValueTask<bool> ApproveAsync(ToolApprovalRequest request, CancellationToken ct)
     {
@@ -52,16 +59,19 @@ internal sealed class TerminalUi(bool json, bool verbose)
     public long TurnInputTokens { get; private set; }
     public long TurnOutputTokens { get; private set; }
     private bool _hasTurnUsage;
-    public string TurnTokenLabel => !_hasTurnUsage ? "本次 Token：等待模型上报" : $"本次 Token {TurnInputTokens + TurnOutputTokens:N0} (入 {TurnInputTokens:N0} / 出 {TurnOutputTokens:N0})";
+    public string TurnTokenLabel => !_hasTurnUsage
+        ? L.Pick("本次 Token：等待模型上报", "Tokens this turn: waiting for the model")
+        : L.Pick($"本次 Token {TurnInputTokens + TurnOutputTokens:N0} (入 {TurnInputTokens:N0} / 出 {TurnOutputTokens:N0})",
+            $"Tokens this turn {TurnInputTokens + TurnOutputTokens:N0} (in {TurnInputTokens:N0} / out {TurnOutputTokens:N0})");
     public int ContextUsedTokens { get; private set; }
     public int ContextCapacityTokens { get; private set; } = 100000;
     public bool ContextEstimated { get; private set; } = true;
     private string? _contextModel;
-    public string ThinkingEffortLabel { get; private set; } = "思考强度 未设置";
+    public string ThinkingEffortLabel { get; private set; } = L.Pick("思考强度 未设置", "Reasoning unset");
     public void SetThinkingEffort(AllAgent.NET.Core.Models.ApiConfig? config) => ThinkingEffortLabel = config == null
-        ? "思考强度 未设置"
-        : "思考强度 " + AllAgent.NET.Core.Services.AI.ReasoningSettings.Label(config);
-    public string ContextLabel => "上下文 " + (ContextEstimated ? "≈" : "") + AllAgent.NET.Core.Services.AI.ModelContext.Format(ContextUsedTokens) + " / " + AllAgent.NET.Core.Services.AI.ModelContext.Format(ContextCapacityTokens);
+        ? L.Pick("思考强度 未设置", "Reasoning unset")
+        : L.Pick("思考强度 ", "Reasoning ") + AllAgent.NET.Core.Services.AI.ReasoningSettings.Label(config);
+    public string ContextLabel => L.Pick("上下文 ", "Context ") + (ContextEstimated ? "≈" : "") + AllAgent.NET.Core.Services.AI.ModelContext.Format(ContextUsedTokens) + " / " + AllAgent.NET.Core.Services.AI.ModelContext.Format(ContextCapacityTokens);
     public void SetModelContext(AllAgent.NET.Core.Models.ApiConfig config)
     {
         SetThinkingEffort(config);
@@ -77,12 +87,29 @@ internal sealed class TerminalUi(bool json, bool verbose)
     }
     private readonly ConcurrentQueue<PendingApproval> _approvals = new();
     private readonly ConcurrentQueue<PendingQuestion> _questions = new();
+    private readonly ConcurrentQueue<PendingPlan> _plans = new();
     private readonly StringBuilder _answer = new();
     private readonly StringBuilder _thought = new();
     private readonly StringBuilder _taskThought = new();
     private int _thinkingAttemptStart;
     private readonly Stopwatch _elapsed = new();
-    private string _stage = "思考中";
+    private enum Stage { Thinking, Answering, Running, ExecutingTool, WaitingContinue, WaitingPlanRevision, HandlingChildResults, CorrectingProtocol, WaitingRetry, AutoContinue, ReceivingInput }
+    private Stage _stage = Stage.Thinking;
+    private string StageLabel => _stage switch
+    {
+        Stage.Thinking => L.Pick("思考中", "Thinking"),
+        Stage.Answering => L.Pick("回答中", "Answering"),
+        Stage.Running => L.Pick("执行中", "Running"),
+        Stage.ExecutingTool => L.Pick("执行工具", "Executing tools"),
+        Stage.WaitingContinue => L.Pick("等待模型继续", "Waiting for the model"),
+        Stage.WaitingPlanRevision => L.Pick("等待模型修订计划", "Waiting for a revised plan"),
+        Stage.HandlingChildResults => L.Pick("处理子代理结果", "Processing child results"),
+        Stage.CorrectingProtocol => L.Pick("纠正调用协议", "Correcting tool protocol"),
+        Stage.WaitingRetry => L.Pick("等待网络重试", "Waiting to retry"),
+        Stage.AutoContinue => L.Pick("自动继续", "Continuing automatically"),
+        Stage.ReceivingInput => L.Pick("收到新输入", "New input received"),
+        _ => ""
+    };
     private bool _processingChildResults;
     private int _toolCalls;
     private volatile bool _live;
@@ -95,14 +122,17 @@ internal sealed class TerminalUi(bool json, bool verbose)
     /// the view detaches while the run keeps working.</summary>
     public bool DetachRequested { get; set; }
     private SessionRun? _attachedRun;
-    internal static IReadOnlyList<CommandHint> RunningHints { get; } = CommandCatalog.Builtins.Where(hint =>
+    internal static IReadOnlyList<CommandHint> RunningHints => CommandCatalog.Builtins.Where(hint =>
         new[] { "/new", "/session", "/tasks", "/queue", "/steer", "/todo", "/help", "/status", "/thinking", "/details" }.Contains(hint.Text.Split(' ')[0])).ToArray();
     private PendingApproval? _pending;
     private PendingQuestion? _question;
+    private PendingPlan? _plan;
     private int _questionChoice;
     private int _questionScroll;
     private InputState _questionText = new();
     private int _approvalChoice = 0, _approvalScroll;
+    private int _planChoice = 1, _planScroll;
+    private bool _planExpanded;
     private bool _expanded;
     private InputState _queued = new();
     private bool _plainStreaming;
@@ -126,8 +156,8 @@ internal sealed class TerminalUi(bool json, bool verbose)
         {
             if (FullScreenTerminal.Current is { } screen) return await screen.QuestionAsync(question, ct);
             if (question.Choices.Count > 0) return await TerminalQuestionPrompt.AskAsync(AnsiConsole.Console, new TerminalKeyReader(), question, ct);
-            TerminalOutput.Write(new Panel(new Text(question.Question)).Header("需要你的回答"));
-            return await ManagementUi.Text("请输入回答");
+            TerminalOutput.Write(new Panel(new Text(question.Question)).Header(L.Pick("需要你的回答", "Your answer is needed")));
+            return await ManagementUi.Text(L.Pick("请输入回答", "Enter your answer"));
         }
         var completion = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
         _questions.Enqueue(new(question, completion, ct));
@@ -142,8 +172,10 @@ internal sealed class TerminalUi(bool json, bool verbose)
         if (FullScreenTerminal.Current is { } screen) { screen.Session(session, model); return; }
         TerminalOutput.WriteLine();
         TerminalOutput.Write(new Markup("[bold #d97757]▐▛███▜▌[/]  [bold]AllAgent[/]  [dim]CodeAct · Hyperlight[/]\n"));
-        TerminalOutput.Write(new Text($"  {model} · 会话 {session.ToString()[..8]}\n  {workspace}\n", new Style(Color.Grey)));
-        TerminalOutput.MarkupLine("[dim]  / 命令 · /providers 模型 · /skills 技能 · /mcp 扩展 · Esc 停止 · /exit 退出[/]");
+        TerminalOutput.Write(new Text($"  {model} · {L.Pick("会话", "session")} {session.ToString()[..8]}\n  {workspace}\n", new Style(Color.Grey)));
+        TerminalOutput.MarkupLine(L.Pick(
+            "[dim]  / 命令 · /providers 模型 · /skills 技能 · /mcp 扩展 · Esc 停止 · /exit 退出[/]",
+            "[dim]  / commands · /providers models · /skills skills · /mcp extensions · Esc stop · /exit quit[/]"));
     }
     public async ValueTask<bool> RequestApprovalAsync(ToolApprovalRequest request, CancellationToken ct)
     {
@@ -171,10 +203,43 @@ internal sealed class TerminalUi(bool json, bool verbose)
         {
             if (FullScreenTerminal.Current is { } screen) return await screen.ApproveAsync(preview, ct);
             TerminalOutput.WriteLine(); TerminalOutput.Write(preview.Render());
-            return await AnsiConsole.PromptAsync(new ConfirmationPrompt("允许这一次操作？") { DefaultValue = true }, ct);
+            return await AnsiConsole.PromptAsync(new ConfirmationPrompt(L.Pick("允许这一次操作？", "Allow this operation?")) { DefaultValue = true }, ct);
         }
         finally { Gate.Release(); }
     }
+
+    public async Task<bool> RequestPlanApprovalAsync(PlanProposal plan, CancellationToken ct)
+    {
+        if (!Interactive || Json) return false;
+        var preview = new PlanPreview(plan);
+        // A plan raised by a background run waits on that run and is asked when its session is
+        // back on screen — never answered (or silently denied) on the person's behalf.
+        if (Runs?.Find(AgentExecutionScope.ConversationId) is { } run)
+        {
+            var waiting = new PendingPlan(preview, new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously), ct);
+            run.EnqueuePlan(waiting);
+            if (!run.Attached) run.State = SessionRunState.AwaitingPlan;
+            Runs.Bump();
+            try { return await waiting.Completion.Task.WaitAsync(ct); }
+            finally { if (!waiting.Completion.Task.IsCompleted) waiting.Completion.TrySetResult(false); }
+        }
+        if (_live)
+        {
+            var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _plans.Enqueue(new(preview, completion, ct));
+            try { return await completion.Task.WaitAsync(ct); }
+            finally { if (!completion.Task.IsCompleted) completion.TrySetResult(false); }
+        }
+        await Gate.WaitAsync(ct);
+        try
+        {
+            if (FullScreenTerminal.Current is { } screen) return await screen.ApprovePlanAsync(preview, ct);
+            TerminalOutput.WriteLine(); TerminalOutput.Write(TerminalMarkdown.Render(plan.Markdown));
+            return await AnsiConsole.PromptAsync(new ConfirmationPrompt(L.Pick("批准计划并进入完全访问？", "Approve the plan and switch to full access?")) { DefaultValue = false }, ct);
+        }
+        finally { Gate.Release(); }
+    }
+
     /// <summary>Runs an event sequence with a live view but without a session run (/compact and friends).</summary>
     public Task RunAgentAsync(IAsyncEnumerable<AgentEvent> events, CancellationToken ct) => ViewAsync(events, null, null, 0, null, ct);
 
@@ -212,7 +277,7 @@ internal sealed class TerminalUi(bool json, bool verbose)
             return;
         }
         using var inputMode = new TextInputMode();
-        _answer.Clear(); _thought.Clear(); _taskThought.Clear(); _thinkingAttemptStart = 0; _stage = "思考中"; _toolCalls = 0; _elapsed.Restart(); _live = true;
+        _answer.Clear(); _thought.Clear(); _taskThought.Clear(); _thinkingAttemptStart = 0; _stage = Stage.Thinking; _toolCalls = 0; _elapsed.Restart(); _live = true;
         _processingChildResults = false;
         _attachedRun = run;
         _queued = new InputState(); _queued.Set(Draft); Draft = "";
@@ -259,11 +324,13 @@ internal sealed class TerminalUi(bool json, bool verbose)
                         catch (Exception ex) { Error(ex.Message); }
                         runningCommand = null;
                     }
-                    if (_pending == null && TryDequeueApproval(run, out var approval)) { _pending = approval; _approvalChoice = 0; _approvalScroll = 0; _expanded = false; FlushAnswer(); }
+                    if (_pending == null && _question == null && _plan == null && TryDequeueApproval(run, out var approval)) { _pending = approval; _approvalChoice = 0; _approvalScroll = 0; _expanded = false; FlushAnswer(); }
                     if (_pending?.Token.IsCancellationRequested == true) Decide(false);
-                    if (_question == null && TryDequeueQuestion(run, out var question)) { _question = question; _questionChoice = _questionScroll = 0; _questionText = new(); FlushAnswer(); }
+                    if (_question == null && _plan == null && _pending == null && TryDequeueQuestion(run, out var question)) { _question = question; _questionChoice = _questionScroll = 0; _questionText = new(); FlushAnswer(); }
                     if (_question?.Token.IsCancellationRequested == true) AnswerQuestion(null);
-                    if (_pending == null && _question is { Question.Choices.Count: > 0 } choiceQuestion)
+                    if (_plan == null && _pending == null && _question == null && TryDequeuePlan(run, out var plan)) { _plan = plan; _planChoice = 1; _planScroll = 0; _planExpanded = false; FlushAnswer(); }
+                    if (_plan?.Token.IsCancellationRequested == true) DecidePlan(false);
+                    if (_pending == null && _plan == null && _question is { Question.Choices.Count: > 0 } choiceQuestion)
                     {
                         using var questionCancel = CancellationTokenSource.CreateLinkedTokenSource(cancelled.Token, choiceQuestion.Token);
                         try
@@ -282,12 +349,13 @@ internal sealed class TerminalUi(bool json, bool verbose)
                         TerminalInput input;
                         try { input = await reader.ReadAsync(cancelled.Token); } catch (OperationCanceledException) { input = default; }
                         var key = input.Key;
-                        if (_pending == null && _question == null && FullScreenTerminal.Current?.InspectorInput(input) == true) { }
+                        if (_pending == null && _question == null && _plan == null && FullScreenTerminal.Current?.InspectorInput(input) == true) { }
                         else if (key.Modifiers.HasFlag(ConsoleModifiers.Control) && key.Key == ConsoleKey.C && _pending == null && _questionText.Text.Length > 0 && _question != null) _questionText.Key(key, [], []);
                         else if (key.Modifiers.HasFlag(ConsoleModifiers.Control) && key.Key == ConsoleKey.C && _pending == null && _question == null && _queued.HasSelection) _queued.Key(key, [], []);
                         else if (key.Modifiers.HasFlag(ConsoleModifiers.Control) && key.Key == ConsoleKey.C && FullScreenTerminal.Current?.CopyTranscriptSelection(key) == true) { }
                         else if (key.Modifiers.HasFlag(ConsoleModifiers.Control) && key.Key == ConsoleKey.C) Stop();
                         else if (_question != null) { if (input.Wheel != 0) _questionScroll = Math.Max(0, _questionScroll - input.Wheel); else if (input.Paste != null) _questionText.Insert(input.Paste); else QuestionKey(key); }
+                        else if (_plan != null) { if (input.Wheel != 0) _planScroll = Math.Max(0, _planScroll - input.Wheel); else if (input.Paste != null) { } else PlanKey(key); }
                         else if (input.Paste != null && _pending == null)
                         {
                             var prepared = await PastedImages.PrepareAsync(input.Paste, Workspace, cancelled.Token);
@@ -315,7 +383,7 @@ internal sealed class TerminalUi(bool json, bool verbose)
                             {
                                 try
                                 {
-                                    if (Inbox == null) throw new InvalidOperationException("待处理输入收件箱未初始化。");
+                                    if (Inbox == null) throw new InvalidOperationException(L.Pick("待处理输入收件箱未初始化。", "The pending-input inbox is not initialized."));
                                     if (queued == "/queue" || queued.StartsWith("/queue ", StringComparison.Ordinal))
                                     {
                                         var restored = await Inbox.CommandAsync(queued, "", cancelled.Token);
@@ -323,8 +391,8 @@ internal sealed class TerminalUi(bool json, bool verbose)
                                     }
                                     else if (queued.StartsWith('/') && !queued.StartsWith("/steer ", StringComparison.Ordinal))
                                     {
-                                        if (runningCommand != null) throw new InvalidOperationException("上一条命令仍在处理，请先处理当前授权或回答。");
-                                        if (RunningCommand == null) throw new InvalidOperationException("运行中命令未初始化。");
+                                        if (runningCommand != null) throw new InvalidOperationException(L.Pick("上一条命令仍在处理，请先处理当前授权或回答。", "The previous command is still running; finish the current approval or answer first."));
+                                        if (RunningCommand == null) throw new InvalidOperationException(L.Pick("运行中命令未初始化。", "The running-command handler is not initialized."));
                                         runningCommand = RunningCommand(queued, cancelled.Token);
                                         _queued.Set("");
                                     }
@@ -334,7 +402,7 @@ internal sealed class TerminalUi(bool json, bool verbose)
                                         var prompt = queued;
                                         if (queued.StartsWith("/steer ", StringComparison.Ordinal)) { delivery = "steer"; prompt = queued[7..].Trim(); }
                                         var admitted = await Inbox.EnqueueAsync(prompt, delivery, cancelled.Token);
-                                        _queued.Set(""); TerminalOutput.Write(new Text($"待处理输入已保存 · {admitted.Id.ToString()[..8]} · {delivery}\n", new Style(Color.Grey)));
+                                        _queued.Set(""); TerminalOutput.Write(new Text(L.Pick($"待处理输入已保存 · {admitted.Id.ToString()[..8]} · {delivery}\n", $"Pending input saved · {admitted.Id.ToString()[..8]} · {delivery}\n"), new Style(Color.Grey)));
                                     }
                                 }
                                 catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException)
@@ -361,7 +429,7 @@ internal sealed class TerminalUi(bool json, bool verbose)
                 }
             }
             if (FullScreenTerminal.Current is { } screen)
-                await PumpAsync(activity => { var prompt = _pending != null || _question != null; screen.SetActivity(prompt ? null : activity); screen.SetConversationPrompt(prompt ? new Panel(activity).Header(_pending != null ? "需要授权" : "需要你的回答").Border(BoxBorder.Rounded).BorderColor(Color.Yellow).Padding(1, 0) : null); screen.SetInput(_queued, prompt ? [] : _queued.Suggestions(RunningHints), prompt ? "↑↓ 选择 · Enter 确认 · Esc 拒绝 / 返回" : "任务运行中 · Esc 停止 · 回车指导当前任务 · /tasks 任务 · /queue add 排队"); screen.Draw(); });
+                await PumpAsync(activity => { var prompt = _plan != null || _pending != null || _question != null; screen.SetActivity(prompt ? null : activity); screen.SetConversationPrompt(prompt ? new Panel(activity).Header(_plan != null ? L.Pick("计划审批", "Plan approval") : _pending != null ? L.Pick("需要授权", "Approval required") : L.Pick("需要你的回答", "Your answer is needed")).Border(BoxBorder.Rounded).BorderColor(Color.Yellow).Padding(1, 0) : null); screen.SetInput(_queued, prompt ? [] : _queued.Suggestions(RunningHints), prompt ? L.Pick("↑↓ 选择 · Enter 确认 · Esc 拒绝 / 返回", "↑↓ select · Enter confirm · Esc reject / back") : L.Pick("任务运行中 · Esc 停止 · 回车指导当前任务 · /tasks 任务 · /queue add 排队", "Task running · Esc stop · Enter steer · /tasks tasks · /queue add queue")); screen.Draw(); });
             else
             {
                 using var display = new SpectreScreenDisplay(AnsiConsole.Console); inlineDisplay = display; display.Start(RenderActivity());
@@ -379,8 +447,10 @@ internal sealed class TerminalUi(bool json, bool verbose)
             // session comes back instead of being denied by accident.
             if (run is { IsFinished: false } && _pending is { } openApproval) { run.EnqueueApproval(openApproval); _pending = null; }
             if (run is { IsFinished: false } && _question is { } openQuestion) { run.EnqueueQuestion(openQuestion); _question = null; }
+            if (run is { IsFinished: false } && _plan is { } openPlan) { run.EnqueuePlan(openPlan); _plan = null; }
             Decide(false); while (_approvals.TryDequeue(out var pending)) pending.Completion.TrySetResult(false);
             AnswerQuestion(null); while (_questions.TryDequeue(out var question)) question.Completion.TrySetResult(null);
+            DecidePlan(false); while (_plans.TryDequeue(out var plan)) plan.Completion.TrySetResult(false);
             if (runningCommand != null)
             {
                 try { await runningCommand; }
@@ -397,6 +467,8 @@ internal sealed class TerminalUi(bool json, bool verbose)
         => run != null ? run.TryDequeueApproval(out approval) : _approvals.TryDequeue(out approval);
     private bool TryDequeueQuestion(SessionRun? run, out PendingQuestion? question)
         => run != null ? run.TryDequeueQuestion(out question) : _questions.TryDequeue(out question);
+    private bool TryDequeuePlan(SessionRun? run, out PendingPlan? plan)
+        => run != null ? run.TryDequeuePlan(out plan) : _plans.TryDequeue(out plan);
 
     private void AnswerQuestion(string? answer)
     {
@@ -429,38 +501,65 @@ internal sealed class TerminalUi(bool json, bool verbose)
             else { var count = _pending!.Preview.RememberForSession == null ? 2 : 3; _approvalChoice = Math.Clamp(_approvalChoice + (key.Key == ConsoleKey.UpArrow ? -1 : 1), 0, count - 1); }
         }
     }
+    private void PlanKey(ConsoleKeyInfo key)
+    {
+        if (key.Key is ConsoleKey.Y or ConsoleKey.D1 or ConsoleKey.NumPad1) { DecidePlan(true); return; }
+        if (key.Key is ConsoleKey.N or ConsoleKey.D2 or ConsoleKey.NumPad2 or ConsoleKey.Escape) { DecidePlan(false); return; }
+        if (key.Key == ConsoleKey.Enter) { DecidePlan(_planChoice == 0); return; }
+        if (key.Key == ConsoleKey.Tab) { _planExpanded = !_planExpanded; return; }
+        if (key.Key is ConsoleKey.UpArrow or ConsoleKey.DownArrow)
+        {
+            if (key.Modifiers.HasFlag(ConsoleModifiers.Control))
+                _planScroll = Math.Clamp(_planScroll + (key.Key == ConsoleKey.UpArrow ? -3 : 3), 0, Math.Max(0, _plan!.Preview.Lines.Count - 1));
+            else _planChoice = Math.Clamp(_planChoice + (key.Key == ConsoleKey.UpArrow ? -1 : 1), 0, 1);
+        }
+    }
     private void Decide(bool allow)
     {
         var pending = _pending; _pending = null;
         pending?.Completion.TrySetResult(allow);
         if (pending != null && _attachedRun is { } run && run.Waiting) { run.State = SessionRunState.Running; Runs?.Bump(); }
-        if (pending != null) { TerminalOutput.MarkupLine(allow ? "[dim]  ⎿ 本次操作已授权[/]" : "[yellow]  ⎿ 本次操作已拒绝[/]"); _stage = allow ? "执行中" : "等待模型继续"; }
+        if (pending != null) { TerminalOutput.MarkupLine(allow ? L.Pick("[dim]  ⎿ 本次操作已授权[/]", "[dim]  ⎿ Operation approved[/]") : L.Pick("[yellow]  ⎿ 本次操作已拒绝[/]", "[yellow]  ⎿ Operation rejected[/]")); _stage = allow ? Stage.Running : Stage.WaitingContinue; }
+    }
+    private void DecidePlan(bool approve)
+    {
+        var plan = _plan; _plan = null;
+        plan?.Completion.TrySetResult(approve);
+        if (plan != null && _attachedRun is { } run && run.Waiting) { run.State = SessionRunState.Running; Runs?.Bump(); }
+        if (plan != null)
+        {
+            TerminalOutput.MarkupLine(approve ? L.Pick("[dim]  ⎿ 计划已批准[/]", "[dim]  ⎿ Plan approved[/]") : L.Pick("[yellow]  ⎿ 计划已拒绝 · 继续规划[/]", "[yellow]  ⎿ Plan rejected · continue planning[/]"));
+            _stage = approve ? Stage.Running : Stage.WaitingPlanRevision;
+        }
     }
     internal IRenderable RenderActivity()
     {
+        if (_plan != null) return _plan.Preview.Render(_planChoice, _planScroll, _planExpanded, FullScreenTerminal.Current != null ? 6 : null);
         if (_pending != null) return _pending.Preview.Render(_approvalChoice, _approvalScroll, _expanded, FullScreenTerminal.Current != null ? 2 : null);
         if (_question != null)
         {
             var visibleChoices = Math.Min(_question.Question.Choices.Count, Math.Clamp(AnsiConsole.Profile.Height - 12, 1, 6));
             var questionHeight = Math.Clamp(AnsiConsole.Profile.Height - visibleChoices - 12, 1, 6);
-            var questionRows = new List<IRenderable> { new Text("需要你的回答", new Style(Color.Yellow, decoration: Decoration.Bold)), new TextViewport(new Text(_question.Question.Question), questionHeight, _questionScroll) };
+            var questionRows = new List<IRenderable> { new Text(L.Pick("需要你的回答", "Your answer is needed"), new Style(Color.Yellow, decoration: Decoration.Bold)), new TextViewport(new Text(_question.Question.Question), questionHeight, _questionScroll) };
             foreach (var (choice, index) in _question.Question.Choices.Select((c, i) => (c, i)).Skip(Math.Max(0, _questionChoice - visibleChoices + 1)).Take(visibleChoices)) questionRows.Add(new Text((index == _questionChoice ? "› " : "  ") + choice, new Style(index == _questionChoice ? Color.Cyan1 : Color.Grey)).Crop());
-            questionRows.Add(new TranscriptViewport([FullScreenTerminal.Input(_questionText)], 1, 0)); questionRows.Add(new Text("↑↓ 选择 · Enter 确认 · 输入其他回答 · Ctrl+↑↓ 详情 · Esc 跳过", new Style(Color.Grey)).Crop());
+            questionRows.Add(new TranscriptViewport([FullScreenTerminal.Input(_questionText)], 1, 0)); questionRows.Add(new Text(L.Pick("↑↓ 选择 · Enter 确认 · 输入其他回答 · Ctrl+↑↓ 详情 · Esc 跳过", "↑↓ select · Enter confirm · type another answer · Ctrl+↑↓ details · Esc skip"), new Style(Color.Grey)).Crop());
             return new Rows(questionRows);
         }
-        var displayStage = _stage == "执行工具" && _codeBlocks.Values.LastOrDefault()?.DelegationFinished == true ? "子代理已完成 · 正在接收结果" : _stage;
-        var glyph = _stage == "执行工具" ? LoadingIndicator.DotsFrame(_elapsed.ElapsedMilliseconds) : LoadingIndicator.Frame(_elapsed.ElapsedMilliseconds);
+        var displayStage = _stage == Stage.ExecutingTool && _codeBlocks.Values.LastOrDefault()?.DelegationFinished == true
+            ? L.Pick("子代理已完成 · 正在接收结果", "Child agent finished · receiving results")
+            : StageLabel;
+        var glyph = _stage == Stage.ExecutingTool ? LoadingIndicator.DotsFrame(_elapsed.ElapsedMilliseconds) : LoadingIndicator.Frame(_elapsed.ElapsedMilliseconds);
         var rows = new List<IRenderable>();
         if (_answer.Length > 0) rows.Add(new Text("● " + Tail(_answer)));
         if (ShowThinking && _taskThought.Length > 0)
         {
-            rows.Add(new ThinkingLine(Tail(_taskThought, 4000), _elapsed.ElapsedMilliseconds, prefix: "✳ 思考 ", hint: " [Ctrl+O 展开]"));
+            rows.Add(new ThinkingLine(Tail(_taskThought, 4000), _elapsed.ElapsedMilliseconds, prefix: L.Pick("✳ 思考 ", "✳ Thinking "), hint: L.Pick(" [Ctrl+O 展开]", " [Ctrl+O expand]")));
         }
-        if (_stage != "执行工具" || !_codeBlocks.Values.Any(block => block.Ok == null))
-            rows.Add(new Markup($"[{AccentMarkup()}]{glyph} {Markup.Escape(displayStage)}…[/] [dim]({(int)_elapsed.Elapsed.TotalSeconds}s · {_toolCalls} 个工具)[/]"));
-        rows.Add(new Text("  Esc 停止当前任务 · Ctrl+O 展开最新详情 · 回车指导任务 · /queue add 排队", new Style(Color.Grey)));
-        if (Inbox?.Label is { Length: > 0 } inboxLabel) rows.Add(new Text("  " + inboxLabel + " · /steer 内容更新当前任务", new Style(Color.Cyan1)));
-        if (_queued.Text.Length > 0) rows.Add(new Text("  指导 › " + _queued.Text, new Style(Color.Cyan1)));
+        if (_stage != Stage.ExecutingTool || !_codeBlocks.Values.Any(block => block.Ok == null))
+            rows.Add(new Markup($"[{AccentMarkup()}]{glyph} {Markup.Escape(displayStage)}…[/] [dim]({(int)_elapsed.Elapsed.TotalSeconds}s · {L.Pick($"{_toolCalls} 个工具", $"{_toolCalls} tools")})[/]"));
+        rows.Add(new Text(L.Pick("  Esc 停止当前任务 · Ctrl+O 展开最新详情 · 回车指导任务 · /queue add 排队", "  Esc stop · Ctrl+O expand latest detail · Enter steer · /queue add queue"), new Style(Color.Grey)));
+        if (Inbox?.Label is { Length: > 0 } inboxLabel) rows.Add(new Text("  " + inboxLabel + L.Pick(" · /steer 内容更新当前任务", " · /steer text updates the current task"), new Style(Color.Cyan1)));
+        if (_queued.Text.Length > 0) rows.Add(new Text(L.Pick("  指导 › ", "  Steer › ") + _queued.Text, new Style(Color.Cyan1)));
         return new Rows(rows);
     }
     public async Task RenderAsync(AgentEvent evt, CancellationToken ct)
@@ -478,21 +577,21 @@ internal sealed class TerminalUi(bool json, bool verbose)
             {
                 case TokenDelta token:
                     FlushThinking();
-                    _stage = "回答中";
+                    _stage = Stage.Answering;
                     if (_live) _answer.Append(token.Text); else { TerminalOutput.Write(new Text(token.Text)); _plainStreaming = true; } break;
                 case ThinkingDelta thought:
-                    _stage = _processingChildResults ? "处理子代理结果" : "思考中";
+                    _stage = _processingChildResults ? Stage.HandlingChildResults : Stage.Thinking;
                     if (string.IsNullOrEmpty(thought.Text)) break;
                     if (_thought.Length == 0 && _taskThought.Length > 0 && _taskThought[^1] is not ('\n' or '\r')) _taskThought.Append('\n');
                     _thought.Append(thought.Text);
                     _taskThought.Append(thought.Text);
                     break;
                 case AgentIteration iteration:
-                    FlushThinking(); _thinkingAttemptStart = _taskThought.Length; _toolCalls = iteration.ToolCalls; _stage = _processingChildResults ? "处理子代理结果" : "思考中";
-                    if (!_live) { EndText(); TerminalOutput.MarkupLine("[#7dcfff]" + Markup.Escape(LoadingIndicator.Frame(_elapsed.ElapsedMilliseconds)) + " 正在思考[/]"); } break;
+                    FlushThinking(); _thinkingAttemptStart = _taskThought.Length; _toolCalls = iteration.ToolCalls; _stage = _processingChildResults ? Stage.HandlingChildResults : Stage.Thinking;
+                    if (!_live) { EndText(); TerminalOutput.MarkupLine("[#7dcfff]" + Markup.Escape(LoadingIndicator.Frame(_elapsed.ElapsedMilliseconds)) + L.Pick(" 正在思考[/]", " thinking[/]")); } break;
                 case ToolCallStarted started:
                     _processingChildResults = false;
-                    FlushThinking(); FlushAnswer(); EndText(); _stage = "执行工具";
+                    FlushThinking(); FlushAnswer(); EndText(); _stage = Stage.ExecutingTool;
                     if (started.ToolName == "execute_code")
                     {
                         using var args = JsonDocument.Parse(started.ArgsJson);
@@ -515,15 +614,15 @@ internal sealed class TerminalUi(bool json, bool verbose)
                     break;
                 case ToolCallRejected rejected:
                     FlushAnswer(); EndText();
-                    TerminalOutput.Write(ToolFailure("未执行 " + rejected.ToolName + " · 模型应通过 execute_code 调用"));
-                    _stage = "纠正调用协议"; break;
+                    TerminalOutput.Write(ToolFailure(L.Pick("未执行 " + rejected.ToolName + " · 模型应通过 execute_code 调用", "Not executed " + rejected.ToolName + " · the model must call tools through execute_code")));
+                    _stage = Stage.CorrectingProtocol; break;
                 case ToolCallCompleted completed:
-                    if (completed.ToolName is "subagent" or "cancel_agent") { _processingChildResults = true; _stage = "处理子代理结果"; }
+                    if (completed.ToolName is "subagent" or "cancel_agent") { _processingChildResults = true; _stage = Stage.HandlingChildResults; }
                     if (_codeBlocks.TryGetValue(completed.Id, out var completedBlock))
                     {
                         completedBlock.Complete(completed);
                         if (FullScreenTerminal.Current == null) TerminalOutput.Write(completedBlock);
-                        _stage = _processingChildResults ? "处理子代理结果" : "思考中"; break;
+                        _stage = _processingChildResults ? Stage.HandlingChildResults : Stage.Thinking; break;
                     }
                     if (_hostBlocks.Remove(completed.Id, out var hostBlock))
                     {
@@ -543,24 +642,33 @@ internal sealed class TerminalUi(bool json, bool verbose)
                         FullScreenTerminal.Current?.RegisterExecution(standalone);
                         TerminalOutput.Write(standalone);
                     }
-                    _stage = "思考中"; break;
+                    _stage = Stage.Thinking; break;
                 case AgentError error: FlushThinking(); FlushAnswer(); EndText(); Error(error.Message); break;
                 case AgentInputAdmitted input:
                     FlushAnswer(); EndText();
                     if (FullScreenTerminal.Current is { } inputScreen) inputScreen.UserMessage(SessionTimeline.Text(input.Message));
-                    else TerminalOutput.Write(TerminalMarkdown.Message("你", SessionTimeline.Text(input.Message), true));
+                    else TerminalOutput.Write(TerminalMarkdown.Message(L.Pick("你", "You"), SessionTimeline.Text(input.Message), true));
                     if (input.Message.Images.Count > 0) TerminalOutput.Write(ImageAttachmentsView.Render(input.Message.Images));
-                    _stage = "收到新输入"; break;
+                    _stage = Stage.ReceivingInput; break;
                 case AgentNotice notice:
                     if (notice.ResetResponse) { _answer.Clear(); _thought.Clear(); _taskThought.Length = _thinkingAttemptStart; } else FlushAnswer();
-                    EndText(); TerminalOutput.Write(new Text("↻ " + notice.Message + "\n", new Style(Color.Cyan1))); _stage = notice.ResetResponse ? "等待网络重试" : "自动继续"; break;
+                    EndText(); TerminalOutput.Write(new Text("↻ " + notice.Message + "\n", new Style(Color.Cyan1))); _stage = notice.ResetResponse ? Stage.WaitingRetry : Stage.AutoContinue; break;
                 case AgentTokenUsage tokens:
                     _hasTurnUsage = true; TurnInputTokens += tokens.InputTokens; TurnOutputTokens += tokens.OutputTokens; break;
                 case AgentContextUsage usage:
                     ContextUsedTokens = usage.UsedTokens; ContextCapacityTokens = usage.CapacityTokens; ContextEstimated = usage.Estimated; break;
                 case AgentDone done:
                     FlushThinking(); FlushAnswer(); EndText(); LastReason = done.FinishReason;
-                    var label = done.FinishReason switch { "stop" or "STOP" => "完成", "cancelled" => "已取消", "timeout" => "运行超时", "tool_limit" => "已到工具上限", "context_limit" => "已到上下文上限", "protocol_error" => "调用协议错误 · 已停止", _ => done.FinishReason };
+                    var label = done.FinishReason switch
+                    {
+                        "stop" or "STOP" => L.Pick("完成", "Done"),
+                        "cancelled" => L.Pick("已取消", "Cancelled"),
+                        "timeout" => L.Pick("运行超时", "Timed out"),
+                        "tool_limit" => L.Pick("已到工具上限", "Tool limit reached"),
+                        "context_limit" => L.Pick("已到上下文上限", "Context limit reached"),
+                        "protocol_error" => L.Pick("调用协议错误 · 已停止", "Tool protocol error · stopped"),
+                        _ => done.FinishReason
+                    };
                     TerminalOutput.Write(new Text($"\n  {label}" + (_live ? $" · {_elapsed.Elapsed.TotalSeconds:F1}s" : "") + "\n", new Style(Color.Grey))); break;
             }
         }
@@ -587,55 +695,67 @@ internal sealed class TerminalUi(bool json, bool verbose)
         string Get(string key) => args.TryGetProperty(key, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() ?? "" : "";
         return name switch
         {
-            "memory_update" => "学习本轮经验",
-            "todo_read" => "查看 TODO", "todo_write" => "更新 TODO",
-            "everything_search" => "Everything 搜索 " + Get("query") + " in " + Get("path"),
-            "file_search" => "搜索 " + Get("pattern") + " in " + Get("path"), "file_read" => "读取 " + Get("path"), "file_write" => "写入 " + Get("path"), "file_edit" => "修改 " + Get("path"), "list_directory" => "查看目录 " + Get("path"),
-            "run_shell" => (args.TryGetProperty("background", out var background) && background.ValueKind == JsonValueKind.True ? "后台命令 " : "运行命令 ") + Get("exe") + (args.TryGetProperty("args", out var argv) ? " " + ToolResult.Clip(string.Join(' ', argv.EnumerateArray().Select(a => a.GetString())), 160) : ""),
-            "cancel_agent" => "停止子代理",
-            "shell_status" => "后台命令进度", "cancel_shell" => "停止后台命令",
-            "skill_read" => "加载技能 /" + Get("name"), "skill_list" => "查看技能列表", "skill_reference" => "读取技能参考 " + Get("path"), _ => name.StartsWith("mcp_", StringComparison.Ordinal) ? "MCP " + name : name
+            "memory_update" => L.Pick("学习本轮经验", "Learn from this turn"),
+            "plan_propose" => L.Pick("提交计划 ", "Propose plan ") + Get("title"),
+            "todo_read" => L.Pick("查看 TODO", "View TODO"), "todo_write" => L.Pick("更新 TODO", "Update TODO"),
+            "everything_search" => L.Pick("Everything 搜索 ", "Everything search ") + Get("query") + " in " + Get("path"),
+            "file_search" => L.Pick("搜索 ", "Search ") + Get("pattern") + " in " + Get("path"), "file_read" => L.Pick("读取 ", "Read ") + Get("path"), "file_write" => L.Pick("写入 ", "Write ") + Get("path"), "file_edit" => L.Pick("修改 ", "Edit ") + Get("path"), "list_directory" => L.Pick("查看目录 ", "List directory ") + Get("path"),
+            "run_shell" => (args.TryGetProperty("background", out var background) && background.ValueKind == JsonValueKind.True ? L.Pick("后台命令 ", "Background command ") : L.Pick("运行命令 ", "Run command ")) + Get("exe") + (args.TryGetProperty("args", out var argv) ? " " + ToolResult.Clip(string.Join(' ', argv.EnumerateArray().Select(a => a.GetString())), 160) : ""),
+            "cancel_agent" => L.Pick("停止子代理", "Stop child agent"),
+            "shell_status" => L.Pick("后台命令进度", "Background command status"), "cancel_shell" => L.Pick("停止后台命令", "Stop background command"),
+            "skill_read" => L.Pick("加载技能 /", "Load skill /") + Get("name"), "skill_list" => L.Pick("查看技能列表", "View skill list"), "skill_reference" => L.Pick("读取技能参考 ", "Read skill reference ") + Get("path"), _ => name.StartsWith("mcp_", StringComparison.Ordinal) ? "MCP " + name : name
         };
     }
     internal static Text ToolFailure(string message) => new("  ✕ " + message + "\n", new Style(Color.Red));
     internal static string ResultSummary(JsonElement result, bool details, string? toolName = null)
     {
         if (toolName?.StartsWith("computer_", StringComparison.Ordinal) == true) return ComputerUsePresentation.Summary(toolName, result);
-        if (!result.TryGetProperty("data", out var data)) return "完成";
+        if (!result.TryGetProperty("data", out var data)) return L.Pick("完成", "Done");
         if (data.ValueKind == JsonValueKind.Object)
         {
             if (toolName is "todo_read" or "todo_write" && data.TryGetProperty("todos", out var todos))
             {
                 var items = todos.Deserialize<AllAgent.NET.Core.Models.TodoItem[]>(ToolResult.JsonOptions) ?? [];
                 return "TODO · " + items.Count(t => t.Status == "completed") + "/" + items.Length +
-                    (items.Length == 0 ? " · 暂无待办" : "\n" + string.Join('\n', items.Select(TodoCommand.Line)));
+                    (items.Length == 0 ? L.Pick(" · 暂无待办", " · no items") : "\n" + string.Join('\n', items.Select(TodoCommand.Line)));
             }
+            if (toolName == "plan_propose")
+                return data.TryGetProperty("approved", out var approved) && approved.ValueKind == JsonValueKind.True
+                    ? L.Pick("计划已批准 · 已切换到完全访问", "Plan approved · switched to full access")
+                    : L.Pick("计划已拒绝 · 继续规划", "Plan rejected · continue planning") + (data.TryGetProperty("feedback", out var feedback) && feedback.ValueKind == JsonValueKind.String ? " · " + feedback.GetString() : "");
             if (toolName == "browser" && data.TryGetProperty("browser", out var browser))
             {
                 if (data.TryGetProperty("completed", out var filled) && filled.ValueKind == JsonValueKind.Array)
-                    return "已填写并核对 " + filled.GetArrayLength() + " 个字段；网站保存结果仍需验证";
+                    return L.Pick("已填写并核对 " + filled.GetArrayLength() + " 个字段；网站保存结果仍需验证", "Filled and checked " + filled.GetArrayLength() + " fields; verify the site's saved result");
                 if (data.TryGetProperty("outcome", out var outcome) && outcome.ValueKind == JsonValueKind.String)
-                    return (outcome.GetString() switch { "success_observed" => "✓ 已观察到成功提示", "error_observed" => "! 页面返回错误提示", "unknown" => "? 结果尚未确认，未自动重试", "dialog_pending" => "等待处理网页对话框", _ => "操作已发出，需验证网站结果" }) +
+                    return (outcome.GetString() switch
+                    {
+                        "success_observed" => L.Pick("✓ 已观察到成功提示", "✓ Success message observed"),
+                        "error_observed" => L.Pick("! 页面返回错误提示", "! The page returned an error"),
+                        "unknown" => L.Pick("? 结果尚未确认，未自动重试", "? Result unconfirmed; not retried automatically"),
+                        "dialog_pending" => L.Pick("等待处理网页对话框", "Waiting for a page dialog"),
+                        _ => L.Pick("操作已发出，需验证网站结果", "Action sent; verify the site's result")
+                    }) +
                         (data.TryGetProperty("message", out var message) ? " · " + ToolResult.Clip(message.ToString(), 220) : "");
-                var name = browser.GetProperty("name").GetString() ?? "浏览器";
+                var name = browser.GetProperty("name").GetString() ?? L.Pick("浏览器", "Browser");
                 var endpoint = browser.TryGetProperty("endpoint", out var address) && address.ValueKind == JsonValueKind.String ? " · " + address.GetString() : "";
                 var page = data.TryGetProperty("url", out var url) ? " · " + url.GetString() : "";
                 var profile = browser.TryGetProperty("profile", out var directory) && directory.ValueKind == JsonValueKind.String ? " · " + directory.GetString() : "";
                 var feedback = data.TryGetProperty("actionMessages", out var messages) && messages.ValueKind == JsonValueKind.Array
                     ? messages.EnumerateArray().Where(m => m.TryGetProperty("text", out _)).Select(m => m.GetProperty("text").GetString()).LastOrDefault() : null;
-                var target = data.TryGetProperty("target", out var targetElement) && targetElement.ValueKind == JsonValueKind.String ? " · 目标：" + targetElement.GetString() : "";
-                return name + target + profile + endpoint + page + (feedback == null ? "" : "\n页面提示：" + ToolResult.Clip(feedback, 220));
+                var target = data.TryGetProperty("target", out var targetElement) && targetElement.ValueKind == JsonValueKind.String ? L.Pick(" · 目标：", " · target: ") + targetElement.GetString() : "";
+                return name + target + profile + endpoint + page + (feedback == null ? "" : L.Pick("\n页面提示：", "\nPage message: ") + ToolResult.Clip(feedback, 220));
             }
             if (toolName is "memory_update")
-                return (data.TryGetProperty("summary", out var summary) ? summary.GetString() : "完成") +
+                return (data.TryGetProperty("summary", out var summary) ? summary.GetString() : L.Pick("完成", "Done")) +
                     (data.TryGetProperty("learned", out var learned) && learned.GetArrayLength() > 0 ? "\n" + string.Join("\n", learned.EnumerateArray().Select(line => "    " + line.GetString())) : "");
-            if (data.TryGetProperty("matches", out var matches)) return "找到 " + matches.GetArrayLength() + " 行匹配";
-            if (data.TryGetProperty("characters", out var size)) return "已写入 " + size + " 字符";
+            if (data.TryGetProperty("matches", out var matches)) return L.Pick("找到 " + matches.GetArrayLength() + " 行匹配", matches.GetArrayLength() + " matching lines");
+            if (data.TryGetProperty("characters", out var size)) return L.Pick("已写入 " + size + " 字符", "Wrote " + size + " characters");
             if (data.TryGetProperty("stdout", out var stdout) && stdout.ValueKind == JsonValueKind.String) return ToolResult.Clip(stdout.GetString(), details ? ToolResult.MaxOutputCharacters : 250).Trim();
-            if (data.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.String) return details ? ToolResult.Clip(content.GetString()) : "已读取 " + content.GetString()!.Length + " 字符";
-            if (data.TryGetProperty("entries", out var entries)) return "找到 " + entries.GetArrayLength() + " 个条目";
+            if (data.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.String) return details ? ToolResult.Clip(content.GetString()) : L.Pick("已读取 " + content.GetString()!.Length + " 字符", "Read " + content.GetString()!.Length + " characters");
+            if (data.TryGetProperty("entries", out var entries)) return L.Pick("找到 " + entries.GetArrayLength() + " 个条目", entries.GetArrayLength() + " entries");
         }
-        return details ? data.ToString() : "完成";
+        return details ? data.ToString() : L.Pick("完成", "Done");
     }
     public void Error(string text)
     {

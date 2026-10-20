@@ -1,10 +1,12 @@
 import { defineStore, ref } from '@/lib/store'
 import type { AppSettings } from '@/types'
 import { invoke } from '@/bridge'
+import { applyResolvedLanguage, currentLanguage, resolveLanguage } from '@/i18n'
 
 export const useSettingsStore = defineStore('settings', () => {
   const theme = ref<AppSettings['theme']>('system')
-  const language = ref<AppSettings['language']>('zh')
+  const language = ref<AppSettings['language']>('auto')
+  const languageResolved = ref<AppSettings['languageResolved']>(currentLanguage())
   const defaultModel = ref('')
   const streamingEnabled = ref(true)
   const defaultProviderId = ref('')
@@ -33,7 +35,10 @@ export const useSettingsStore = defineStore('settings', () => {
     browserExecutablePath.value = settings.browserExecutablePath ?? ''
     browserCdpUrl.value = settings.browserCdpUrl ?? ''
     theme.value = settings.theme ?? 'system'
-    language.value = settings.language ?? 'zh'
+    language.value = settings.language ?? 'auto'
+    const resolved = settings.languageResolved ?? resolveLanguage(language.value)
+    languageResolved.value = resolved
+    applyResolvedLanguage(resolved)
     defaultModel.value = settings.defaultModel ?? ''
     streamingEnabled.value = settings.streamingEnabled ?? true
     defaultProviderId.value = settings.defaultProviderId ?? ''
@@ -57,6 +62,31 @@ export const useSettingsStore = defineStore('settings', () => {
     })
   }
 
+  /** Language switches immediately, unlike the rest of the form which saves on demand. */
+  async function setLanguage(next: AppSettings['language']) {
+    const previous = language.value
+    const previousResolved = languageResolved.value
+    const resolved = next === 'auto' ? resolveLanguage('auto') : next
+    language.value = next
+    languageResolved.value = resolved
+    applyResolvedLanguage(resolved)
+    try {
+      await save()
+    } catch (error) {
+      language.value = previous
+      languageResolved.value = previousResolved
+      applyResolvedLanguage(previousResolved)
+      throw error
+    }
+  }
+
+  /** Host-driven changes apply to every open page, including other workspaces. */
+  function applyFromBridge(next: { language: AppSettings['language']; languageResolved: AppSettings['languageResolved'] }) {
+    language.value = next.language
+    languageResolved.value = next.languageResolved
+    applyResolvedLanguage(next.languageResolved)
+  }
+
   applyTheme(theme.value)
 
   if (typeof window.matchMedia === 'function') {
@@ -66,8 +96,8 @@ export const useSettingsStore = defineStore('settings', () => {
   }
 
   return {
-    theme, language, defaultModel, streamingEnabled, defaultProviderId, gitCommitConfigId,
+    theme, language, languageResolved, defaultModel, streamingEnabled, defaultProviderId, gitCommitConfigId,
     browserUseEnabled, browserUseMode, browserExecutablePath, browserCdpUrl,
-    loaded, load, save, applyTheme,
+    loaded, load, save, setLanguage, applyFromBridge, applyTheme,
   }
 })

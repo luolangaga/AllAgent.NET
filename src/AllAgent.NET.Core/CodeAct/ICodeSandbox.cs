@@ -5,7 +5,11 @@ namespace AllAgent.NET.Core.CodeAct;
 
 public delegate ValueTask<ToolResult> HostToolCallback(string name, JsonElement arguments, CancellationToken ct);
 
-public sealed record CodeSandboxContext(string Instructions, string ExecuteCodeDescription);
+public sealed record SandboxCapabilities(string Backend, bool HardwareIsolation, bool PersistentState, bool FileMounts, bool Network);
+public sealed record CodeSandboxContext(string Instructions, string ExecuteCodeDescription)
+{
+    public SandboxCapabilities? Capabilities { get; init; }
+}
 
 public interface ICodeSandbox : IAsyncDisposable
 {

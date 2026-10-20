@@ -2,9 +2,16 @@
 
 使用 FlaUI.UIA3 5.0.0，通过 C# 宿主工具执行；Python CodeAct 只编排 `call_tool`，不直接访问 Windows API。始终可用、无需开关，默认模式为后台。支持 UIA 与窗口截图；目前截图使用 PrintWindow，GPU/透明窗口可能返回不完整画面。尚未接入 Windows Graphics Capture、OCR 或坐标动作。
 
-## 按需加载：不占常驻提示词
+## 按需披露：不占常驻提示词
 
-`computer_*` 这 12 个工具仍然注册在宿主里，但**不进入系统提示词的工具目录**（`CodeActProvider.VisibleTools` 过滤，与 `browser` 同一机制）。模型先 `skill_read(name="computer-use")` 读取内置技能——技能里写明工具契约、模式选择规则和验证步骤——再用 `call_tool("computer_windows", ...)` 调用。提示词里只保留一段约 400 字符的指引（`CodeActInstructions.DesktopAutomation`）。这样每次请求不再携带 12 份 schema 和约 1,900 字符的操作指南。
+`computer_*` 这 12 个工具仍然注册在宿主里，但**默认不进入系统提示词的工具目录**。提示词只保留 `## On-demand capabilities` 里的一行指针（技能名、工具数、前几个工具名）。模型用 `call_tool("skill_read", name="computer-use")` 加载内置技能——技能里写明工具契约、模式选择规则和验证步骤——**加载成功后才解锁**：
+
+- 未加载时直接调用会被拒绝，错误点名要读哪个技能，不会靠猜参数硬跑。
+- 加载当次即返回 `activatedTools` 和 `toolSurface`，同一段 Python 里的后续 `call_tool("computer_windows", ...)` 直接可用。
+- 12 份 schema 随后进入目录（同一轮内契约块会重写，之后每轮都在），披露按**会话**保存，不必每轮重读技能。
+- 用户禁用 `computer-use` 技能后，`computer_*` 重新隐藏并拒绝调用。
+
+注册与披露的分层见 [按需披露的宿主工具](on-demand-tools.zh-CN.md)。
 
 ## 三种模式（无需开关）
 

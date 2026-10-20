@@ -65,7 +65,7 @@ public sealed class CodeActTests
         await using var runtime = await AgentRuntime.CreateAsync(workspace.Options);
         await runtime.CodeAct.PrepareAsync();
         Assert.Contains("cannot be invoked directly", runtime.CodeAct.Instructions);
-        Assert.Contains("list_directory", Assert.Single(runtime.CodeAct.ModelTools).Description);
+        Assert.Contains("list_directory", runtime.CodeAct.Instructions);
         var result = await Execute(runtime, "r = call_tool('file_read', path='missing.txt')\nif not r['ok']:\n    print(r['error'])\nr = call_tool('list_directory', path='.')\nprint(r['ok'])");
         Assert.True(result.Ok, result.ToJson());
         Assert.Contains("True", Stdout(result));
@@ -233,6 +233,55 @@ public sealed class CodeActTests
     }
 
     [Fact]
+    public async Task SharedModuleCatalogImportsInActiveSandbox()
+    {
+        using var workspace = new TestWorkspace();
+        await using var runtime = await AgentRuntime.CreateAsync(workspace.Options);
+        var modules = new[]
+        {
+            "base64", "binascii", "collections", "copy", "dataclasses", "functools", "itertools",
+            "json", "math", "os", "random", "re", "sys", "time", "typing", "unicodedata"
+        };
+        var code = "import json as _probe_json\n_failed = []\n" + string.Join("\n", modules.Select(name =>
+            "try:\n    import " + name + "\nexcept Exception:\n    _failed.append('" + name + "')")) +
+            "\nprint(_probe_json.dumps(_failed))";
+        var result = await Execute(runtime, code);
+        Assert.True(result.Ok, result.ToJson());
+        Assert.Equal("[]\n", Stdout(result));
+    }
+
+    [Fact]
+    public async Task SandboxRuntimeListsVerifiedModulesAndMissingImportsAreActionable()
+    {
+        using var workspace = new TestWorkspace();
+        await using var runtime = await AgentRuntime.CreateAsync(workspace.Options);
+        await runtime.CodeAct.PrepareAsync();
+        var instructions = runtime.CodeAct.Instructions;
+        var diagnostics = JsonSerializer.SerializeToElement(runtime.CodeAct.GetPromptDiagnostics());
+        var backend = diagnostics.TryGetProperty("sandbox", out var sandbox) && sandbox.ValueKind == JsonValueKind.Object
+            ? sandbox.TryGetProperty("backend", out var backendLower) ? backendLower.GetString()
+              : sandbox.TryGetProperty("Backend", out var backendUpper) ? backendUpper.GetString() : null
+            : null;
+        Assert.True(backend is "hyperlight" or "monty", diagnostics.ToString());
+        Assert.Contains("json", instructions);
+        Assert.Contains("call_tool", instructions);
+        Assert.Contains("PowerShell is the primary host automation surface", instructions);
+        if (backend == "hyperlight")
+            Assert.Contains("Standard-library modules available in this sandbox", instructions);
+        else
+            Assert.Contains("Shared standard-library modules for both sandboxes", instructions);
+
+        var unavailable = await Execute(runtime, "import numpy\nprint('must not run')");
+        Assert.False(unavailable.Ok);
+        Assert.Contains("numpy", unavailable.ToJson());
+        Assert.Contains("call_tool", unavailable.ToJson());
+
+        var typo = await Execute(runtime, "print(undefined_value)");
+        Assert.False(typo.Ok);
+        Assert.Contains("undefined_value", typo.ToJson());
+    }
+
+    [Fact]
     public async Task ValidatorAcceptsPureLogicAndCallTool()
     {
         using var workspace = new TestWorkspace();
@@ -297,7 +346,7 @@ public sealed class CodeActTests
         Assert.Equal(ToolResult.MaxOutputCharacters, Stdout(result).Length);
         Assert.StartsWith("9600\n网页内容", Stdout(result));
         Assert.EndsWith("中", Stdout(result));
-        Assert.Contains("extra", Assert.Single(runtime.CodeAct.ModelTools).Description);
+        Assert.Contains("extra", runtime.CodeAct.Instructions);
         Assert.DoesNotContain(runtime.Tools.Definitions, tool => tool.Name.StartsWith("_lan_"));
         Assert.DoesNotContain("_lan_stdout", runtime.CodeAct.Instructions);
         Assert.DoesNotContain("_lan_chunk", runtime.CodeAct.Instructions);
@@ -358,7 +407,7 @@ public sealed class CodeActTests
         Assert.True((await runtime.ProbeSandboxAsync()).Ok);
         runtime.Tools.Register(new ExtraTool());
         await runtime.CodeAct.PrepareAsync();
-        Assert.Contains("extra", Assert.Single(runtime.CodeAct.ModelTools).Description);
+        Assert.Contains("extra", runtime.CodeAct.Instructions);
         var result = await Execute(runtime, "r = call_tool('extra', value='new tool')\nprint(r['data']['value'])");
         Assert.True(result.Ok, result.ToJson());
         Assert.Equal("new tool\n", Stdout(result));

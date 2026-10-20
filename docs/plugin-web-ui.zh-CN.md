@@ -110,7 +110,8 @@ public void Register(PluginContext context)
 | `contributes.pages[]` | object[] | 导航页：`{ id, title, icon?, entry, order? }`。`icon` 取内置图标名（`gauge`、`chart`、`dashboard`、`activity`、`sparkles`、`list`、`globe`、`plug`、`terminal`、`wrench`、`rocket`、`star`、`package`、`blocks`、`wand`、`puzzle`），未知名称回退拼图图标。 |
 | `contributes.toolCards[]` | object[] | 自定义工具卡：`{ tool, entry }`。`tool` 为工具名；命中后该工具调用在对话轨迹中由插件自绘渲染。 |
 | `contributes.commands[]` | object[] | 命令面板入口：`{ id, title, page? }`，`page` 指向本插件页面 id，点击即打开。 |
-| `contributes.panels / settings / composerActions / statusBar` | object[] | **清单已预留**（宿主会保留字段并原样下发），当前版本暂不渲染；后续版本开放。 |
+| `contributes.settings[]` | object[] | 通用设置区：`{ id, title, fields?, entry? }`。宿主 Settings 页渲染原生字段；`entry` 可再嵌一个插件帧显示状态/操作。字段 `key` 仅允许小写字母、数字、`_ - .`。 |
+| `contributes.panels / composerActions / statusBar` | object[] | **清单已预留**（宿主会保留字段并原样下发），当前版本暂不渲染；后续版本开放。 |
 
 校验规则（加载时执行，失败即整体禁用该插件的 Web 部分并显示原因）：
 
@@ -174,6 +175,47 @@ sdk.on('tool.update', call => {
 - `args` / `output` 由宿主裁剪（各 2 万 / 1.6 万字符上限），`output` 为可读文本结果。
 - 帧高度自适应（`sdk.autoResize()` 或 `sdk.resize(h)`），宿主限制在 140–420 dpi 像素区间内；帧失败时回退通用卡片，不影响对话。
 
+### 6.1 声明式工具卡（TUI + GUI）
+
+插件工具可以在 `ToolResult` 上附带一个平台无关的卡片，TUI 和 GUI 都会原生渲染，不需要 HTML：
+
+```csharp
+return ToolResult.Success(data) with
+{
+    Card = new AgentToolCard(
+        Badge: "CODEGRAPH",
+        Title: "query",
+        Summary: "12.4k 字符",
+        Body: "code",              // text | code | paths | search | json
+        Text: preview,
+        Fields: [new("工作区", "LanAgent"), new("截断", "否", "muted")])
+};
+```
+
+- GUI 的 `describeToolCard` 会优先读取结果根级的 `card`，映射到现有卡片布局；TUI 的 `ToolCardPresentation` 使用同一份数据。
+- 卡片字段有硬上限（title 200、summary 500、text 4000、fields 8×200），`ToolResultBudget` 会统一裁剪。
+- 复杂交互仍可使用 `contributes.toolCards` 的自绘帧；简单卡片优先用 `ToolResult.Card`，两端一致且没有静态资产。
+
+### 6.2 通用设置区
+
+`contributes.settings[]` 由宿主 Settings 页通用渲染：
+
+```json
+"settings": [{
+  "id": "codegraph",
+  "title": "CodeGraph",
+  "fields": [
+    { "key": "path", "label": "可执行文件路径", "type": "text" },
+    { "key": "autosync", "label": "自动同步", "type": "boolean", "default": "true" }
+  ],
+  "entry": "web/settings.html"
+}]
+```
+
+- `fields` 支持 `text / number / boolean / select / password`；值保存在 `<shared>/plugins/settings.json`，通过宿主桥 `web.settings.get` / `web.settings.set` 读写（宿主只允许写清单声明的 key）。
+- `entry` 在字段下方渲染一个 `view.kind = "settings"` 的沙箱帧，适合状态、按钮和长任务轮询。帧仍只能调用自己的 `plugin.<包名>.*` 与已声明能力。
+- 插件后端可直接用 `PluginContext.Settings.Get/Set` 读写同一个 store。
+
 ## 7. 宿主能力（capabilities）与 `host.*` API
 
 在清单里声明后，界面通过 `sdk.invoke('host.…')` 使用。所有能力默认关闭（deny by default），未声明即拒绝。
@@ -215,7 +257,7 @@ const sdk = AllAgentPlugin.connect()
 
 sdk.ready                 // Promise<void>：握手完成（15 秒超时 → handshake_timeout）
 sdk.plugin                // { packageId, name, version }
-sdk.view                  // { kind: 'page' | 'toolcard' | 'panel', id, params? }
+sdk.view                  // { kind: 'page' | 'toolcard' | 'panel' | 'settings', id, params? }
 sdk.capabilities          // string[]
 sdk.theme                 // { mode: 'light' | 'dark', vars: Record<string,string> }
 sdk.context               // { workspace?, conversationId?, … }
@@ -263,6 +305,7 @@ body { background: var(--ag-background); color: var(--ag-foreground); }
 
 - **贡献快照**：桥方法 `web.contributions` 返回 `{ sdkVersion, assetBaseUrl, plugins[] }`，前端 shell 据此渲染导航、工具卡与命令；插件装卸/启停/开关变化时推送 `web.contributions.changed`。
 - **软开关**：桥方法 `web.setEnabled { packageId, enabled }`（默认 `true`，随插件启用自动生效，持久化在 `installed.json` 的 `webEnabled` 字段）。
+- **插件设置**：桥方法 `web.settings.get { packageId }` → `{ packageId, values }`；`web.settings.set { packageId, key, value }`。宿主只接受清单 `contributes.settings[].fields` 声明过的 key。
 - **终端面板**：`/plugins` 列表会显示每个插件的 `Web n 界面 / m 工具卡`，Web 清单异常时标注「Web 异常」。
 - **插件页（Web UI）**：每个带 `web` 块的插件卡片显示页面/工具卡数量、能力清单、错误原因与开关。
 

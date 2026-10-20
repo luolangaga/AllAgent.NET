@@ -3,15 +3,29 @@ import json
 import os
 import sys
 import sysconfig
+import uuid
 from pydantic_monty import Monty, CollectString
 
 sys.stdin.reconfigure(encoding='utf-8')
 sys.stdout.reconfigure(encoding='utf-8')
 
-def send(value):
-    print(json.dumps(value, ensure_ascii=True), flush=True)
+MAX_FRAME = 16 * 1024 * 1024
+def read():
+    line = sys.stdin.readline(MAX_FRAME + 1)
+    if not line.endswith('\n') or len(line.encode('utf-8')) > MAX_FRAME:
+        raise RuntimeError('Invalid or oversized sandbox frame')
+    return json.loads(line)
 
-request = json.loads(sys.stdin.readline())
+def send(value):
+    value.update(version=1, executionId=request['executionId'])
+    text = json.dumps(value, ensure_ascii=True)
+    if len(text.encode('utf-8')) > MAX_FRAME:
+        raise RuntimeError('Sandbox frame exceeds 16 MiB')
+    print(text, flush=True)
+
+request = read()
+if request.get('version') != 1 or not request.get('executionId'):
+    raise RuntimeError('Invalid sandbox protocol version or execution ID')
 allowed = set(request['tools'])
 
 def call_tool(tool_name, /, arguments=None, **parameters):
@@ -23,9 +37,10 @@ def call_tool(tool_name, /, arguments=None, **parameters):
         parameters = {**arguments, **parameters}
     if tool_name not in allowed:
         return {'ok': False, 'data': None, 'error': 'Unknown or unavailable host tool', 'truncated': False}
-    send({'kind': 'call', 'name': tool_name, 'arguments': parameters})
-    reply = json.loads(sys.stdin.readline())
-    if reply.get('kind') != 'tool_result':
+    call_id = uuid.uuid4().hex
+    send({'kind': 'call', 'name': tool_name, 'arguments': parameters, 'callId': call_id})
+    reply = read()
+    if reply.get('kind') != 'tool_result' or reply.get('version') != 1 or reply.get('executionId') != request['executionId'] or reply.get('callId') != call_id:
         raise RuntimeError('Invalid host response')
     return reply['result']
 
@@ -42,6 +57,9 @@ try:
           'stderr': '', 'exitCode': 0}, 'error': None, 'truncated': len(collector.output) > 20000}})
 except Exception as error:
     message = str(error)[:4000]
+    hint = ''
+    if 'ModuleNotFoundError' in message or 'ImportError' in message:
+        hint = ' The active Monty sandbox provides only the modules listed in its runtime guidance; use call_tool(...) for host I/O instead of importing another module.'
     send({'kind': 'result', 'result': {'ok': False, 'data': {'stdout': collector.output[:20000],
-          'stderr': message, 'exitCode': 1}, 'error': 'Monty execution failed: ' + message,
+          'stderr': message, 'exitCode': 1}, 'error': 'Monty execution failed: ' + message + hint,
           'truncated': len(collector.output) > 20000}})

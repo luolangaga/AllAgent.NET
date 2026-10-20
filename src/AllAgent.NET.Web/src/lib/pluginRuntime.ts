@@ -11,7 +11,7 @@ export const FRAME_PROTOCOL = 1
 export const FRAME_SDK_VERSION = 1
 
 export interface FrameView {
-  kind: 'page' | 'panel' | 'toolcard'
+  kind: 'page' | 'panel' | 'toolcard' | 'settings'
   id: string
   params?: Record<string, unknown>
 }

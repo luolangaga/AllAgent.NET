@@ -22,8 +22,9 @@ public sealed partial class BrowserAutomationSession
                     "bing" => "https://www.bing.com/search?q=",
                     "google" => "https://www.google.com/search?q=",
                     "duckduckgo" => "https://duckduckgo.com/?q=",
+                    "baidu" => "https://www.baidu.com/s?wd=",
                     _ => throw new ArgumentException("Unsupported search engine.")
-                } + Uri.EscapeDataString(Text("query"));
+                } + Uri.EscapeDataString(Text("query")) + (engine == "baidu" ? "&ie=utf-8" : "");
                 var opened = await ExecuteAsync("new_tab", JsonSerializer.SerializeToElement(new { url = searchUrl }), ct);
                 if (!opened.Ok) return opened;
                 var script = SearchResultsScript.Replace("__LIMIT__", Math.Clamp(Number("limit", 5), 1, 10).ToString(System.Globalization.CultureInfo.InvariantCulture));
@@ -44,7 +45,8 @@ public sealed partial class BrowserAutomationSession
                     "duckduckgo" => "https://duckduckgo.com/?q=" + query,
                     "google" => "https://www.google.com/search?q=" + query + "&udm=14",
                     "bing" => "https://www.bing.com/search?q=" + query,
-                    _ => throw new ArgumentException("Unsupported search engine: duckduckgo, google or bing required.")
+                    "baidu" => "https://www.baidu.com/s?wd=" + query + "&ie=utf-8",
+                    _ => throw new ArgumentException("Unsupported search engine: duckduckgo, google, bing or baidu required.")
                 };
                 return await ExecuteAsync("open", JsonSerializer.SerializeToElement(new { url }), ct);
             case "navigate":

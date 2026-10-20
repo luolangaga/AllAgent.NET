@@ -5,6 +5,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Channels;
+using L = AllAgent.NET.Core.Localization.HostText;
 
 namespace AllAgent.NET.Terminal;
 
@@ -33,13 +34,15 @@ internal static class TerminalSession
         try
         {
             var args = TerminalArguments.Parse(raw);
+            AllAgent.NET.Core.Localization.HostText.Set(AllAgent.NET.Core.Localization.HostText.Resolve(
+                AllAgent.NET.Core.Localization.LanguageProbe.Read(args.SettingsDirectory)));
             if (mode == "broker") return await BrokerAsync(PipeName(args.DataDirectory), raw);
             if (args.Command != "attach" || args.Flags.Contains("help")) return await TerminalApp.RunAsync(raw);
             if (!OperatingSystem.IsWindows() || Console.IsInputRedirected || Console.IsOutputRedirected)
-                throw new InvalidOperationException("attach 需要 Windows 交互终端。");
+                throw new InvalidOperationException(L.Pick("attach 需要 Windows 交互终端。", "attach requires an interactive Windows terminal."));
             using var existing = new NamedPipeClientStream(".", PipeName(args.DataDirectory), PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
             try { existing.Connect(1000); }
-            catch (TimeoutException) { throw new InvalidOperationException("没有可接入的旧版后台会话；运行 allagent 开始独立聊天。"); }
+            catch (TimeoutException) { throw new InvalidOperationException(L.Pick("没有可接入的旧版后台会话；运行 allagent 开始独立聊天。", "No legacy background session to attach to; run allagent to start a standalone chat.")); }
             return await ClientAsync(existing);
         }
         catch (Exception ex) { Console.Error.WriteLine("AllAgent: " + ex.Message); return 1; }
@@ -47,7 +50,7 @@ internal static class TerminalSession
     internal static string PipeName(string directory) => "allagent-session-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory)).ToUpperInvariant())))[..32];
     internal static ProcessStartInfo StartInfo(string[] raw, string mode)
     {
-        var executable = Environment.ProcessPath ?? throw new InvalidOperationException("无法定位 AllAgent 程序。");
+        var executable = Environment.ProcessPath ?? throw new InvalidOperationException(L.Pick("无法定位 AllAgent 程序。", "Could not locate the AllAgent executable."));
         var info = new ProcessStartInfo(executable) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = Environment.CurrentDirectory };
         if (Path.GetFileNameWithoutExtension(executable).Equals("dotnet", StringComparison.OrdinalIgnoreCase)) info.ArgumentList.Add(Assembly.GetExecutingAssembly().Location);
         foreach (var arg in raw) info.ArgumentList.Add(arg);
@@ -215,9 +218,9 @@ internal static class TerminalSession
     private static async Task<int> ClientAsync(NamedPipeClientStream pipe)
     {
         var first = await ReadPacketAsync(pipe);
-        if (first is not { Type: Hello, Data.Length: 4 }) throw new IOException("后台会话协议不匹配。");
+        if (first is not { Type: Hello, Data.Length: 4 }) throw new IOException(L.Pick("后台会话协议不匹配。", "The background session protocol does not match."));
         using var modes = new ClientConsoleModes();
-        Console.WriteLine($"已接入 AllAgent 进程 {BitConverter.ToInt32(first.Value.Data)}；沿用该会话的工作区和权限。关闭终端或 Ctrl+] 断开；最后一个终端断开后后台自动退出。");
+        Console.WriteLine(L.Pick($"已接入 AllAgent 进程 {BitConverter.ToInt32(first.Value.Data)}；沿用该会话的工作区和权限。关闭终端或 Ctrl+] 断开；最后一个终端断开后后台自动退出。", $"Attached to AllAgent process {BitConverter.ToInt32(first.Value.Data)}; it keeps its workspace and permissions. Close the terminal or press Ctrl+] to detach; the background session exits when the last terminal disconnects."));
         using var done = new CancellationTokenSource();
         var outgoing = Channel.CreateUnbounded<(byte Type, byte[] Data)>();
         using var output = Console.OpenStandardOutput();
@@ -258,7 +261,7 @@ internal static class TerminalSession
             {
                 if (packet.Type == Output) { await output.WriteAsync(packet.Data, done.Token); await output.FlushAsync(done.Token); }
                 else if (packet.Type == Exit && packet.Data.Length == 4) { code = BitConverter.ToInt32(packet.Data); break; }
-                else throw new IOException("后台会话返回了无效数据。");
+                else throw new IOException(L.Pick("后台会话返回了无效数据。", "The background session returned invalid data."));
             }
         }
         catch (OperationCanceledException) when (done.IsCancellationRequested) { }
@@ -270,7 +273,7 @@ internal static class TerminalSession
             await output.WriteAsync(Encoding.UTF8.GetBytes("\u001b[?9001l\u001b[?1004l\u001b[?1000l\u001b[?1002l\u001b[?1003l\u001b[?1006l\u001b[?2004l\u001b[?1049l\u001b[?25h\u001b[0m"));
             await output.FlushAsync();
         }
-        Console.WriteLine("已离开终端连接；最后一个连接断开后后台自动退出。");
+        Console.WriteLine(L.Pick("已离开终端连接；最后一个连接断开后后台自动退出。", "Detached from the terminal; the background session exits after the last connection closes."));
         return code;
     }
     internal static async Task WritePacketAsync(Stream stream, byte type, byte[] data, CancellationToken ct = default)
@@ -296,9 +299,9 @@ internal static class TerminalSession
         private readonly Encoding _inputEncoding = Console.InputEncoding, _outputEncoding = Console.OutputEncoding;
         public ClientConsoleModes()
         {
-            if (!GetConsoleMode(_input, out _inputMode) || !GetConsoleMode(_output, out _outputMode)) throw new IOException("无法读取终端模式。");
+            if (!GetConsoleMode(_input, out _inputMode) || !GetConsoleMode(_output, out _outputMode)) throw new IOException(L.Pick("无法读取终端模式。", "Could not read the terminal mode."));
             if (!SetConsoleMode(_input, (_inputMode | 0x0010 | 0x0080) & ~(0x0001u | 0x0002u | 0x0004u | 0x0040u | 0x0200u)) || !SetConsoleMode(_output, _outputMode | 0x0004))
-            { Dispose(); throw new IOException("无法设置终端模式。"); }
+            { Dispose(); throw new IOException(L.Pick("无法设置终端模式。", "Could not set the terminal mode.")); }
             Console.InputEncoding = Encoding.UTF8; Console.OutputEncoding = new UTF8Encoding(false);
         }
         public void Dispose()

@@ -4,10 +4,14 @@
 
 ## 已处理
 
+- CodeAct 契约拆成稳定前缀与动态尾部：`CodeActProvider.StableInstructions`（规则、文件/Shell/PowerShell 说明等）固定为第一个 system 消息；`DynamicInstructions`（host tool catalog、sandbox runtime、当前权限、PowerShell 模块摘要、plan/read-only 限制、shell allowlist、host environment）由 `AgentEngine` 作为内部 `tool_context` 用户消息追加在历史尾部。技能披露或工具注册只追加新快照，不再重写 40k 级的第一个 system 块。
+- 技能目录从稳定 host instructions 中移出，改为尾部 `skills_context` 用户消息。启停技能只追加新快照，不再改变 `AGENTS.md`/session prompt 所在的前缀。
+- `execute_code` 的工具描述不再拼接 `Available host tools: ...`。可见工具名、技能披露和插件/MCP 工具注册变化时，协议工具 schema 保持字节稳定；完整 catalog 仍在 system 上下文/`tool_context` 中。
+- Anthropic 显式断点改为：第一个稳定 system、最后一个稳定 system、最后一个稳定历史消息、最后一条消息。尾部 `skills_context`/`tool_context`/`policy_context`/`todo_context` 会被跳过，因此尾部变化不会挤掉历史前缀的断点。
 - 易变提示改为尾部持久快照：问题偏好（`/questions`）与 Diligence 积极度等易变内容不再作为第三条 system 消息插在历史之前，而是由 `AgentOptions.VolatileInstructionsProvider` / `AgentTurnContext.VolatileSystemPrompt` 汇成一条内部 `policy_context` 用户消息，仅在内容变化时追加到历史尾部并持久化（改回默认会追加一条撤销快照，压缩丢弃后自动补回）。改偏好只追加尾部消息，既有消息逐字节不变，因此整段历史前缀仍可命中；Responses / Codex 路径下易变内容留在 input 消息里，不再污染合并的 `instructions`。`ChatMessage.IsVolatileContext` 保留给插件自行注入的 system 尾部。
 - `AgentEngine` 原本在每次迭代将当前 TODO 改写到第二条 system 中。现在仅在清单变化时追加内部用户消息并持久化；跨用户轮次复用相同快照，清空清单会追加空快照。测试验证历史前缀在更新和跨轮次时保持一致。
 - 普通 OpenAI 请求原本没有 `prompt_cache_key`。Chat Completions 和 Responses 现在对 HTTPS 官方 `api.openai.com` 使用稳定的会话 ID；每轮的 `RoutingTurnId` 不参与缓存 key。第三方兼容接口不自动发送该字段。Codex 专用端点原有的 session-id 保持原行为。稳定 key 对不同模型的作用不同，不能保证命中，也不能修复内容本身变化。
-- PowerShell 模块摘要进入第一个 system 块，但此前没有在摘要层规范排序。现在按模块名、版本排序，防止同一组模块仅因枚举顺序不同而改变提示词。
+- PowerShell 模块摘要已移到尾部 `tool_context` 快照，并按模块名、版本排序；装/删模块只改变尾部，不影响稳定契约。
 - Anthropic 可选 1 小时缓存 TTL：`/cache ttl 1h` 时 4 个 `cache_control` 统一带 `ttl:"1h"`，跨 5 分钟停顿仍可复用；1 小时写入按 2x 计费，默认关闭。统一 TTL 避免混用时的“长 TTL 必须在前”排序约束。
 - OpenAI 可选显式 24h 保留：`/cache retention 24h` 时仅官方 `api.openai.com`、仅 gpt-4.1 与 gpt-5 系列旧机型发送 `prompt_cache_retention:"24h"`（GPT-5.6+ 已改用 `prompt_cache_options.ttl`，不发送该字段）。默认关闭，避免改变 ZDR 账号的数据保留语义；非 ZDR 账号通常本来就是 24h。
 - 缓存统计解析补齐：OpenAI 兼容协议解析 DeepSeek 根字段 `prompt_cache_hit_tokens` 与 `prompt_tokens_details.cache_write_tokens`；Responses 解析 `input_tokens_details.cache_write_tokens`；Anthropic 解析 `cache_creation_input_tokens`。会话聚合新增 `CacheWriteInputTokens`，终端侧边栏显示命中率与写入量。
@@ -22,12 +26,12 @@
 
 | 条件 | 当前代码与影响 | 处理边界 |
 |---|---|---|
-| 项目规则、技能列表、子代理目录或角色变化 | `AgentEngine` 每步刷新 `InstructionsProvider`；`AgentService` 将技能和可用代理拼入其中，修改会影响后续历史前缀 | 不能冻结角色权限或忽略新项目规则；此类内容属于稳定块，不应把时钟、随机值写进其中（易变内容改走 volatile 通道） |
-| 第一个 system 中的运行环境或能力变化 | `CodeActProvider.Instructions` 包含工具目录、沙箱说明、模块摘要、工作目录和运行限制 | 真实能力变化需要反映；跨工作区或跨宿主不保证共享完整 system 缓存 |
+| 项目规则、技能列表、子代理目录或角色变化 | `AgentEngine` 每步刷新 `InstructionsProvider`；技能列表已改为尾部 `skills_context` 快照，项目规则/角色仍属稳定块，修改会影响后续历史前缀 | 不能冻结角色权限或忽略新项目规则；此类内容属于稳定块，不应把时钟、随机值写进其中（易变内容改走 volatile 通道） |
+| 工具目录、沙箱说明、模块摘要、工作目录或运行限制变化 | 已从第一个 system 块移到尾部 `tool_context` 快照；技能披露/工具注册只追加尾部，不重写稳定前缀 | 真实能力变化仍会改变尾部快照，但不再连带作废稳定契约和历史前缀 |
 | 插件修改历史 | `ConfigureRequestAsync` 可以改写任意历史内容 | 插件应尽量追加新上下文，避免重复格式化或改写已有消息；当前未对插件做缓存命中保证 |
 | 上下文压缩、撤回或图片恢复 | 摘要替换历史、撤回裁剪历史、删除被拒图片都会改变请求前缀 | 这些是必要行为，缓存降低不能直接判断为缺陷 |
 | 模型、账号或推理配置切换 | 不同模型和账号不能假定共享缓存；部分配置还会影响提示词渲染和 native state 重放 | 不为命中率保留不兼容的签名或加密状态 |
-| Anthropic 断点和回溯 | 当前使用最多两个 system 断点及末尾两个可缓存消息断点；大量新增内容块可能使之前写入的位置落在回溯窗口之外 | 当前末尾两个消息并不等于精确保留上一次请求边界；需要真实长块请求数据再调整策略 |
+| Anthropic 断点和回溯 | 当前使用两个稳定 system 断点、最后一个稳定历史消息断点及最后一条消息断点；尾部快照会被跳过，避免挤掉历史边界 | 仍需真实长块请求数据微调；大量新增内容块可能使较早写入点落在回溯窗口之外 |
 | Responses API 的单字段 instructions | 稳定 system 指令仍会拼进 `instructions`，项目规则或角色目录变化仍重写整个前缀；易变策略已改为 input 中的 `policy_context` 快照，不再扩大失效范围 | 属于协议结构限制；GPT-5.6+ 的会话中 system 消息能力未接入 |
 | Anthropic 旧模型的思考缓存 | 追加非 tool_result 用户内容可能触发部分旧模型移除思考块；TODO 快照也属于这种内容 | TODO 改动保留客户端前缀，不代表所有 Anthropic 模型都保留服务端思考缓存 |
 | 缓存长度门槛、过期、驱逐和路由 | 即使输入相同，也可能没有可复用的服务端缓存 | 以提供商返回的 cached tokens 为准；未知值不应当作零 |

@@ -108,7 +108,8 @@ public sealed class CommandCodeProvider(CommandCodeAccount account, HttpClient h
         if (request.Config.ReasoningEffort != "default")
         {
             if (!ReasoningSettings.Efforts(request.Config).Contains(request.Config.ReasoningEffort)) throw new ArgumentException("当前模型不支持所选思考强度。");
-            parameters["reasoning_effort"] = request.Config.ReasoningEffort;
+            // The official CLI's wire values are off/low/medium/high/xhigh/max; the host spells "off" as "none".
+            parameters["reasoning_effort"] = request.Config.ReasoningEffort == "none" ? "off" : request.Config.ReasoningEffort;
         }
         return new JsonObject
         {

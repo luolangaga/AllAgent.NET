@@ -213,20 +213,25 @@ public sealed class ComputerUseTests
     }
 
     [Fact]
-    public async Task RealHyperlightCodeActCallsRegisteredWindowsBackendWithoutASwitch()
+    public async Task RealHyperlightCodeActCallsWindowsBackendAfterLoadingItsSkill()
     {
         if (!OperatingSystem.IsWindows()) return;
         using var workspace = new TestWorkspace();
         var state = new ComputerUseState(); state.Configure(ComputerInteractionMode.BackgroundOnly);
-        await using var runtime = await AgentRuntime.CreateAsync(workspace.Options with { ComputerUse = state, Permission = PermissionMode.Full });
+        using var store = new AllAgent.NET.Core.Data.DataStore(Path.Combine(workspace.Root, "data"));
+        var catalog = new AllAgent.NET.Core.Services.SkillCatalog(store, workspace.Root, Path.Combine(workspace.Root, "skills"), workspace.Root);
+        catalog.SeedBundled();
+        await using var runtime = await AgentRuntime.CreateAsync(workspace.Options with { ComputerUse = state, Permission = PermissionMode.Full, Skills = catalog });
+        Assert.DoesNotContain("computer_windows", runtime.CodeAct.Instructions);
+        Assert.True((await runtime.CodeAct.CallToolAsync("skill_read", JsonSerializer.SerializeToElement(new { name = "computer-use" }), default)).Ok);
         var modeResult = await runtime.CodeAct.ExecuteAsync("execute_code", JsonSerializer.SerializeToElement(new { code = "r = call_tool('computer_mode', mode='foreground', reason='Check mode selection without sending input')\nif r['ok']:\n    print('selected-foreground')\nelse:\n    print(r['error'])\ns = call_tool('computer_mode', mode='background', reason='Software UI testing')\nif s['ok']:\n    print('selected-background')\nelse:\n    print(s['error'])" }), runtime.CodeAct.CallToolAsync, default);
         Assert.True(modeResult.Ok, modeResult.ToJson()); Assert.Contains("selected-foreground", JsonSerializer.Serialize(modeResult.Data)); Assert.Contains("selected-background", JsonSerializer.Serialize(modeResult.Data));
         Assert.Equal(ComputerInteractionMode.BackgroundOnly, state.Snapshot().Mode);
         var result = await runtime.CodeAct.ExecuteAsync("execute_code", JsonSerializer.SerializeToElement(new { code = "r = call_tool('computer_windows')\nif r['ok']:\n    print('windows-read', len(r['data']))\nelse:\n    print(r['error'])" }), runtime.CodeAct.CallToolAsync, default);
         Assert.True(result.Ok, result.ToJson());
         Assert.Contains("windows-read", JsonSerializer.Serialize(result.Data, ToolResult.JsonOptions));
-        // No enable switch: the backend stays reachable and the prompt only points at the skill.
+        // Loading the owning skill discloses the registered backend for this conversation.
         Assert.Contains("computer-use", runtime.CodeAct.Instructions);
-        Assert.DoesNotContain("computer_windows", runtime.CodeAct.Instructions);
+        Assert.Contains("computer_windows", runtime.CodeAct.Instructions);
     }
 }

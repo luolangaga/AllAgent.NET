@@ -90,6 +90,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   // so a finished task unlocks the sandbox switch immediately instead of at the next reload.
   bridgeEvents.on('runs.changed', () => { void loadControls() })
   bridgeEvents.on('tasks.updated', () => { void loadControls() })
+  // Plan approval changes the host's permission stance without an RPC from this page.
+  bridgeEvents.on('session.controls', next => { controls.value = next })
 
   return { workspace, dataDirectory, sharedDirectory, workspacesRoot, list, switching, controls, available, switcherOpen, openSwitcher, closeSwitcher, load, switchTo, openFolderDialog, create, setPermission, setSandbox }
 })

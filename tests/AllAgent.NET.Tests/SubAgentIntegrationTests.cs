@@ -79,7 +79,7 @@ public sealed class SubAgentIntegrationTests
             {
                 var code = child
                     ? "print(call_tool(\"file_write\", path=\"desktop-child.txt\", content=\"blocked\"))"
-                    : "print(call_tool(\"subagent\", agent=\"modify\", task=\"child proof\"))";
+                    : "print(call_tool(\"subagent\", agent=\"modify\", task=\"child proof\", contract={'objective':'child proof','editablePaths':['desktop-child.txt']}))";
                 yield return new(ChunkType.ToolCallComplete, ToolCall: new("code", "execute_code", JsonSerializer.Serialize(new { code })));
                 yield return new(ChunkType.Done, FinishReason: "tool_calls");
             }

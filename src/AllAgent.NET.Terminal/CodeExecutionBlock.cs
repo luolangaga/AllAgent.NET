@@ -1,6 +1,7 @@
 using System.Text.Json;
 using AllAgent.NET.Core.Services;
 using AllAgent.NET.Core.Tools;
+using L = AllAgent.NET.Core.Localization.HostText;
 using Spectre.Console;
 using Spectre.Console.Rendering;
 
@@ -167,12 +168,12 @@ internal sealed class CodeExecutionBlock(string id, string code, bool reasoning 
     public IRenderable Details(int span, int selected)
     {
         RefreshDetails?.Invoke();
-        if (IsReasoning) return new Rows(new Text("模型返回的思考内容", new Style(Color.Grey)), new Text(Code));
+        if (IsReasoning) return new Rows(new Text(L.Pick("模型返回的思考内容", "Reasoning returned by the model"), new Style(Color.Grey)), new Text(Code));
         var entries = DetailEntries(span);
         var calls = span < 0 ? Invocations : Invocations.Where(invocation => invocation.SpanIndex == span).ToList();
         var rows = new List<IRenderable>();
-        if (span < 0) rows.Add(new Rows(new Text("调度代码（Python）", new Style(Color.Grey)), new PythonCodeText(this)));
-        if (span < 0 && calls.Count > 0 && Result != null) rows.Add(new Text("Python 执行结果\n" + Pretty(Result)));
+        if (span < 0) rows.Add(new Rows(new Text(L.Pick("调度代码（Python）", "Dispatch code (Python)"), new Style(Color.Grey)), new PythonCodeText(this)));
+        if (span < 0 && calls.Count > 0 && Result != null) rows.Add(new Text(L.Pick("Python 执行结果\n", "Python result\n") + Pretty(Result)));
         if (calls.Count > 0)
         {
             var entry = entries[Math.Clamp(selected, 0, entries.Count - 1)];
@@ -180,10 +181,10 @@ internal sealed class CodeExecutionBlock(string id, string code, bool reasoning 
             rows.Add(new Text(call.Name + " · " + State(call.Ok) + $" · {Math.Clamp(selected, 0, calls.Count - 1) + 1}/{calls.Count}", new Style(call.Ok == false ? Color.Red : Color.Green)));
             if (entry.Task is { } task)
             {
-                if (span >= 0 && IsChildTask(task) && TaskTranscript != null) return new Rows(new Text($"子代理 {Math.Clamp(selected, 0, entries.Count - 1) + 1}/{entries.Count} · ←→ 切换", new Style(Color.Grey)), TaskTranscript(task));
-                rows.Add(new Text(TerminalSafeText.Clean(task.Title + "\n状态 · " + TaskState(task.State) + "\n当前步骤 · " + (task.CurrentStep ?? "等待执行"))));
+                if (span >= 0 && IsChildTask(task) && TaskTranscript != null) return new Rows(new Text(L.Pick($"子代理 {Math.Clamp(selected, 0, entries.Count - 1) + 1}/{entries.Count} · ←→ 切换", $"Child agent {Math.Clamp(selected, 0, entries.Count - 1) + 1}/{entries.Count} · ←→ switch"), new Style(Color.Grey)), TaskTranscript(task));
+                rows.Add(new Text(TerminalSafeText.Clean(task.Title + L.Pick("\n状态 · ", "\nState · ") + TaskState(task.State) + L.Pick("\n当前步骤 · ", "\nCurrent step · ") + (task.CurrentStep ?? L.Pick("等待执行", "Waiting to run")))));
                 rows.Add(new Text(TerminalSafeText.Clean(string.Join('\n', task.Steps))));
-                rows.Add(new Text(TerminalSafeText.Clean("输出 / 结果\n" + task.Output + (task.Error == null ? "" : "\n错误 · " + task.Error))));
+                rows.Add(new Text(TerminalSafeText.Clean(L.Pick("输出 / 结果\n", "Output / result\n") + task.Output + (task.Error == null ? "" : L.Pick("\n错误 · ", "\nError · ") + task.Error))));
             }
             else if (Diff(call) is { } diff)
             {
@@ -192,14 +193,19 @@ internal sealed class CodeExecutionBlock(string id, string code, bool reasoning 
             }
             else
             {
-                rows.Add(new Text("入参\n" + Pretty(call.Args)));
-                rows.Add(new Text("结果\n" + (call.Result == null ? "正在等待执行结果 / 用户授权" : Pretty(call.Result))));
+                if (ToolCardPresentation.Read(call.Result) is { } detailCard)
+                {
+                    var detail = ToolCardPresentation.Detail(detailCard);
+                    if (detail.Length > 0) rows.Add(new Text(L.Pick("卡片\n", "Card\n") + detail));
+                }
+                rows.Add(new Text(L.Pick("入参\n", "Arguments\n") + Pretty(call.Args)));
+                rows.Add(new Text(L.Pick("结果\n", "Result\n") + (call.Result == null ? L.Pick("正在等待执行结果 / 用户授权", "Waiting for the result / user approval") : Pretty(call.Result))));
             }
         }
         else
         {
-            rows.Add(new Text(span >= 0 ? Spans[span].Name + " · 尚未执行此调用" : "Python · " + State(Ok)));
-            if (span < 0) rows.Add(new Text("执行结果\n" + (Result == null ? "等待沙箱返回" : Pretty(Result))));
+            rows.Add(new Text(span >= 0 ? Spans[span].Name + L.Pick(" · 尚未执行此调用", " · this call has not run yet") : "Python · " + State(Ok)));
+            if (span < 0) rows.Add(new Text(L.Pick("执行结果\n", "Execution result\n") + (Result == null ? L.Pick("等待沙箱返回", "Waiting for the sandbox") : Pretty(Result))));
         }
         return new Rows(rows);
     }
@@ -250,13 +256,13 @@ internal sealed class CodeExecutionBlock(string id, string code, bool reasoning 
         using var document = JsonDocument.Parse(json);
         return JsonSerializer.Serialize(document.RootElement, new JsonSerializerOptions { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
     }
-    private static string State(bool? ok) => ok == true ? "成功" : ok == false ? "失败" : "执行中";
+    private static string State(bool? ok) => ok == true ? L.Pick("成功", "Succeeded") : ok == false ? L.Pick("失败", "Failed") : L.Pick("执行中", "Running");
     private static string TaskState(BackgroundTaskState state) => state switch
     {
-        BackgroundTaskState.Queued => "排队中", BackgroundTaskState.Running => "运行中", BackgroundTaskState.Completed => "已完成",
-        BackgroundTaskState.AwaitingApproval => "等待授权", BackgroundTaskState.AwaitingAnswer => "等待回答",
-        BackgroundTaskState.Cancelling => "正在停止",
-        BackgroundTaskState.Cancelled => "已停止", BackgroundTaskState.Interrupted => "已中断", _ => "失败"
+        BackgroundTaskState.Queued => L.Pick("排队中", "Queued"), BackgroundTaskState.Running => L.Pick("运行中", "Running"), BackgroundTaskState.Completed => L.Pick("已完成", "Completed"),
+        BackgroundTaskState.AwaitingApproval => L.Pick("等待授权", "Awaiting approval"), BackgroundTaskState.AwaitingAnswer => L.Pick("等待回答", "Awaiting answer"),
+        BackgroundTaskState.Cancelling => L.Pick("正在停止", "Stopping"),
+        BackgroundTaskState.Cancelled => L.Pick("已停止", "Stopped"), BackgroundTaskState.Interrupted => L.Pick("已中断", "Interrupted"), _ => L.Pick("失败", "Failed")
     };
     private static bool IsChildTask(BackgroundTaskInfo task) => task.Kind == "agent" || task.Kind != "shell" && task.ParentSessionId != null;
     private BackgroundTaskInfo? TaskInfo(ToolInvocation call)
@@ -281,7 +287,7 @@ internal sealed class CodeExecutionBlock(string id, string code, bool reasoning 
     }
     private IRenderable DiffRows(JsonElement diff, int limit, int span = -1)
     {
-        var rows = new List<IRenderable> { new Text($"+{diff.GetProperty("added").GetInt32()} / −{diff.GetProperty("removed").GetInt32()} 行", TraceStyle(span, Color.Grey)) };
+        var rows = new List<IRenderable> { new Text(L.Pick($"+{diff.GetProperty("added").GetInt32()} / −{diff.GetProperty("removed").GetInt32()} 行", $"+{diff.GetProperty("added").GetInt32()} / −{diff.GetProperty("removed").GetInt32()} lines"), TraceStyle(span, Color.Grey)) };
         var lines = diff.GetProperty("lines").EnumerateArray().ToArray();
         foreach (var line in lines.Take(limit))
         {
@@ -289,8 +295,8 @@ internal sealed class CodeExecutionBlock(string id, string code, bool reasoning 
             var number = kind == "removed" ? line.GetProperty("oldLine") : line.GetProperty("newLine");
             rows.Add(new Text($"{number.ToString(),4} {(kind == "added" ? "+" : kind == "removed" ? "−" : " ")} {TerminalSafeText.Clean(line.GetProperty("text").GetString() ?? "")}", UseMarkers ? TraceStyle(span, kind == "added" ? Color.Green : kind == "removed" ? Color.Red : Color.Grey) : new Style(kind == "added" ? Color.Green : kind == "removed" ? Color.Red : Color.Grey, kind == "added" ? new Color(0, 65, 49) : kind == "removed" ? new Color(85, 0, 22) : Color.Default)));
         }
-        if (lines.Length > limit) rows.Add(new Text("… 点击查看完整变更（详情可滚动）", TraceStyle(span, Color.Grey)));
-        if (diff.TryGetProperty("truncated", out var truncated) && truncated.GetBoolean()) rows.Add(new Text("变更较长，记录已截断。", TraceStyle(span, Color.Grey)));
+        if (lines.Length > limit) rows.Add(new Text(L.Pick("… 点击查看完整变更（详情可滚动）", "… click for the full diff (the detail view scrolls)"), TraceStyle(span, Color.Grey)));
+        if (diff.TryGetProperty("truncated", out var truncated) && truncated.GetBoolean()) rows.Add(new Text(L.Pick("变更较长，记录已截断。", "The change is large; the record was truncated."), TraceStyle(span, Color.Grey)));
         return new Rows(rows);
     }
     internal static string ToolBadge(string name) => name switch
@@ -304,7 +310,12 @@ internal sealed class CodeExecutionBlock(string id, string code, bool reasoning 
         using var doc = JsonDocument.Parse(argsJson); var args = doc.RootElement;
         string Get(string key, string defaultValue = "") => args.TryGetProperty(key, out var v) ? v.ToString() : defaultValue;
         if (name == "everything_search") return "\"" + Get("query") + "\" in " + Get("path", ".");
-        if (name is "file_search" or "grep" or "find") return "\"" + Get("pattern") + "\" in " + Get("path", ".");
+        if (name is "file_search" or "grep" or "find")
+        {
+            var pattern = Get("pattern");
+            if (pattern.Length == 0) pattern = Get("file_pattern", "*");
+            return "\"" + pattern + "\" in " + Get("path", ".");
+        }
         if (name == "web_search") return "\"" + Get("query") + "\"";
         if (name is "bash" or "powershell") return Get("command");
         return name is "file_read" or "file_edit" or "file_write" or "list_directory" or "read" or "write" or "edit" or "ls" ? Get("path", ".") : fallback;
@@ -315,6 +326,7 @@ internal sealed class CodeExecutionBlock(string id, string code, bool reasoning 
         using var doc = JsonDocument.Parse(call.Result);
         if (!doc.RootElement.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object) return [fallback];
         if (data.TryGetProperty("paths", out var paths)) return new[] { "Found " + paths.GetArrayLength() + " files" }.Concat(paths.EnumerateArray().Select(p => p.GetString() ?? "")).ToArray();
+        if (data.TryGetProperty("files", out var files)) return new[] { "Found " + files.GetArrayLength() + " files" }.Concat(files.EnumerateArray().Select(p => p.GetString() ?? "")).ToArray();
         if (data.TryGetProperty("matches", out var matches)) return matches.EnumerateArray().Select(m => $"{m.GetProperty("path")}:{m.GetProperty("line")}: {m.GetProperty("text")}").DefaultIfEmpty("No matches").ToArray();
         if (data.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.String) return (content.GetString() ?? "").TrimEnd().Split('\n');
         if (data.TryGetProperty("stdout", out var stdout)) return ((data.TryGetProperty("exitCode", out var exit) ? "Exit code: " + exit + "\n" : "") + stdout.GetString() + (data.TryGetProperty("stderr", out var stderr) ? "\n" + stderr.GetString() : "")).TrimEnd().Split('\n');
@@ -324,46 +336,59 @@ internal sealed class CodeExecutionBlock(string id, string code, bool reasoning 
     internal IRenderable LatestToolPreview()
     {
         var call = Invocations.Last();
-        var rows = new List<IRenderable> { new Text(TerminalSafeText.Clean(ToolBadge(call.Name) + " · " + TerminalUi.ToolLabel(call.Name, call.Args)), new Style(Color.Grey)) };
-        if (Diff(call) is { } diff) rows.Add(DiffRows(diff, 4));
-        else foreach (var line in OutputLines(call, call.Result == null ? "正在执行…" : TerminalUi.ResultSummary(JsonSerializer.Deserialize<JsonElement>(call.Result), false, call.Name)).Take(4))
+        var card = ToolCardPresentation.Read(call.Result);
+        var labelText = card != null
+            ? ToolCardPresentation.Badge(card, call.Name) + " · " + ToolCardPresentation.Title(card, TerminalUi.ToolLabel(call.Name, call.Args))
+            : ToolBadge(call.Name) + " · " + TerminalUi.ToolLabel(call.Name, call.Args);
+        var rows = new List<IRenderable> { new Text(TerminalSafeText.Clean(labelText), new Style(Color.Grey)) };
+        if (card != null)
+        {
+            foreach (var line in ToolCardPresentation.Lines(card).Take(4))
+                rows.Add(new Text(TerminalSafeText.Clean(line), new Style(call.Ok == false ? Color.Red : Color.Grey)));
+            var fields = ToolCardPresentation.Fields(card);
+            if (fields.Length > 0) rows.Add(new Text(TerminalSafeText.Clean(fields), new Style(Color.Grey)));
+        }
+        else if (Diff(call) is { } diff) rows.Add(DiffRows(diff, 4));
+        else foreach (var line in OutputLines(call, call.Result == null ? L.Pick("正在执行…", "Running…") : TerminalUi.ResultSummary(JsonSerializer.Deserialize<JsonElement>(call.Result), false, call.Name)).Take(4))
             rows.Add(new Text(TerminalSafeText.Clean(line), new Style(call.Ok == false ? Color.Red : Color.Grey)));
         return new Rows(rows);
     }
     private IRenderable BuildContent()
     {
         var rows = new List<IRenderable>();
-        if (IsReasoning) { rows.Add(new MarkedThinkingLine(this, "✳ 思考 ")); return new Rows(rows); }
-        if (Invocations.Count == 0) rows.Add(new Text(Ok == null ? "正在计算或准备操作…" : "计算与处理已结束 · Ctrl+O 查看调度代码与结果", TraceStyle(-1, Color.Grey)));
-        if (Invocations.Count == 0 && Ok == null) rows.Add(new ToolRunningLine("正在执行工具…"));
+        if (IsReasoning) { rows.Add(new MarkedThinkingLine(this, L.Pick("✳ 思考 ", "✳ Thinking "))); return new Rows(rows); }
+        if (Invocations.Count == 0) rows.Add(new Text(Ok == null ? L.Pick("正在计算或准备操作…", "Computing or preparing…") : L.Pick("计算与处理已结束 · Ctrl+O 查看调度代码与结果", "Computation finished · Ctrl+O shows dispatch code and results"), TraceStyle(-1, Color.Grey)));
+        if (Invocations.Count == 0 && Ok == null) rows.Add(new ToolRunningLine(L.Pick("正在执行工具…", "Running tools…")));
         foreach (var (call, index) in Invocations.Select((call, index) => (call, index)))
         {
             var colour = call.Ok == false ? Color.Red : call.Ok == true ? Color.Green : Color.Cyan1;
             var isComputer = call.Name.StartsWith("computer_", StringComparison.Ordinal);
+            var card = ToolCardPresentation.Read(call.Result);
             var label = isComputer ? ComputerUsePresentation.Title(call.Name, call.Args, call.Result) : TerminalUi.ToolLabel(call.Name, call.Args);
-            var preview = "等待执行结果 / 用户授权";
+            var preview = L.Pick("等待执行结果 / 用户授权", "Waiting for the result / user approval");
             if (call.Result != null)
             {
                 using var result = JsonDocument.Parse(call.Result);
-                preview = call.Ok == false ? result.RootElement.TryGetProperty("error", out var error) ? error.GetString() ?? "操作失败" : "操作失败" : TerminalUi.ResultSummary(result.RootElement, false, call.Name);
+                preview = call.Ok == false ? result.RootElement.TryGetProperty("error", out var error) ? error.GetString() ?? L.Pick("操作失败", "Operation failed") : L.Pick("操作失败", "Operation failed") : TerminalUi.ResultSummary(result.RootElement, false, call.Name);
             }
             var linkedTasks = TasksFor(call);
             var task = linkedTasks.FirstOrDefault();
             if (call.Name is "shell_status")
             {
-                var status = call.Ok == false ? "查询失败 · " + preview : task == null ? State(call.Ok) : TaskState(task.State);
-                rows.Add(new Text($"{index + 1}. 查询已有任务 {task?.Id[..Math.Min(8, task.Id.Length)] ?? ""} · {status}", TraceStyle(call.SpanIndex, call.Ok == false ? Color.Red : Color.Grey)));
+                var status = call.Ok == false ? L.Pick("查询失败 · ", "Query failed · ") + preview : task == null ? State(call.Ok) : TaskState(task.State);
+                rows.Add(new Text(L.Pick($"{index + 1}. 查询已有任务 {task?.Id[..Math.Min(8, task.Id.Length)] ?? ""} · {status}", $"{index + 1}. Existing task {task?.Id[..Math.Min(8, task.Id.Length)] ?? ""} · {status}"), TraceStyle(call.SpanIndex, call.Ok == false ? Color.Red : Color.Grey)));
                 if (call.Ok == null) rows.Add(new ToolRunningLine());
                 continue;
             }
             if (task != null) colour = task.State is BackgroundTaskState.Failed or BackgroundTaskState.Interrupted ? Color.Red : task.State == BackgroundTaskState.Completed ? Color.Green : Color.Cyan1;
-            var badge = isComputer ? "电脑操作" : call.Name == "browser" ? BrowserPresentation.Badge(call.Args) : ToolBadge(call.Name);
-            var badgeColour = call.Name != "browser" ? "#5943ad" : badge is "PAGE" or "FIND" or "SHOT" ? "#275d8c" : badge is "TYPE" ? "#26705c" : "#875122";
-            var subject = TerminalSafeText.Clean(ToolSubject(call.Name, call.Args, label));
-            var statusLabel = call.Ok == null ? task == null ? "运行中" : TaskState(task.State) : call.Ok == true ? "成功" : "失败";
+            var badge = card != null ? ToolCardPresentation.Badge(card, call.Name)
+                : isComputer ? L.Pick("电脑操作", "COMPUTER") : call.Name == "browser" ? BrowserPresentation.Badge(call.Args) : ToolBadge(call.Name);
+            var badgeColour = card != null ? "#2d5a6e" : call.Name != "browser" ? "#5943ad" : badge is "PAGE" or "FIND" or "SHOT" ? "#275d8c" : badge is "TYPE" ? "#26705c" : "#875122";
+            var subject = card != null ? ToolCardPresentation.Title(card, label) : TerminalSafeText.Clean(ToolSubject(call.Name, call.Args, label));
+            var statusLabel = call.Ok == null ? task == null ? L.Pick("运行中", "Running") : TaskState(task.State) : call.Ok == true ? L.Pick("成功", "Succeeded") : L.Pick("失败", "Failed");
             var tint = $"#{colour.R:x2}{colour.G:x2}{colour.B:x2}";
             // CommandCode 风格：一行徽标 + 标题 + 内联状态，正文树形缩进，折叠提示只在末行。
-            rows.Add(new Markup($"[bold white on {badgeColour}] {badge} [/] [bold]{Markup.Escape(subject)}[/]  [{tint}]{statusLabel}[/]", TraceStyle(call.SpanIndex, Color.Default)));
+            rows.Add(new Markup($"[bold white on {badgeColour}] {Markup.Escape(badge)} [/] [bold]{Markup.Escape(subject)}[/]  [{tint}]{statusLabel}[/]", TraceStyle(call.SpanIndex, Color.Default)));
             if (task != null)
             {
                 foreach (var linked in linkedTasks)
@@ -373,26 +398,35 @@ internal sealed class CodeExecutionBlock(string id, string code, bool reasoning 
                     var childColour = linked.State is BackgroundTaskState.Failed or BackgroundTaskState.Interrupted ? Color.Red : active ? Color.Cyan1 : Color.Green;
                     var childRows = new List<IRenderable>
                     {
-                        new AgentSummaryLine((IsChildTask(linked) ? "子代理任务 · " : "") + linked.Id[..Math.Min(8, linked.Id.Length)] + " · " + TaskState(linked.State), new Style(childColour)),
+                        new AgentSummaryLine((IsChildTask(linked) ? L.Pick("子代理任务 · ", "Child task · ") : "") + linked.Id[..Math.Min(8, linked.Id.Length)] + " · " + TaskState(linked.State), new Style(childColour)),
                         new AgentSummaryLine(linked.Title, new Style(Color.Default))
                     };
                     var progress = BackgroundTasks.IsActive(linked.State) ? linked.CurrentStep ?? TaskState(linked.State) : TaskState(linked.State);
                     if (active) childRows.Add(new AgentSummaryLine(progress, new Style(Color.Grey)));
                     if (TaskPreview != null && IsChildTask(linked)) childRows.Add(new TextViewport(TaskPreview(linked), active ? 4 : 3, 0));
-                    childRows.Add(new Text("点击 / Ctrl+O 查看完整执行消息与结果", new Style(Color.Grey)));
+                    childRows.Add(new Text(L.Pick("点击 / Ctrl+O 查看完整执行消息与结果", "Click / Ctrl+O for the full execution messages and results"), new Style(Color.Grey)));
                     rows.Add(new MarkedTaskPreview(this, marker, new Panel(new Rows(childRows))
                         .Border(BoxBorder.Rounded).BorderStyle(new Style(childColour)).Expand()));
                     rows.Add(new Text(""));
                 }
             }
-            else if (call.Name is "todo_read" or "todo_write" && call.Ok == true)
+            else if (card == null && call.Name is "todo_read" or "todo_write" && call.Ok == true)
                 rows.Add(new Text("  │ " + TerminalSafeText.Clean(preview), TraceStyle(call.SpanIndex, Color.Default)));
-            else if (Diff(call) is { } diff) rows.Add(new TextViewport(DiffRows(diff, 8, call.SpanIndex), 10, 0));
+            else if (card == null && Diff(call) is { } diff) rows.Add(new TextViewport(DiffRows(diff, 8, call.SpanIndex), 10, 0));
+            else if (card != null)
+            {
+                var lines = ToolCardPresentation.Lines(card);
+                if (lines.Length == 0) lines = [preview];
+                foreach (var line in lines.Take(3)) rows.Add(new Text("  │ " + TerminalSafeText.Clean(line), TraceStyle(call.SpanIndex, call.Ok == false ? Color.Red : Color.Grey)));
+                if (lines.Length > 3) rows.Add(new Text(L.Pick($"  …还有 {lines.Length - 3} 行 [Ctrl+O 展开]", $"  …{lines.Length - 3} more lines [Ctrl+O expand]"), TraceStyle(call.SpanIndex, Color.Grey)));
+                var fields = ToolCardPresentation.Fields(card);
+                if (fields.Length > 0) rows.Add(new Text("  │ " + TerminalSafeText.Clean(fields), TraceStyle(call.SpanIndex, Color.Grey)));
+            }
             else
             {
                 var output = OutputLines(call, preview);
                 foreach (var line in output.Take(3)) rows.Add(new Text("  │ " + TerminalSafeText.Clean(line), TraceStyle(call.SpanIndex, call.Ok == false ? Color.Red : Color.Grey)));
-                if (output.Length > 3) rows.Add(new Text($"  …还有 {output.Length - 3} 行 [Ctrl+O 展开]", TraceStyle(call.SpanIndex, Color.Grey)));
+                if (output.Length > 3) rows.Add(new Text(L.Pick($"  …还有 {output.Length - 3} 行 [Ctrl+O 展开]", $"  …{output.Length - 3} more lines [Ctrl+O expand]"), TraceStyle(call.SpanIndex, Color.Grey)));
                 if (call.Ok == false && output.Length <= 3 && preview.Length > 0 && !preview.Contains('\n') && output.All(line => !line.Contains(preview)))
                     rows.Add(new Text("  │ " + TerminalSafeText.Clean(ToolResult.Clip(preview, 200)), TraceStyle(call.SpanIndex, Color.Red)));
             }
@@ -402,10 +436,10 @@ internal sealed class CodeExecutionBlock(string id, string code, bool reasoning 
         if (Ok == false && Result != null)
         {
             using var result = JsonDocument.Parse(Result);
-            var message = result.RootElement.TryGetProperty("error", out var error) ? error.GetString() ?? "Python 执行失败" : "Python 执行失败";
+            var message = result.RootElement.TryGetProperty("error", out var error) ? error.GetString() ?? L.Pick("Python 执行失败", "Python execution failed") : L.Pick("Python 执行失败", "Python execution failed");
             var lines = TerminalSafeText.Clean(message).Split('\n');
             rows.Add(TerminalUi.ToolFailure(string.Join('\n', lines.Take(3))));
-            if (lines.Length > 3) rows.Add(new Text($"… +{lines.Length - 3} lines [Ctrl+O 展开完整错误]", TraceStyle(-1, Color.Grey)));
+            if (lines.Length > 3) rows.Add(new Text(L.Pick($"… +{lines.Length - 3} lines [Ctrl+O 展开完整错误]", $"… +{lines.Length - 3} lines [Ctrl+O expand the full error]"), TraceStyle(-1, Color.Grey)));
         }
 
         var failures = Invocations.Count(call => call.Ok == false);
@@ -414,7 +448,7 @@ internal sealed class CodeExecutionBlock(string id, string code, bool reasoning 
             using var json = JsonDocument.Parse(Result);
             if (json.RootElement.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Object && data.TryGetProperty("hostCallSummary", out var summary) && summary.TryGetProperty("failed", out var failed) && failed.TryGetInt32(out var count)) failures = Math.Max(failures, count);
         }
-        if (failures > 0) rows.Add(new Text($"含 {failures} 项操作失败", new Style(Color.Red)));
+        if (failures > 0) rows.Add(new Text(L.Pick($"含 {failures} 项操作失败", $"{failures} operations failed"), new Style(Color.Red)));
         return new Rows(rows);
     }
     public Measurement Measure(RenderOptions options, int maxWidth) => Content().Measure(options, maxWidth);
@@ -474,17 +508,17 @@ internal sealed class PythonCodeText(CodeExecutionBlock execution) : IRenderable
     }
 }
 
-internal sealed class ToolRunningLine(string label = "正在执行工具…") : IRenderable
+internal sealed class ToolRunningLine(string label = "") : IRenderable
 {
     public Measurement Measure(RenderOptions options, int maxWidth) => new(1, maxWidth);
     public IEnumerable<Segment> Render(RenderOptions options, int maxWidth) => Segment.Truncate(
-        [new Segment("  " + LoadingIndicator.DotsFrame(Environment.TickCount64) + " " + label, new Style(Color.Cyan1))], maxWidth);
+        [new Segment("  " + LoadingIndicator.DotsFrame(Environment.TickCount64) + " " + (label.Length > 0 ? label : L.Pick("正在执行工具…", "Running tools…")), new Style(Color.Cyan1))], maxWidth);
 }
 
 internal sealed class MarkedThinkingLine(CodeExecutionBlock block, string prefix) : IRenderable
 {
     public Measurement Measure(RenderOptions options, int maxWidth) => new(maxWidth, maxWidth);
     public IEnumerable<Segment> Render(RenderOptions options, int maxWidth) =>
-        new ThinkingLine(block.Code, 0, prefix, " [Ctrl+O 展开]").Render(options, maxWidth)
+        new ThinkingLine(block.Code, 0, prefix, L.Pick(" [Ctrl+O 展开]", " [Ctrl+O expand]")).Render(options, maxWidth)
             .Select(segment => new Segment(segment.Text, block.TraceStyle(-1, Color.Grey)));
 }

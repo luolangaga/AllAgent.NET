@@ -25,12 +25,12 @@ public partial class SystemTools(WorkspacePolicy workspace, RuntimeEnvironment e
 
     public async ValueTask<ToolAccessGrant?> RequestAccessAsync(string name, JsonElement arguments, ToolApprover? approver, CancellationToken ct)
     {
-        var key = name == "run_shell" ? "working_directory" : name is "file_read" or "file_write" or "file_edit" or "file_search" or "everything_search" or "list_directory" ? "path" : null;
+        var key = name == "run_shell" ? "working_directory" : name is "file_read" or "file_write" or "file_edit" or "file_search" or "list_directory" ? "path" : null;
         if (key == null) return null;
         var target = workspace.ResolveForApproval(ToolArguments.Get(arguments, key, "."));
         if (workspace.FullAccess || !workspace.IsExternal(target)) return null;
         if (workspace.HasAccess(target)) return new(() => workspace.EnterRequest(target));
-        var directory = name is "list_directory" or "run_shell" || name is "file_search" or "everything_search" && Directory.Exists(target) ? target : Path.GetDirectoryName(target)!;
+        var directory = name is "list_directory" or "run_shell" || name is "file_search" && Directory.Exists(target) ? target : Path.GetDirectoryName(target)!;
         var session = AgentExecutionScope.ConversationId ?? Guid.Empty;
         var request = new ToolApprovalRequest("external_directory", ToolRisk.Read, JsonSerializer.SerializeToElement(new { path = target, directory, operation = name }), "访问工作区外的路径")
         { RememberForSession = permissions == null ? null : () => permissions.Allow(session, directory) };
@@ -42,7 +42,7 @@ public partial class SystemTools(WorkspacePolicy workspace, RuntimeEnvironment e
     {
         if (name != "run_shell")
         {
-            if (name is "file_read" or "file_write" or "file_edit" or "file_search" or "everything_search" or "list_directory") workspace.ResolveForApproval(ToolArguments.Get(arguments, "path", "."));
+            if (name is "file_read" or "file_write" or "file_edit" or "file_search" or "list_directory") workspace.ResolveForApproval(ToolArguments.Get(arguments, "path", "."));
             return null;
         }
         if (!environment.Ready) return ToolResult.Failure(

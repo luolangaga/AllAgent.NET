@@ -30,7 +30,7 @@ public sealed class TerminalIntegrationTests
             object delta = first
                 ? new { tool_calls = new[] { new { index = 0, id = child ? "child-write" : "delegate", type = "function", function = new { name = "execute_code", arguments = JsonSerializer.Serialize(new { code = child
                     ? "r = call_tool('file_write', path='child-proof.txt', content='delegated proof')\nprint(r)"
-                    : "r = call_tool('subagent', agent='modify', task='Write child-proof.txt')\nprint(r)" }) } } } }
+                    : "r = call_tool('subagent', agent='modify', task='Write child-proof.txt', contract={'objective':'Write child-proof.txt','editablePaths':['child-proof.txt']})\nprint(r)" }) } } } }
                 : new { content = child ? "Child finished" : "Parent finished" };
             context.Response.ContentType = "text/event-stream";
             await context.Response.WriteAsync("data: " + JsonSerializer.Serialize(new { choices = new[] { new { index = 0, delta, finish_reason = first ? "tool_calls" : "stop" } } }) + "\n\ndata: [DONE]\n\n");

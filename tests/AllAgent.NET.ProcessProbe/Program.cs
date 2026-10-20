@@ -4,21 +4,29 @@ using System.Text.Json.Nodes;
 if (Path.GetFileNameWithoutExtension(Environment.ProcessPath) == "AllAgent.FaultProbe")
 {
     _ = await Console.In.ReadLineAsync();
+    string? executionId = null;
+    void Send(string body, string? callId = null)
+    {
+        var node = JsonNode.Parse(body)!.AsObject(); node["version"] = 1; node["executionId"] = executionId;
+        if (callId != null) node["callId"] = callId;
+        Console.WriteLine(node.ToJsonString());
+    }
     var marker = Path.Combine(AppContext.BaseDirectory, "worker-starts.txt");
     await File.AppendAllTextAsync(marker, "start\n");
     var starts = (await File.ReadAllLinesAsync(marker)).Length;
-    Console.WriteLine(JsonSerializer.Serialize(new { kind = "ready", instructions = "fixture", description = "fixture" }));
+    Send(JsonSerializer.Serialize(new { kind = "ready", instructions = "fixture", description = "fixture" }));
     while (await Console.In.ReadLineAsync() is { } request)
     {
         using var json = JsonDocument.Parse(request);
         if (json.RootElement.GetProperty("kind").GetString() != "execute") break;
+        executionId = json.RootElement.GetProperty("executionId").GetString();
         if (starts == 1)
         {
-            Console.WriteLine("{\"kind\":\"call\",\"name\":\"side_effect\",\"arguments\":{}}");
+            Send("{\"kind\":\"call\",\"name\":\"side_effect\",\"arguments\":{}}", "fixture-call");
             _ = await Console.In.ReadLineAsync();
-            Console.WriteLine("{\"kind\":\"result\",\"result\":{\"ok\":false,\"data\":{\"stdout\":\"\",\"diagnostic\":null},\"error\":\"Python execution failed: there is no reactor running, must be called from the context of a Tokio 1.x runtime\"}}");
+            Send("{\"kind\":\"result\",\"result\":{\"ok\":false,\"data\":{\"stdout\":\"\",\"diagnostic\":null},\"error\":\"Python execution failed: there is no reactor running, must be called from the context of a Tokio 1.x runtime\"}}");
         }
-        else Console.WriteLine("{\"kind\":\"result\",\"result\":{\"ok\":true,\"data\":{\"stdout\":\"fresh worker\\n\"}}}");
+        else Send("{\"kind\":\"result\",\"result\":{\"ok\":true,\"data\":{\"stdout\":\"fresh worker\\n\"}}}");
     }
 }
 else if (args.FirstOrDefault() == "mcp")

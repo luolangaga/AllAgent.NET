@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/b-button'
 import { Progress } from '@/components/ui/b-progress'
 import { Skeleton } from '@/components/ui/skeleton'
 import { MessageBubble } from '@/components/MessageBubble'
+import { PlanPanel } from '@/components/PlanCard'
 import { PromptComposer, type PromptMeta } from '@/components/PromptComposer'
 import { SessionFooter } from '@/components/SessionFooter'
 import { TodoPanel } from '@/components/TodoPanel'
@@ -21,15 +22,20 @@ import { useModelSelectionStore } from '@/stores/modelSelection'
 import { useSettingsStore } from '@/stores/settings'
 import { useNoticesStore } from '@/stores/ui'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { useT } from '@/i18n'
 import type { ImageAttachment, ReasoningOptions } from '@/types'
 
-const ideas = [
-  { icon: Code2, title: '一起写代码', description: '从想法到可以运行的实现', prompt: '请帮我实现一个功能。先了解当前项目的结构，再和我确认具体需求。' },
-  { icon: FileText, title: '梳理与总结', description: '让复杂的信息变得清晰', prompt: '我想整理一份文档，请帮我梳理结构和重点。' },
-  { icon: Compass, title: '探索一个问题', description: '拆解问题，找到下一步', prompt: '请和我一起分析一个问题，先询问我需要解决的问题是什么。' },
-]
+function ideaCards(tr: (zh: string, en: string) => string) {
+  return [
+    { icon: Code2, title: tr('一起写代码', 'Write code together'), description: tr('从想法到可以运行的实现', 'From idea to a working implementation'), prompt: tr('请帮我实现一个功能。先了解当前项目的结构，再和我确认具体需求。', 'Help me implement a feature. First understand the current project structure, then confirm the requirements with me.') },
+    { icon: FileText, title: tr('梳理与总结', 'Organize and summarize'), description: tr('让复杂的信息变得清晰', 'Make complex information clear'), prompt: tr('我想整理一份文档，请帮我梳理结构和重点。', 'I want to organize a document. Help me structure it and highlight the key points.') },
+    { icon: Compass, title: tr('探索一个问题', 'Explore a question'), description: tr('拆解问题，找到下一步', 'Break it down and find the next step'), prompt: tr('请和我一起分析一个问题，先询问我需要解决的问题是什么。', 'Let us analyze a problem together. Start by asking what I need to solve.') },
+  ]
+}
 
 export default function Chat({ ready, onNavigate, onPalette }: { ready: boolean; onNavigate: (page: string) => void; onPalette: () => void }) {
+  const tr = useT()
+  const ideas = ideaCards(tr)
   const conv = useStore(useConversationsStore)
   const approvals = useStore(useApprovalsStore)
   const api = useStore(useApiConfigsStore)
@@ -51,8 +57,8 @@ export default function Chat({ ready, onNavigate, onPalette }: { ready: boolean;
     ?? enabledConfigs[0]
   const busy = conv.sending || conv.streamingMessageId !== null
   // A blocked run is waiting for the user, not thinking: the stream stays open while a
-  // question or an approval request is pending.
-  const awaiting = approvals.approvals.length > 0 || approvals.questions.length > 0
+  // question, an approval request or a plan approval is pending.
+  const awaiting = approvals.approvals.length > 0 || approvals.questions.length > 0 || approvals.plans.length > 0
   const messages = conv.messages.filter(message => message.role !== 'system' && message.role !== 'tool')
   const usage = conv.contextUsage
   const stored = conv.conversationUsage
@@ -101,11 +107,26 @@ export default function Chat({ ready, onNavigate, onPalette }: { ready: boolean;
   // Long histories render the newest slice first; earlier messages mount on demand.
   const visibleMessages = messages.length > visibleCount ? messages.slice(messages.length - visibleCount) : messages
 
+  // A queued prompt starts its own turn once the conversation is idle again — including
+  // after a reload, when the parked item was written by an earlier page.
+  const parked = conv.pendingInputs[0] ?? null
+  const parkedId = parked?.id ?? null
+  useEffect(() => {
+    if (!conv.activeId || busy || !config || !parkedId) return
+    void conv.runPending(config.id, config.thinkingEnabled, config.thinkingBudget, config.defaultModel, config.reasoningEffort).catch(notices.report)
+  }, [conv.activeId, busy, parkedId, config?.id])
+
   async function send(text: string, meta: PromptMeta, options?: { display?: string; prompt?: string }) {
-    if (!config || busy) return
+    if (!config) return
     follow.current = true
     try {
-      await conv.sendMessage(options?.display ?? text, config.id, meta.thinkingEnabled, meta.thinkingBudget, meta.model, meta.reasoningEffort, meta.images, options?.prompt)
+      if (busy) {
+        // A running turn never accepts a second start: the host parks the prompt in its
+        // inbox, where steer is admitted at the next step and queue awaits the next turn.
+        await conv.enqueueMessage(options?.display ?? text, meta.delivery ?? 'steer', meta.images, options?.prompt)
+      } else {
+        await conv.sendMessage(options?.display ?? text, config.id, meta.thinkingEnabled, meta.thinkingBudget, meta.model, meta.reasoningEffort, meta.images, options?.prompt)
+      }
       setAttachments([])
     } catch (error) {
       // The draft and its images stay put so the user can fix and resend.
@@ -117,12 +138,12 @@ export default function Chat({ ready, onNavigate, onPalette }: { ready: boolean;
   // Slash input runs through the shared command router; returns true when consumed.
   // User-invocable skills expand to their instructions and run as a task — the terminal's
   // default branch — while everything else stays a plain command.
-  async function handleCommand(text: string): Promise<boolean> {
+  async function handleCommand(text: string, delivery: 'steer' | 'queue' = 'steer'): Promise<boolean> {
     const trimmed = text.trim()
     const word = trimmed.split(/\s+/)[0] ?? ''
     const skill = commands.commands.find(item => item.isSkill && item.text.toLowerCase() === word.toLowerCase())
     if (skill) {
-      if (!config || busy) { notices.notify('技能暂不可用', '先连接一个模型配置，并等待当前任务结束。'); return true }
+      if (!config) { notices.notify(tr('技能暂不可用', 'Skills are unavailable'), tr('先连接一个模型配置。', 'Connect a model configuration first.')); return true }
       try {
         const expanded = await commands.invokeSkill(skill.text.replace(/^\//, ''), trimmed.slice(word.length).trim())
         setDraft('')
@@ -133,6 +154,7 @@ export default function Chat({ ready, onNavigate, onPalette }: { ready: boolean;
           thinkingBudget: config.thinkingBudget,
           model: config.defaultModel,
           images: [...attachments, ...expanded.images],
+          delivery,
         }, { prompt: expanded.text })
       } catch (error) {
         notices.report(error)
@@ -163,13 +185,14 @@ export default function Chat({ ready, onNavigate, onPalette }: { ready: boolean;
       anchor.download = `${(conv.active?.title ?? 'conversation').replace(/[\\/:*?"<>|]/g, '_')}.md`
       anchor.click()
       URL.revokeObjectURL(url)
-      notices.notify('会话已导出', anchor.download, 'success')
+      notices.notify(tr('会话已导出', 'Conversation exported'), anchor.download, 'success')
     } catch (error) {
       notices.report(error)
     }
   }
 
   return <section className={`chat ${messages.length ? 'has-messages' : ''}`}>
+    {conv.activeId && conv.plan ? <PlanPanel key={`${conv.activeId}:${conv.plan.id}`} plan={conv.plan} /> : null}
     {conv.activeId && conv.todos.length > 0 ? <TodoPanel
       disabled={busy}
       key={conv.activeId}
@@ -192,7 +215,7 @@ export default function Chat({ ready, onNavigate, onPalette }: { ready: boolean;
             <div className="conversation-heading">
               <div>
                 <span className="eyebrow">CONVERSATION</span>
-                <h2>{conv.active?.title ?? '新对话'}</h2>
+                <h2>{conv.active?.title ?? tr('新对话', 'New conversation')}</h2>
               </div>
               <div className="conversation-actions">
                 {workspace.available ? <Button
@@ -201,8 +224,8 @@ export default function Chat({ ready, onNavigate, onPalette }: { ready: boolean;
                   onClick={() => void exportConversation()}
                   size="sm"
                   variant="ghost"
-                >导出</Button> : null}
-                <Badge size="sm" variant="dot">本地工作区 · 私密</Badge>
+                >{tr('导出', 'Export')}</Button> : null}
+                <Badge size="sm" variant="dot">{tr('本地工作区 · 私密', 'Local workspace · private')}</Badge>
               </div>
             </div>
             {visibleMessages.length < messages.length ? <div className="messages-earlier">
@@ -210,15 +233,15 @@ export default function Chat({ ready, onNavigate, onPalette }: { ready: boolean;
                 onClick={() => setVisibleCount(count => count + 30)}
                 size="sm"
                 variant="outline"
-              >加载更早的 {Math.min(30, messages.length - visibleMessages.length)} 条消息</Button>
+              >{tr(`加载更早的 ${Math.min(30, messages.length - visibleMessages.length)} 条消息`, `Load ${Math.min(30, messages.length - visibleMessages.length)} earlier messages`)}</Button>
             </div> : null}
             {visibleMessages.map(message => <MessageBubble awaiting={awaiting && message.status === 'streaming'} key={message.id} message={message} />)}
           </div>
           : <div className="welcome">
             <div className="welcome-mark"><Command size={34} strokeWidth={1.4} /></div>
             <span className="eyebrow">A LITTLE LESS FRICTION. A LOT MORE POSSIBILITY.</span>
-            <h1>想法在这里，<br /><span>开始变成现实。</span></h1>
-            <p>写代码、整理资料、探索问题。<br className="small-only" />和 AllAgent.NET 一起，把下一步做出来。</p>
+            <h1>{tr('想法在这里，', 'Ideas start here,')}<br /><span>{tr('开始变成现实。', 'and become real.')}</span></h1>
+            <p>{tr('写代码、整理资料、探索问题。', 'Write code, organize material, explore questions.')}<br className="small-only" />{tr('和 AllAgent.NET 一起，把下一步做出来。', 'Take the next step with AllAgent.NET.')}</p>
             <div className="ideas">{ideas.map(idea => <button
               className="idea"
               key={idea.title}
@@ -239,10 +262,10 @@ export default function Chat({ ready, onNavigate, onPalette }: { ready: boolean;
       {meter || cache ? <div className="context-usage">
         {meter ? <>
           <span className="context-label">
-            上下文 {meter.estimated ? '≈' : ''}{formatTokens(meter.usedTokens)} / {formatTokens(meter.capacityTokens)}
+            {tr('上下文', 'Context')} {meter.estimated ? '≈' : ''}{formatTokens(meter.usedTokens)} / {formatTokens(meter.capacityTokens)}
           </span>
           <Progress
-            ariaLabel="上下文占用"
+            ariaLabel={tr('上下文占用', 'Context usage')}
             max={meter.capacityTokens}
             size="sm"
             tone={meter.usedTokens / meter.capacityTokens > 0.85 ? 'destructive' : 'default'}
@@ -251,18 +274,18 @@ export default function Chat({ ready, onNavigate, onPalette }: { ready: boolean;
         </> : null}
         {cache ? <span
           className="context-label cache-chip"
-          title={`缓存读取 ${formatTokens(cache.cachedInputTokens)} / 提示 ${formatTokens(cache.cacheInputTokens)} tok · 写入 ${formatTokens(cache.cacheWriteInputTokens)} tok · ${cache.cacheRequests} 次上报`}
+          title={tr(`缓存读取 ${formatTokens(cache.cachedInputTokens)} / 提示 ${formatTokens(cache.cacheInputTokens)} tok · 写入 ${formatTokens(cache.cacheWriteInputTokens)} tok · ${cache.cacheRequests} 次上报`, `Cache read ${formatTokens(cache.cachedInputTokens)} / prompt ${formatTokens(cache.cacheInputTokens)} tok · write ${formatTokens(cache.cacheWriteInputTokens)} tok · ${cache.cacheRequests} reports`)}
         >
-          缓存命中 {cache.hitRate.toFixed(1)}%{cache.cacheWriteInputTokens > 0 ? `（写入 ${formatTokens(cache.cacheWriteInputTokens)} tok）` : ''}
+          {tr('缓存命中', 'Cache hit')} {cache.hitRate.toFixed(1)}%{cache.cacheWriteInputTokens > 0 ? tr(`（写入 ${formatTokens(cache.cacheWriteInputTokens)} tok）`, ` (write ${formatTokens(cache.cacheWriteInputTokens)} tok)`) : ''}
         </span> : null}
       </div> : null}
       {ready && !enabledConfigs.length ? <Alert
-        action={<Button onClick={() => onNavigate('models')} size="sm" variant="outline">前往配置</Button>}
+        action={<Button onClick={() => onNavigate('models')} size="sm" variant="outline">{tr('前往配置', 'Configure now')}</Button>}
         appearance="info"
         dismissible={false}
-        message="添加 API 地址与密钥后即可开始第一段对话。"
+        message={tr('添加 API 地址与密钥后即可开始第一段对话。', 'Add an API address and key to start your first conversation.')}
         timeout={0}
-        title="还没有可用的模型配置"
+        title={tr('还没有可用的模型配置', 'No model configuration yet')}
       /> : null}
       <PromptComposer
         attachments={attachments}
@@ -272,6 +295,7 @@ export default function Chat({ ready, onNavigate, onPalette }: { ready: boolean;
         draft={draft}
         models={config?.models ?? []}
         onAttachmentsChange={setAttachments}
+        onCancelPending={id => void conv.cancelPending(id).catch(notices.report)}
         onCommand={handleCommand}
         onConfigure={() => onNavigate('models')}
         onDraftChange={setDraft}
@@ -281,6 +305,7 @@ export default function Chat({ ready, onNavigate, onPalette }: { ready: boolean;
         onSend={(text, meta) => void send(text, meta)}
         onSettings={() => onNavigate('settings')}
         onStop={() => void conv.cancelStream().catch(notices.report)}
+        pending={conv.pendingInputs}
         reasoning={reasoning}
         selectedId={modelSelection.configId ?? config?.id ?? null}
       />

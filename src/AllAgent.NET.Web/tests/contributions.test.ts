@@ -5,6 +5,7 @@ type HostWindow = Window & { chrome?: { webview: { postMessage: (json: string) =
 const host = window as unknown as HostWindow
 let handle: (request: Request) => void
 let webEnabled = true
+let settingsValues: Record<string, string> = {}
 const reply = (request: Request, result: unknown, error?: string) => host.__bridgeCallback(JSON.stringify({ id: request.id, result, error }))
 
 const snapshot = () => ({
@@ -18,6 +19,10 @@ const snapshot = () => ({
       pages: [{ id: 'dashboard', title: '示例仪表盘', entry: 'web/dashboard.html', icon: 'gauge', order: 40 }],
       toolCards: [{ tool: 'example_clock', entry: 'web/card.html' }],
       commands: [{ id: 'open', title: '打开示例仪表盘', page: 'dashboard' }],
+      settings: [{ id: 'demo', title: '演示插件设置', fields: [
+        { key: 'endpoint', label: '服务地址', type: 'text' },
+        { key: 'autosync', label: '自动同步', type: 'boolean', default: 'true' },
+      ] }],
     },
     devUrl: null, error: null,
   }],
@@ -26,11 +31,17 @@ const snapshot = () => ({
 beforeEach(() => {
   vi.resetModules()
   webEnabled = true
+  settingsValues = { endpoint: 'https://example.invalid', autosync: 'true' }
   host.chrome = { webview: { postMessage: (json: string) => handle(JSON.parse(json)) } }
   handle = request => {
     switch (request.method) {
       case 'web.contributions': return reply(request, snapshot())
       case 'web.setEnabled': { webEnabled = Boolean(request.params.enabled); return reply(request, true) }
+      case 'web.settings.get': return reply(request, { packageId: request.params.packageId, values: { ...settingsValues } })
+      case 'web.settings.set': {
+        settingsValues[request.params.key] = String(request.params.value)
+        return reply(request, true)
+      }
       default: return reply(request, true)
     }
   }
@@ -79,6 +90,16 @@ describe('plugin contributions', () => {
     await store.setWebEnabled('AllAgent.NET.SamplePlugin', false)
     expect(requests.some(request => request.method === 'web.setEnabled' && request.params.enabled === false)).toBe(true)
     expect(store.busy).toBe(false)
+  })
+
+  it('flattens plugin settings and persists values through the host bridge', async () => {
+    const { useContributionsStore } = await import('../src/stores/contributions')
+    const store = useContributionsStore()
+    await store.loadAll()
+    expect(store.settings.map(entry => entry.section.id)).toEqual(['demo'])
+    expect(store.settingsValues['AllAgent.NET.SamplePlugin'].endpoint).toBe('https://example.invalid')
+    await store.saveSetting('AllAgent.NET.SamplePlugin', 'endpoint', 'https://changed.invalid')
+    expect(store.settingsValues['AllAgent.NET.SamplePlugin'].endpoint).toBe('https://changed.invalid')
   })
 
   it('marks contributions unavailable when the host does not serve them', async () => {

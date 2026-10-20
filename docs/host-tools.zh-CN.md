@@ -23,8 +23,8 @@ PNG/JPEG/GIF/WebP 按文件内容识别，返回图片元数据并通过模型�
 ## 搜索与路径查找
 
 ```python
-# 按文件名查找（Windows；自带 Everything 索引，无需安装）
-print(call_tool("everything_search", query="*.cs", path="src"))
+# 按文件名查找：names_only 只列文件、不读内容，pattern 可留空
+print(call_tool("file_search", names_only=True, path="src", file_pattern="*.cs"))
 # 搜索文件内容，返回行号和上下文
 print(call_tool("file_search", pattern="QuickMode|FastMode", regex=True,
                 path="src", file_pattern="*.cs", context_lines=2))
@@ -32,7 +32,7 @@ print(call_tool("file_search", pattern="QuickMode|FastMode", regex=True,
 
 `file_search` 由宿主直接启动已安装的 ripgrep，无 Shell 命令拼接，不额外依赖 fd。缺少 rg 时返回明确错误，终端可通过 `/doctor install` 修复。默认读取 `.gitignore` 等 rg 忽略规则，包括子目录规则和否定规则；没有 `.git` 的目录也适用。默认还排除常见构建/依赖及代理缓存目录。`include_ignored=true` 显式绕过忽略规则。始终不跟随符号链接。
 
-`everything_search` 使用随包携带的 Everything 便携索引和 ES 查询端，无 Shell 拼接，只按路径或文件名匹配，不读取 `.gitignore`，包含隐藏与忽略目录；工作区外沿用目录授权。返回前同样重新检查授权范围、存在性和链接。
+`names_only=true` 时 `file_search` 改为名字模式：只列文件、不读内容，`file_pattern` 按文件名或相对路径匹配，`pattern` 作为可选名字过滤（`regex=true` 时用正则）。名字模式仍尊重 `.gitignore` 并排除构建/依赖目录，`include_ignored=true` 可放开；返回工作区相对路径和 `nextOffset`，目录本身请用 `list_directory` 查看。
 
 `file_search` 默认使用普通文本，`regex=true` 使用 rg 正则。结果返回工作区相对路径、从 1 开始的行号和有界上下文。`file_pattern` 无路径分隔符时匹配文件名，有分隔符时匹配搜索目录下的相对路径（`*` 匹配单个路径段，`**` 可匹配零层或多层目录）；过滤不会覆盖 `.gitignore`。匹配正文最多 1,000 字符，上下文每行最多 500 字符，`linesTruncated=true` 表示应使用 `file_read` 读取对应行。
 
@@ -69,6 +69,10 @@ guest 补入原版 CPython 3.14 的 base64、struct、UTF-16/UTF-16LE/UTF-16BE �
 首次初始化检查 PowerShell 7.6，缺少时先提示通过 winget 安装，成功后停止并提示重启 AllAgent.NET。宿主 Python 检查可执行性和 3.10–3.14 版本范围，缺少或版本不符时提示通过 winget 安装 Python 3.13 并在成功后重启；环境就绪后在 `python/venv` 中安装常用 pip 库并生成 `pip.md`。随后实际验证 Hyperlight guest 的标准库导入、编码往返及 struct 操作；只有成功后才记录初始化完成。`/doctor` 和聊天启动也使用相同 guest 校验。宿主 pip 库仍通过目录中明确的 Python 可执行文件与 run_shell 使用，脚本需要显式 import；它们不自动成为 guest 的库或全局变量。
 
 Hyperlight worker 的初始化、执行、快照恢复和释放固定在同一线程。检测到原生 Tokio 上下文错误或 poisoned lock 时丢弃 worker，下一次调用创建新的 microVM；不自动重放失败的代码，因为之前的宿主副作用可能已经发生。普通 Python 异常保持原诊断并由下一次干净快照恢复。
+
+## 按需披露
+
+部分工具家族（`computer_*`、`browser`）常驻注册但默认不出现在工具目录里：技能用 `SKILL.md` 的 `tools:` 字段声明自己披露哪些工具，模型 `skill_read` 成功后 schema 才进入提示，披露按会话保持。未披露的调用会被拒绝并点名所需技能。细节见 [按需披露的宿主工具](on-demand-tools.zh-CN.md)。
 
 ## PowerShell 持久会话
 

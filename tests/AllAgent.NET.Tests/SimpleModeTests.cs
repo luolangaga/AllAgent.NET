@@ -44,13 +44,15 @@ public sealed class SimpleModeTests
         Assert.DoesNotContain(events, e => e is AgentError);
         Assert.Equal(["file_edit", "file_read", "parallel"], sandbox.Prepared.Select(tool => tool.Name).OrderBy(name => name, StringComparer.Ordinal));
         var instructions = provider.Requests[0].Messages[0].Content;
-        // Simple mode keeps a small prompt: a short core, then the catalog and the runtime context.
-        var guidance = instructions[..instructions.IndexOf("## Host tool catalog", StringComparison.Ordinal)];
-        Assert.True(guidance.Length < 1400, $"simple-mode guidance is {guidance.Length} characters");
+        // Simple mode keeps a small stable prompt; the catalog and runtime context are the tail snapshot.
+        var guidance = instructions;
+        Assert.True(guidance.Length < 1600, $"simple-mode guidance is {guidance.Length} characters");
         Assert.Contains("runs in simple mode", guidance);
-        Assert.DoesNotContain("## CodeAct execution contract", instructions);
-        Assert.DoesNotContain("## Files", instructions);
-        Assert.DoesNotContain("## Delegation", instructions);
+        Assert.DoesNotContain("## CodeAct execution contract", guidance);
+        Assert.DoesNotContain("## Files", guidance);
+        Assert.DoesNotContain("## Delegation", guidance);
+        var toolContext = Assert.Single(provider.Requests[0].Messages, message => message.ToolName == "tool_context");
+        Assert.Contains("## Host tool catalog", toolContext.Content);
         // Instruction skills exist in the workspace but simple mode drops them for the turn.
         Assert.Contains(catalog.List(), skill => skill.Name == "helper");
         Assert.NotEmpty(skillsInTurn);

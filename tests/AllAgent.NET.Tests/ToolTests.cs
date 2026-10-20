@@ -37,7 +37,7 @@ public sealed class ToolTests
     {
         using var workspace = new TestWorkspace();
         var contracts = workspace.Tools.Definitions;
-        Assert.Equal(new[] { "cancel_shell", "everything_search", "file_edit", "file_read", "file_search", "file_write", "list_directory", "run_shell", "shell_status" },
+        Assert.Equal(new[] { "cancel_shell", "file_edit", "file_read", "file_search", "file_write", "list_directory", "run_shell", "shell_status" },
             contracts.Select(contract => contract.Name).Order(StringComparer.Ordinal));
         var shell = contracts.Single(t => t.Name == "run_shell");
         Assert.Equal(ToolRisk.Execute, shell.Risk);

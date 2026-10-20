@@ -88,6 +88,60 @@ public sealed class WebPromptInputTests
     }
 
     [Fact]
+    public async Task ParkedInputsCanBeInspectedCancelledAndDeliveredAsAContinuation()
+    {
+        using var workspace = new TestWorkspace();
+        await File.WriteAllTextAsync(Path.Combine(workspace.Root, "notes.txt"), "PARKED-BODY");
+        using var store = new DataStore(Path.Combine(workspace.Root, "data"));
+        var conversation = new Conversation { Title = "parked" };
+        store.AddConversation(conversation);
+        var config = new ApiConfig { ProviderId = "web-fixture", DefaultModel = "fixture" };
+        store.AddApiConfig(config);
+        var provider = new AnswerProvider();
+        var factory = new AiProviderFactory([provider]);
+        await using var service = new AgentService(store, factory, workspace.Options with { CodeTimeout = TimeSpan.FromSeconds(60) });
+        await using var mcp = new McpToolService(store, new SkillExecutor());
+        var pushed = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var pusher = new BridgeEventPusher();
+        pusher.SetPusher(pushed.Enqueue);
+        var dispatcher = new BridgeDispatcher();
+        new BridgeHandlerRegistrar(dispatcher, store, service, factory, pusher, mcp).RegisterAll();
+
+        async Task<JsonElement> Invoke(string method, object parameters)
+        {
+            using var response = JsonDocument.Parse(await dispatcher.InvokeAsync(JsonSerializer.Serialize(new { id = method, method, @params = parameters }, JsonOptions.Default)));
+            return response.RootElement.Clone();
+        }
+
+        // Park a steer while nothing is running: it stays in the durable inbox.
+        var parked = await Invoke("chat.enqueueInput", new { conversationId = conversation.Id, message = "按 @notes.txt 调整", delivery = "steer" });
+        var item = parked.GetProperty("data");
+        var parkedId = item.GetProperty("id").GetString();
+        Assert.Equal("steer", item.GetProperty("delivery").GetString());
+        var listed = await Invoke("chat.pendingInputs", new { conversationId = conversation.Id });
+        Assert.Single(listed.GetProperty("data").EnumerateArray());
+
+        // Cancelling removes it without starting a turn.
+        var cancelled = await Invoke("chat.cancelPendingInput", new { conversationId = conversation.Id, id = Guid.Parse(parkedId!) });
+        Assert.True(cancelled.GetProperty("data").GetBoolean());
+        Assert.Empty(store.GetPendingInputs(conversation.Id));
+
+        // Park a queued prompt and let runPending deliver it as the turn's own user message.
+        await Invoke("chat.enqueueInput", new { conversationId = conversation.Id, message = "按 @notes.txt 调整", delivery = "queue" });
+        var run = await Invoke("chat.runPending", new { conversationId = conversation.Id, apiConfigId = config.Id });
+        Assert.False(string.IsNullOrWhiteSpace(run.GetProperty("data").GetString()));
+        var user = await WaitForUserMessage(store, conversation.Id);
+        await WaitForIdle(service, conversation.Id);
+        Assert.Equal("按 @notes.txt 调整", user.InputText);
+        Assert.Contains("PARKED-BODY", user.Content);
+        Assert.Empty(store.GetPendingInputs(conversation.Id));
+        var admittedJson = pushed.First(json =>
+            JsonDocument.Parse(json).RootElement.GetProperty("eventName").GetString() == "agent.inputAdmitted");
+        using var admitted = JsonDocument.Parse(admittedJson);
+        Assert.Equal("按 @notes.txt 调整", admitted.RootElement.GetProperty("data").GetProperty("message").GetProperty("content").GetString());
+    }
+
+    [Fact]
     public async Task BrowserSendRejectsUnusableAttachments()
     {
         using var workspace = new TestWorkspace();

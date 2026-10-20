@@ -9,12 +9,15 @@ import { Input } from './ui/input'
 import { Progress } from './ui/b-progress'
 import { StatusDot } from './ui/status-dot'
 import { clip } from '@/lib/format'
+import { useT, t } from '@/i18n'
 import type { TodoItem, TodoStatus } from '@/types'
 
-const statusLabels: Record<TodoStatus, string> = {
-  pending: '待处理',
-  in_progress: '进行中',
-  completed: '已完成',
+function statusLabel(status: TodoStatus): string {
+  switch (status) {
+    case 'pending': return t('待处理', 'Pending')
+    case 'in_progress': return t('进行中', 'In progress')
+    case 'completed': return t('已完成', 'Completed')
+  }
 }
 
 const statusTone: Record<TodoStatus, 'neutral' | 'active' | 'success'> = {
@@ -55,6 +58,7 @@ export function TodoPanel({ todos, disabled, onChange, report, defaultOpen = fal
   report: (error: unknown) => void
   defaultOpen?: boolean
 }) {
+  const tr = useT()
   const [draft, setDraft] = useState('')
   const [open, setOpen] = useState(defaultOpen)
   const [saving, setSaving] = useState(false)
@@ -93,7 +97,7 @@ export function TodoPanel({ todos, disabled, onChange, report, defaultOpen = fal
         </span> : null}
         <span className="todo-meter">
           <Progress
-            ariaLabel={`TODO 进度 ${completed}/${total}`}
+            ariaLabel={tr(`TODO 进度 ${completed}/${total}`, `TODO progress ${completed}/${total}`)}
             className="todo-progress"
             max={Math.max(total, 1)}
             showValue={false}
@@ -133,27 +137,27 @@ export function TodoPanel({ todos, disabled, onChange, report, defaultOpen = fal
               >
                 <StatusDot animate={todo.status === 'in_progress'} size="sm" tone={statusTone[todo.status]} />
                 <span className={`todo-text ${todo.status === 'completed' ? 'todo-done' : ''}`}>{todo.content}</span>
-                <span className={`todo-state ${todo.status}`}>{statusLabels[todo.status]}</span>
+                <span className={`todo-state ${todo.status}`}>{statusLabel(todo.status)}</span>
                 <Button
                   disabled={locked}
-                  iconLabel={`删除待办：${todo.content}`}
+                  iconLabel={tr(`删除待办：${todo.content}`, `Delete todo: ${todo.content}`)}
                   onClick={() => void save(todos.filter(item => item.id !== todo.id))}
                   size="icon-sm"
                   variant="ghost"
                 ><Trash2 size={14} /></Button>
               </motion.li>)}
             </AnimatePresence>
-          </ol> : <p className="todo-empty">暂无待办，多步骤任务的进度会显示在这里。</p>}
+          </ol> : <p className="todo-empty">{tr('暂无待办，多步骤任务的进度会显示在这里。', 'No todos yet; progress for multi-step tasks appears here.')}</p>}
           <form className="todo-add" onSubmit={event => {
             event.preventDefault()
             if (!locked && draft.trim()) void save([...todos, { id: crypto.randomUUID(), content: draft.trim(), status: 'pending' }], true)
           }}>
             <Input
-              aria-label="新待办"
+              aria-label={tr('新待办', 'New todo')}
               disabled={locked}
               maxLength={300}
               onValueChange={setDraft}
-              placeholder="添加待办…"
+              placeholder={tr('添加待办…', 'Add a todo…')}
               size="sm"
               value={draft}
             />
@@ -162,7 +166,7 @@ export function TodoPanel({ todos, disabled, onChange, report, defaultOpen = fal
               size="sm"
               type="submit"
               variant="outline"
-            >添加</Button>
+            >{tr('添加', 'Add')}</Button>
           </form>
         </div>
       </motion.div>

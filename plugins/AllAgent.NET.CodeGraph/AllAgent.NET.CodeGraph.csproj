@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <PackageId>AllAgent.NET.CodeGraph</PackageId><Version>1.0.0</Version>
+    <PackageTags>AllAgent.NET;LanAgent;CodeGraph;CodeSearch;CodeIntelligence</PackageTags>
+    <Description>CodeGraph code knowledge graph integration for AllAgent.NET: architecture, call-flow and impact questions from a pre-built index.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/AllAgent.NET.Core/AllAgent.NET.Core.csproj" PrivateAssets="all" />
+    <ProjectReference Include="../../src/AllAgent.NET.ToolGenerator/AllAgent.NET.ToolGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" PrivateAssets="all" />
+    <EmbeddedResource Include="Skills/code-graph/SKILL.md" LogicalName="AllAgent.NET.CodeGraph.Skills.code-graph.SKILL.md" />
+    <None Update="allagent-plugin.json" Pack="true" PackagePath="allagent/" />
+    <None Update="web/**/*" Pack="true" PackagePath="allagent/" />
+    <None Update="README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+</Project>

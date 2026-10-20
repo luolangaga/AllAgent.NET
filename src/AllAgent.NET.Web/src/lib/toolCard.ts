@@ -1,5 +1,6 @@
-import type { ToolCall } from '@/types'
+import type { AgentToolCard, ToolCall } from '@/types'
 import { parseArguments, parseObject } from '@/utils/execution'
+import { t } from '@/i18n'
 
 // Rich, render-ready descriptions of a tool call. Everything here is pure so the
 // collapsed row and the expanded body can share one analysis and tests can assert
@@ -313,10 +314,10 @@ function answerOf(data: Record<string, unknown>): string {
 
 function exitBadge(call: ToolCall, exitCode: number | undefined, success: boolean | undefined): CardBadge {
   if (exitCode !== undefined) return { text: `exit ${exitCode}`, tone: exitCode === 0 ? 'ok' : 'error' }
-  if (call.status === 'running') return { text: '运行中', tone: 'muted' }
-  if (call.status === 'cancelled') return { text: '已停止', tone: 'muted' }
-  if (success === false || call.status === 'error') return { text: '失败', tone: 'error' }
-  return { text: '完成', tone: 'ok' }
+  if (call.status === 'running') return { text: t('运行中', 'Running'), tone: 'muted' }
+  if (call.status === 'cancelled') return { text: t('已停止', 'Stopped'), tone: 'muted' }
+  if (success === false || call.status === 'error') return { text: t('失败', 'Failed'), tone: 'error' }
+  return { text: t('完成', 'Done'), tone: 'ok' }
 }
 
 function streamLines(outputLines?: string[]): string | undefined {
@@ -332,6 +333,8 @@ export function describeToolCard(call: ToolCall): ToolCard {
   const error = typeof output.error === 'string' && output.error ? output.error : undefined
   const note = typeof data.notice === 'string' ? data.notice : undefined
   const path = typeof args.path === 'string' ? args.path : undefined
+  const declared = output.card
+  if (declared && typeof declared === 'object') return describeDeclaredCard(declared as AgentToolCard, call, error)
 
   switch (call.name) {
     case 'file_edit':
@@ -341,12 +344,12 @@ export function describeToolCard(call: ToolCall): ToolCard {
       const badges: CardBadge[] = []
       if (diff) {
         badges.push({ text: `+${diff.added}`, tone: 'add' }, { text: `−${diff.removed}`, tone: 'del' })
-        if (diff.preview) badges.push({ text: '预览', tone: 'muted' })
+        if (diff.preview) badges.push({ text: t('预览', 'Preview'), tone: 'muted' })
       }
-      if (call.name === 'file_edit' && editCount > 1) badges.push({ text: `${editCount} 处`, tone: 'muted' })
+      if (call.name === 'file_edit' && editCount > 1) badges.push({ text: t(`${editCount} 处`, `${editCount} edits`), tone: 'muted' })
       if (!diff && error) badges.push({ text: error.split('\n')[0].slice(0, 60), tone: 'error' })
       return {
-        label: call.name === 'file_write' ? '写入文件' : '编辑文件',
+        label: call.name === 'file_write' ? t('写入文件', 'Write file') : t('编辑文件', 'Edit file'),
         target: path,
         badges,
         body: { kind: 'diff', path, diff: diff ?? { added: 0, removed: 0, lines: [], truncated: false, preview: true }, note: note ?? error },
@@ -358,15 +361,15 @@ export function describeToolCard(call: ToolCall): ToolCard {
       const start = number(data.offset) ?? 1
       const content = typeof data.content === 'string' ? data.content : ''
       const badges: CardBadge[] = []
-      if (total !== undefined) badges.push({ text: `${total} 行`, tone: 'muted' })
-      else if (shown !== undefined) badges.push({ text: `${shown} 行`, tone: 'muted' })
-      if (bool(data.image)) badges.push({ text: '图片', tone: 'muted' })
-      if (typeof data.truncatedBy === 'string' && data.truncatedBy) badges.push({ text: '未读完', tone: 'muted' })
+      if (total !== undefined) badges.push({ text: t(`${total} 行`, `${total} lines`), tone: 'muted' })
+      else if (shown !== undefined) badges.push({ text: t(`${shown} 行`, `${shown} lines`), tone: 'muted' })
+      if (bool(data.image)) badges.push({ text: t('图片', 'Image'), tone: 'muted' })
+      if (typeof data.truncatedBy === 'string' && data.truncatedBy) badges.push({ text: t('未读完', 'Incomplete'), tone: 'muted' })
       const range = shown !== undefined && shown > 0
-        ? `${start}–${start + shown - 1}${total ? ` / ${total}` : ''} 行`
-        : total ? `共 ${total} 行` : undefined
+        ? t(`${start}–${start + shown - 1}${total ? ` / ${total}` : ''} 行`, `${start}-${start + shown - 1}${total ? ` / ${total}` : ''} lines`)
+        : total ? t(`共 ${total} 行`, `${total} lines`) : undefined
       return {
-        label: '读取文件',
+        label: t('读取文件', 'Read file'),
         target: path,
         badges,
         body: { kind: 'read', path, content: content || streamLines(call.outputLines) || '', language: languageOf(path), range,
@@ -374,16 +377,32 @@ export function describeToolCard(call: ToolCall): ToolCard {
       }
     }
     case 'file_search': {
+      const files = Array.isArray(data.files) ? data.files.filter((row): row is string => typeof row === 'string') : []
+      if (data.mode === 'names') {
+        const glob = typeof data.file_pattern === 'string' ? data.file_pattern : typeof args.file_pattern === 'string' ? args.file_pattern : undefined
+        const filter = typeof data.pattern === 'string' ? data.pattern : undefined
+        const scope = typeof data.path === 'string' ? data.path : typeof args.path === 'string' ? args.path : undefined
+        const more = bool(data.outputTruncated) || bool(data.hasMore)
+        return {
+          label: t('搜索文件名', 'Search file names'),
+          target: [glob ?? '*', filter, scope && scope !== '.' ? scope : undefined].filter(Boolean).join(' · '),
+          badges: [
+            { text: files.length ? t(`${files.length} 个文件`, `${files.length} files`) : call.status === 'running' ? t('搜索中', 'Searching') : t('无结果', 'No results'), tone: (files.length ? 'ok' : 'muted') as BadgeTone },
+            ...(more ? [{ text: t('已截断', 'Truncated'), tone: 'muted' as BadgeTone }] : []),
+          ],
+          body: { kind: 'paths', paths: files, more, note: note ?? error },
+        }
+      }
       const matches = searchMatchesOf(data)
       const pattern = typeof data.pattern === 'string' ? data.pattern : typeof args.pattern === 'string' ? args.pattern : undefined
       const scope = typeof data.path === 'string' ? data.path : typeof args.path === 'string' ? args.path : undefined
       const more = bool(data.outputTruncated) || bool(data.matchLimitReached) || bool(data.linesTruncated) || bool(data.contextTruncated)
       return {
-        label: '搜索内容',
+        label: t('搜索内容', 'Search content'),
         target: pattern ? `${pattern}${scope && scope !== '.' ? ` · ${scope}` : ''}` : scope,
         badges: [
-          { text: matches.length ? `${matches.length} 处匹配` : call.status === 'running' ? '搜索中' : '无匹配', tone: matches.length ? 'ok' : 'muted' },
-          ...(more ? [{ text: '已截断', tone: 'muted' as BadgeTone }] : []),
+          { text: matches.length ? t(`${matches.length} 处匹配`, `${matches.length} matches`) : call.status === 'running' ? t('搜索中', 'Searching') : t('无匹配', 'No matches'), tone: matches.length ? 'ok' : 'muted' },
+          ...(more ? [{ text: t('已截断', 'Truncated'), tone: 'muted' as BadgeTone }] : []),
         ],
         body: { kind: 'search', pattern, matches, more, note: note ?? error },
       }
@@ -392,11 +411,11 @@ export function describeToolCard(call: ToolCall): ToolCard {
       const paths = pathListOf(data)
       const query = typeof data.query === 'string' ? data.query : typeof args.query === 'string' ? args.query : undefined
       return {
-        label: '搜索文件名',
+        label: t('搜索文件名', 'Search file names'),
         target: query,
         badges: [
-          { text: paths.length ? `${paths.length} 个文件` : call.status === 'running' ? '搜索中' : '无结果', tone: paths.length ? 'ok' : 'muted' },
-          ...(bool(data.hasMore) ? [{ text: '已截断', tone: 'muted' as BadgeTone }] : []),
+          { text: paths.length ? t(`${paths.length} 个文件`, `${paths.length} files`) : call.status === 'running' ? t('搜索中', 'Searching') : t('无结果', 'No results'), tone: paths.length ? 'ok' : 'muted' },
+          ...(bool(data.hasMore) ? [{ text: t('已截断', 'Truncated'), tone: 'muted' as BadgeTone }] : []),
         ],
         body: { kind: 'paths', paths, more: bool(data.hasMore), note: note ?? error },
       }
@@ -404,9 +423,9 @@ export function describeToolCard(call: ToolCall): ToolCard {
     case 'list_directory': {
       const entries = entriesOf(data)
       return {
-        label: '列出目录',
+        label: t('列出目录', 'List directory'),
         target: path,
-        badges: [{ text: `${entries.length} 项`, tone: entries.length ? 'ok' : 'muted' }],
+        badges: [{ text: t(`${entries.length} 项`, `${entries.length} entries`), tone: entries.length ? 'ok' : 'muted' }],
         body: { kind: 'entries', path, entries, more: bool(data.entryLimitReached), note: note ?? error },
       }
     }
@@ -417,7 +436,7 @@ export function describeToolCard(call: ToolCall): ToolCard {
       const exitCode = number(data.exitCode)
       const success = typeof data.success === 'boolean' ? bool(data.success) : undefined
       return {
-        label: '运行命令',
+        label: t('运行命令', 'Run command'),
         target: command,
         badges: [exitBadge(call, exitCode, success)],
         body: {
@@ -425,7 +444,7 @@ export function describeToolCard(call: ToolCall): ToolCard {
           stdout: typeof data.stdout === 'string' ? data.stdout : streamLines(call.outputLines),
           stderr: typeof data.stderr === 'string' ? data.stderr : undefined,
           note: note ?? error,
-          extra: typeof data.stdoutPath === 'string' ? [{ label: '完整日志', text: data.stdoutPath }] : [],
+          extra: typeof data.stdoutPath === 'string' ? [{ label: t('完整日志', 'Full log'), text: data.stdoutPath }] : [],
         },
       }
     }
@@ -435,7 +454,7 @@ export function describeToolCard(call: ToolCall): ToolCard {
       const exitCode = number(data.exitCode)
       const records = data.records
       return {
-        label: 'PowerShell 命令',
+        label: t('PowerShell 命令', 'PowerShell command'),
         target: [module, commandName].filter(Boolean).join(' · ') || commandName,
         badges: [exitBadge(call, exitCode, typeof data.success === 'boolean' ? bool(data.success) : undefined)],
         body: {
@@ -451,14 +470,14 @@ export function describeToolCard(call: ToolCall): ToolCard {
       const exitCode = number(data.exitCode)
       const streams = (data.streams && typeof data.streams === 'object' ? data.streams : {}) as Record<string, unknown>
       const extra: { label: string; text: string; error?: boolean }[] = []
-      if (streams.errors !== undefined) extra.push({ label: '错误流', text: textOf(streams.errors), error: true })
-      if (streams.warnings !== undefined) extra.push({ label: '警告流', text: textOf(streams.warnings) })
+      if (streams.errors !== undefined) extra.push({ label: t('错误流', 'Error stream'), text: textOf(streams.errors), error: true })
+      if (streams.warnings !== undefined) extra.push({ label: t('警告流', 'Warning stream'), text: textOf(streams.warnings) })
       const rendered = data.records !== undefined ? textOf(data.records) : typeof data.text === 'string' ? data.text : undefined
       return {
-        label: 'PowerShell 脚本',
-        target: typeof args.session === 'string' && args.session !== 'main' ? `会话 ${args.session}` : undefined,
+        label: t('PowerShell 脚本', 'PowerShell script'),
+        target: typeof args.session === 'string' && args.session !== 'main' ? t(`会话 ${args.session}`, `Session ${args.session}`) : undefined,
         badges: [exitBadge(call, exitCode, typeof data.success === 'boolean' ? bool(data.success) : undefined),
-          ...(streamLines(call.outputLines) && rendered === undefined && call.status === 'running' ? [{ text: '输出中', tone: 'muted' as BadgeTone }] : [])],
+          ...(streamLines(call.outputLines) && rendered === undefined && call.status === 'running' ? [{ text: t('输出中', 'Streaming'), tone: 'muted' as BadgeTone }] : [])],
         body: {
           kind: 'command', command: script, language: 'powershell', exitCode,
           stdout: rendered ?? streamLines(call.outputLines),
@@ -476,10 +495,10 @@ export function describeToolCard(call: ToolCall): ToolCard {
       const hostCalls = number(summary.total)
       const hostFailures = number(summary.failed)
       const badges: CardBadge[] = [exitBadge(call, exitCode, typeof data.ok === 'boolean' ? bool(data.ok) : undefined)]
-      if (hostCalls !== undefined && hostCalls > 0) badges.push({ text: `${hostCalls} 次宿主调用`, tone: 'muted' })
-      if (hostFailures) badges.push({ text: `${hostFailures} 失败`, tone: 'error' })
+      if (hostCalls !== undefined && hostCalls > 0) badges.push({ text: t(`${hostCalls} 次宿主调用`, `${hostCalls} host calls`), tone: 'muted' })
+      if (hostFailures) badges.push({ text: t(`${hostFailures} 失败`, `${hostFailures} failed`), tone: 'error' })
       return {
-        label: '执行 Python',
+        label: t('执行 Python', 'Run Python'),
         target: undefined,
         badges,
         body: { kind: 'code', language: 'python', code, stdout, stderr, exitCode },
@@ -490,9 +509,9 @@ export function describeToolCard(call: ToolCall): ToolCard {
       const title = typeof data.title === 'string' ? data.title : undefined
       const content = typeof data.content === 'string' ? data.content : ''
       return {
-        label: '抓取网页',
+        label: t('抓取网页', 'Fetch page'),
         target: title || url,
-        badges: [{ text: content ? `${content.length} 字` : call.status === 'running' ? '抓取中' : '无内容', tone: content ? 'ok' : 'muted' }],
+        badges: [{ text: content ? t(`${content.length} 字`, `${content.length} chars`) : call.status === 'running' ? t('抓取中', 'Fetching') : t('无内容', 'No content'), tone: content ? 'ok' : 'muted' }],
         body: { kind: 'read', path: url, content, language: 'text', range: typeof data.contentType === 'string' ? data.contentType : undefined,
           note: note ?? error },
       }
@@ -501,10 +520,21 @@ export function describeToolCard(call: ToolCall): ToolCard {
       const query = typeof data.query === 'string' ? data.query : typeof args.query === 'string' ? args.query : undefined
       const rows = searchResultsOf(data.results)
       return {
-        label: '网页搜索',
+        label: t('网页搜索', 'Web search'),
         target: query,
-        badges: [{ text: rows.length ? `${rows.length} 条结果` : call.status === 'running' ? '搜索中' : '无结果', tone: rows.length ? 'ok' : 'muted' }],
+        badges: [{ text: rows.length ? t(`${rows.length} 条结果`, `${rows.length} results`) : call.status === 'running' ? t('搜索中', 'Searching') : t('无结果', 'No results'), tone: rows.length ? 'ok' : 'muted' }],
         body: rows.length ? { kind: 'results', rows } : { kind: 'json', args: call.args, result: call.output, error },
+      }
+    }
+    case 'plan_propose': {
+      const title = typeof args.title === 'string' ? args.title : undefined
+      const approved = data.approved === true
+      const feedback = typeof data.feedback === 'string' ? data.feedback : undefined
+      return {
+        label: t('提交计划', 'Submit plan'),
+        target: title,
+        badges: [{ text: approved ? t('已批准', 'Approved') : call.status === 'running' ? t('等待批准', 'Awaiting approval') : t('已拒绝', 'Rejected'), tone: approved ? 'ok' : call.status === 'running' ? 'muted' : 'error' }],
+        body: { kind: 'json', args: call.args, result: feedback ?? call.output, error },
       }
     }
     case 'todo_write':
@@ -512,9 +542,9 @@ export function describeToolCard(call: ToolCall): ToolCard {
       const todos = todosOf(data.todos).length ? todosOf(data.todos) : todosOf(args.todos)
       const done = todos.filter(row => row.status === 'completed').length
       return {
-        label: call.name === 'todo_write' ? '更新 TODO' : '查看 TODO',
+        label: call.name === 'todo_write' ? t('更新 TODO', 'Update TODO') : t('查看 TODO', 'View TODO'),
         target: undefined,
-        badges: [{ text: `${done}/${todos.length} 完成`, tone: todos.length ? (done === todos.length ? 'ok' : 'muted') : 'muted' }],
+        badges: [{ text: t(`${done}/${todos.length} 完成`, `${done}/${todos.length} done`), tone: todos.length ? (done === todos.length ? 'ok' : 'muted') : 'muted' }],
         body: { kind: 'todos', todos },
       }
     }
@@ -522,19 +552,19 @@ export function describeToolCard(call: ToolCall): ToolCard {
       const question = typeof args.question === 'string' ? args.question : undefined
       const answer = answerOf(data)
       return {
-        label: '询问你',
+        label: t('询问你', 'Ask you'),
         target: question,
-        badges: [{ text: answer ? '已回答' : call.status === 'running' ? '等待回答' : '无回答', tone: answer ? 'ok' : 'muted' }],
+        badges: [{ text: answer ? t('已回答', 'Answered') : call.status === 'running' ? t('等待回答', 'Awaiting answer') : t('无回答', 'No answer'), tone: answer ? 'ok' : 'muted' }],
         body: { kind: 'answer', question, answer: answer || undefined },
       }
     }
     case 'memory_update':
-      return { label: '学习本轮经验', badges: [], body: { kind: 'json', args: call.args, result: call.output, error } }
+      return { label: t('学习本轮经验', 'Learn from this turn'), badges: [], body: { kind: 'json', args: call.args, result: call.output, error } }
     default: {
       const target = firstString(args, ['path', 'url', 'query', 'pattern', 'command', 'name', 'module', 'question', 'id'])
       const badges: CardBadge[] = []
       if (error) badges.push({ text: error.split('\n')[0].slice(0, 60), tone: 'error' })
-      else if (call.outputLines?.length) badges.push({ text: `${call.outputLines.length} 行输出`, tone: 'muted' })
+      else if (call.outputLines?.length) badges.push({ text: t(`${call.outputLines.length} 行输出`, `${call.outputLines.length} output lines`), tone: 'muted' })
       return { label: call.name, target, badges, body: { kind: 'json', args: call.args, result: call.output, error } }
     }
   }
@@ -546,4 +576,44 @@ function firstString(args: Record<string, unknown>, keys: string[]): string | un
     if (typeof value === 'string' && value.trim()) return value
   }
   return undefined
+}
+
+/** Maps the host-neutral card a tool attached to ToolResult.Card onto the existing card bodies. */
+function describeDeclaredCard(card: AgentToolCard, call: ToolCall, error?: string): ToolCard {
+  const bodyName = String(card.body ?? 'text').toLowerCase()
+  const text = typeof card.text === 'string' ? card.text : ''
+  const paths = Array.isArray(card.paths) ? card.paths.filter((path): path is string => typeof path === 'string') : []
+  const fields = Array.isArray(card.fields) ? card.fields : []
+  const badges: CardBadge[] = []
+  for (const field of fields.slice(0, 8)) {
+    if (!field) continue
+    const label = typeof field.label === 'string' ? field.label : ''
+    const value = typeof field.value === 'string' ? field.value : String(field.value ?? '')
+    if (!value) continue
+    const tone: BadgeTone = field.tone === 'ok' || field.tone === 'error' || field.tone === 'add' || field.tone === 'del' ? field.tone : 'muted'
+    badges.push({ text: `${label}: ${value}`, tone })
+  }
+  if (error && !badges.some(badge => badge.tone === 'error')) badges.push({ text: error.split('\n')[0].slice(0, 60), tone: 'error' })
+
+  let body: ToolCardBody
+  switch (bodyName) {
+    case 'code':
+      body = { kind: 'code', language: '', code: text || streamLines(call.outputLines) || '' }
+      break
+    case 'paths':
+      body = { kind: 'paths', paths, more: false }
+      break
+    case 'json':
+      body = { kind: 'json', args: call.args, result: call.output, error }
+      break
+    default:
+      body = { kind: 'text', text: text || streamLines(call.outputLines) || '' }
+      break
+  }
+  return {
+    label: typeof card.title === 'string' && card.title ? card.title : call.name,
+    target: typeof card.summary === 'string' && card.summary ? card.summary : undefined,
+    badges,
+    body,
+  }
 }

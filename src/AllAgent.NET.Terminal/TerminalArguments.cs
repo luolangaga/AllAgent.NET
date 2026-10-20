@@ -75,6 +75,8 @@ internal sealed class TerminalArguments
     public bool WorkspaceFallback { get; private set; }
     public string DataDirectory => _dataDirectory ??= Path.GetFullPath(Get("data-dir") ?? AllAgent.NET.Core.Data.LegacyDataPaths.ProjectDirectory(Workspace));
     public string SharedDirectory => _sharedDirectory ??= Path.GetFullPath(Get("data-dir") ?? AllAgent.NET.Core.Data.LegacyDataPaths.SharedDirectory(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)));
+    /// <summary>Manifest that owns app settings: an explicit --data-dir keeps the legacy single file.</summary>
+    public string SettingsDirectory => Get("data-dir") == null ? SharedDirectory : DataDirectory;
     public int BackgroundConcurrency => Get("background-concurrency") is { } value
         ? int.TryParse(value, out var parsed) && parsed >= 0 ? parsed : throw new ArgumentException("--background-concurrency requires a nonnegative integer; 0 means unlimited.")
         : 0;

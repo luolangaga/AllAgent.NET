@@ -18,6 +18,7 @@
     <ProjectReference Include="../../plugins/AllAgent.NET.WorkBuddy/AllAgent.NET.WorkBuddy.csproj" />
     <ProjectReference Include="../../plugins/AllAgent.NET.GitHub/AllAgent.NET.GitHub.csproj" />
     <ProjectReference Include="../../plugins/AllAgent.NET.Diligence/AllAgent.NET.Diligence.csproj" />
+    <ProjectReference Include="../../plugins/AllAgent.NET.CodeGraph/AllAgent.NET.CodeGraph.csproj" />
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageReference Include="xunit" Version="2.9.3" />
@@ -38,6 +39,15 @@
   <Target Name="CopySamplePlugin" AfterTargets="Build">
     <ItemGroup><PluginFiles Include="../../samples/AllAgent.NET.SamplePlugin/bin/$(Configuration)/net10.0/AllAgent.NET.SamplePlugin.dll" /><PluginFiles Include="../../samples/AllAgent.NET.SamplePlugin/allagent-plugin.json" /></ItemGroup>
     <Copy SourceFiles="@(PluginFiles)" DestinationFolder="$(OutDir)sample-plugin" SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="CopyCodeGraphPlugin" AfterTargets="Build">
+    <ItemGroup>
+      <CodeGraphPluginFiles Include="../../plugins/AllAgent.NET.CodeGraph/bin/$(Configuration)/net10.0/AllAgent.NET.CodeGraph.dll" />
+      <CodeGraphPluginFiles Include="../../plugins/AllAgent.NET.CodeGraph/allagent-plugin.json" />
+      <CodeGraphPluginWebFiles Include="../../plugins/AllAgent.NET.CodeGraph/web/**/*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(CodeGraphPluginFiles)" DestinationFolder="$(OutDir)codegraph-plugin" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(CodeGraphPluginWebFiles)" DestinationFiles="@(CodeGraphPluginWebFiles->'$(OutDir)codegraph-plugin/web/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
   </Target>
   <!-- Tests launch the referenced terminal as a separate process in this output
        directory. Its dependencies use this project's shared-framework resolution. -->

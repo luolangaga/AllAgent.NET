@@ -378,7 +378,9 @@ public sealed class AgentDelegationTests
         });
         var result = await tool.InvokeAsync("subagent", JsonSerializer.SerializeToElement(new { chain = new[] {
             new { agent = "explore", task = "first" }, new { agent = "general", task = "use {previous}" }, new { agent = "general", task = "must not start" } } }), default);
-        Assert.False(result.Ok); Assert.Equal(new[] { "first", "use findings" }, prompts);
+        Assert.False(result.Ok); Assert.Equal(2, prompts.Count); Assert.Equal("first", prompts[0]);
+        Assert.Contains("\"previousResult\":\"findings\"", prompts[1]);
+        Assert.StartsWith("use the preceding result", prompts[1]);
         var data = JsonSerializer.SerializeToElement(result.Data, ToolResult.JsonOptions);
         Assert.Equal("chain", data.GetProperty("mode").GetString()); Assert.Equal(2, data.GetProperty("results").GetArrayLength());
         Assert.Equal(1, data.GetProperty("results")[1].GetProperty("exitCode").GetInt32());

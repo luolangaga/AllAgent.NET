@@ -25,19 +25,21 @@ internal sealed class TerminalHost : IAsyncDisposable
     public required BrowserUseManager Browser { get; init; }
     public required ComputerUseManager Computer { get; init; }
     public SessionRuns Runs { get; } = new();
-    /// <summary>One sandbox runtime per agent role, shared by every run of that role.</summary>
+    public required ConversationRuntimePool.Lease RuntimeLease { get; init; }
+    public ConversationRuntimeFactory RuntimeFactory => RuntimeLease.Factory;
+    /// <summary>One runtime per conversation; roles never share execution or disclosure state.</summary>
     public Dictionary<string, AgentRuntime> Runtimes { get; } = new(StringComparer.Ordinal);
     public DateTime LastUsed { get; set; } = DateTime.UtcNow;
 
-    public bool Busy => Runs.Any || Tasks.Active;
+    public bool Busy => Runs.Any || Tasks.Active || RuntimeFactory.HasActiveRuns;
 
     public async ValueTask DisposeAsync()
     {
         await Runs.StopAllAsync(TimeSpan.FromSeconds(5));
-        foreach (var runtime in Runtimes.Values) await runtime.DisposeAsync();
+        await Tasks.DisposeAsync();
+        await RuntimeLease.DisposeAsync();
         Runtimes.Clear();
         await Mcp.DisposeAsync();
-        await Tasks.DisposeAsync();
         await Plugins.DisposeAsync();
         Store.Dispose();
     }
@@ -129,6 +131,7 @@ internal static class TerminalHosts
             var host = new TerminalHost
             {
                 Workspace = args.Workspace, DataDirectory = dataDirectory, Store = store, Tasks = tasks,
+                RuntimeLease = ConversationRuntimePool.Acquire(dataDirectory),
                 Mcp = mcp, Catalog = catalog, Checkpoints = checkpoints, Plugins = plugins, Browser = browser, Computer = computer,
             };
             plugins.ProvideService(store); plugins.ProvideService(catalog); plugins.ProvideService(tasks); plugins.ProvideService(mcp);

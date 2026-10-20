@@ -53,7 +53,7 @@ For CodeAct, prefer a bounded workflow: observe the relevant region, locate uniq
 | `dialog` | `{"accept":true,"text":"prompt response"}` |
 | `close` | `{}`; closes owned WebView2 window, disconnects external browser without closing it |
 | `navigate` | `{"url":"https://example.com","new_tab":false}`; upstream navigation contract |
-| `search` | `{"query":"search terms","engine":"bing"}`; duckduckgo/google/bing |
+| `search` | `{"query":"search terms","engine":"bing"}`; duckduckgo/google/bing/baidu |
 | `wait` | `{"seconds":3}`; upstream delay calculation, bounded to 30 actual seconds |
 | `search_page` | `{"pattern":"text","regex":false,"case_sensitive":false,"context_chars":150,"max_results":25}`; optional css_scope |
 | `find_elements` | `{"selector":"a","attributes":["href"],"max_results":50,"include_text":true}` |

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using AllAgent.NET.Core.Bridge;
 
 namespace AllAgent.NET.Core.Extensions;
@@ -31,8 +32,8 @@ public sealed record PluginWebPage(string Id, string Title, string Entry, string
 public sealed record PluginWebPanel(string Id, string Title, string Entry, int Order = 50);
 public sealed record PluginWebToolCard(string Tool, string Entry);
 public sealed record PluginWebCommand(string Id, string Title, string? Page = null);
-public sealed record PluginWebSettingsSection(string Id, string Title, IReadOnlyList<PluginWebSettingField>? Fields = null);
-public sealed record PluginWebSettingField(string Key, string Label, string Type = "text", IReadOnlyList<string>? Options = null, string? Default = null);
+public sealed record PluginWebSettingsSection(string Id, string Title, IReadOnlyList<PluginWebSettingField>? Fields = null, string? Entry = null);
+public sealed record PluginWebSettingField(string Key, string Label, string Type = "text", IReadOnlyList<string>? Options = null, string? Default = null, string? Description = null, string? Placeholder = null);
 public sealed record PluginWebComposerAction(string Id, string Title, string? Page = null, string? Icon = null);
 public sealed record PluginWebStatusItem(string Id, string Label);
 
@@ -45,7 +46,10 @@ public sealed record PluginWebInfo(
     string? DevUrl, string? Error);
 
 /// <summary>Web summary attached to PluginStatus for the terminal panel and management UIs.</summary>
-public sealed record PluginWebStatus(bool WebEnabled, int Pages, int Panels, int ToolCards, IReadOnlyList<string> Capabilities, string? Error);
+public sealed record PluginWebStatus(bool WebEnabled, int Pages, int Panels, int ToolCards, IReadOnlyList<string> Capabilities, string? Error)
+{
+    public int Settings { get; init; }
+}
 
 /// <summary>One backend method a plugin exposes to its own browser frames. The host registers it
 /// as plugin.&lt;packageId&gt;.&lt;name&gt;; other plugins and host methods stay unreachable.</summary>
@@ -72,8 +76,12 @@ public sealed class PluginWebChannel(string packageId, PluginWebEvents events)
 
 internal static class PluginWebValidation
 {
+    private static readonly Regex SettingKey = new("^[a-z][a-z0-9_.-]{0,63}$", RegexOptions.CultureInvariant);
+
     public static bool IsValidName(string? name)
         => !string.IsNullOrWhiteSpace(name) && name.Length <= 64 && name.All(ch => char.IsAsciiLetterOrDigit(ch) || ch is '_' or '-' or '.');
+
+    public static bool IsValidSettingKey(string? key) => key != null && SettingKey.IsMatch(key);
 
     public static bool IsLoopbackHttp(string url)
         => Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttp
@@ -98,7 +106,22 @@ internal static class PluginWebValidation
         var panels = (source.Panels ?? []).Select(panel => new PluginWebPanel(panel.Id, string.IsNullOrWhiteSpace(panel.Title) ? panel.Id : panel.Title, ResolveEntry(panel.Entry, installDirectory, webRoot, "面板"), panel.Order)).ToArray();
         var toolCards = (source.ToolCards ?? []).Select(card => new PluginWebToolCard(card.Tool, ResolveEntry(card.Entry, installDirectory, webRoot, "工具卡"))).ToArray();
         var commands = (source.Commands ?? []).Select(command => new PluginWebCommand(command.Id, string.IsNullOrWhiteSpace(command.Title) ? command.Id : command.Title, command.Page)).ToArray();
-        var settings = (source.Settings ?? []).Select(section => new PluginWebSettingsSection(section.Id, string.IsNullOrWhiteSpace(section.Title) ? section.Id : section.Title, section.Fields)).ToArray();
+        var settings = (source.Settings ?? []).Select(section =>
+        {
+            var fields = (section.Fields ?? []).Select(field =>
+            {
+                if (!IsValidSettingKey(field.Key)) throw new InvalidDataException("设置项 key 无效（仅小写字母、数字、_ - .）：" + field.Key);
+                if (string.IsNullOrWhiteSpace(field.Label)) throw new InvalidDataException("设置项缺少标签：" + field.Key);
+                var type = string.IsNullOrWhiteSpace(field.Type) ? "text" : field.Type.Trim().ToLowerInvariant();
+                if (type is not ("text" or "number" or "boolean" or "select" or "password")) throw new InvalidDataException("设置项类型无效：" + field.Key + " / " + type);
+                if (type == "select" && (field.Options == null || field.Options.Count == 0)) throw new InvalidDataException("select 设置项缺少 options：" + field.Key);
+                return new PluginWebSettingField(field.Key, field.Label, type, field.Options, field.Default, field.Description, field.Placeholder);
+            }).ToArray();
+            if (fields.Select(field => field.Key).Distinct(StringComparer.Ordinal).Count() != fields.Length) throw new InvalidDataException("设置区字段 key 冲突：" + section.Id);
+            var entry = section.Entry == null ? null : ResolveEntry(section.Entry, installDirectory, webRoot, "设置区");
+            if (fields.Length == 0 && entry == null) throw new InvalidDataException("设置区至少需要 fields 或 entry：" + section.Id);
+            return new PluginWebSettingsSection(section.Id, string.IsNullOrWhiteSpace(section.Title) ? section.Id : section.Title, fields, entry);
+        }).ToArray();
         var actions = (source.ComposerActions ?? []).Select(action => new PluginWebComposerAction(action.Id, string.IsNullOrWhiteSpace(action.Title) ? action.Id : action.Title, action.Page, action.Icon)).ToArray();
         var statusBar = (source.StatusBar ?? []).Select(item => new PluginWebStatusItem(item.Id, string.IsNullOrWhiteSpace(item.Label) ? item.Id : item.Label)).ToArray();
         ValidateIds(pages.Select(page => page.Id), "页面");

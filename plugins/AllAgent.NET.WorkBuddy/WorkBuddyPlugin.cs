@@ -31,8 +31,18 @@ public sealed class WorkBuddyPlugin : IAllAgentPlugin
                 return account.Name + " · " + (status.LoggedIn ? "已登录" : "未登录") +
                     (status.Account == null ? "" : " · " + status.Account) + " · " + status.Message;
             }));
+            context.AddCommand(new(account.Id + "-automation", "立即执行 WorkBuddy 自动巡检", (_, ct) => account.Automation.RunCycleAsync("manual", ct)));
+            context.AddCommand(new(account.Id + "-history", "查看 WorkBuddy 自动化活动历史", (args, ct) => account.Automation.HistoryAsync(HistoryLimit(args), ct)));
+            context.AddCommand(new(account.Id + "-scheduler", "查看 WorkBuddy 后台自动化状态", (_, ct) => Task.FromResult(account.Automation.Status())));
+            if (!international)
+            {
+                context.AddCommand(new(account.Id + "-checkin", "国内版每日签到与对话活跃上报", (_, ct) => account.Automation.CheckinAndReportAsync("manual", ct)));
+                context.AddCommand(new(account.Id + "-growth", "国内版成长任务、连登与猫猫旅行", (_, ct) => account.Automation.RunGrowthAsync("manual", ct)));
+            }
+            account.Automation.Start();
         }
     }
+    private static int HistoryLimit(string[] args) => args.Length > 0 && int.TryParse(args[0], out var value) ? Math.Clamp(value, 1, 1000) : 20;
     public ValueTask DisposeAsync() { foreach (var account in accounts) account.Dispose(); return ValueTask.CompletedTask; }
 }
 
@@ -46,14 +56,23 @@ public sealed class WorkBuddyAccount : IAuthenticationProvider, IAccountModelPro
     public string Name => international ? "WorkBuddy 国际版" : "WorkBuddy 国内版";
     public string Endpoint => international ? "https://www.workbuddy.ai" : "https://copilot.tencent.com";
     private string Origin => international ? Endpoint : "https://www.codebuddy.cn";
+    internal bool International => international;
+    internal string ChatBase => Endpoint;
+    internal string BillingBase => Origin;
+    internal string WebBase => international ? "https://www.workbuddy.ai" : "https://www.workbuddy.cn";
+    internal string DataDirectory { get; }
+    internal HttpClient Http => http;
     public string? LoginInstructions => "在浏览器完成 WorkBuddy 授权；终端自动等待结果，Esc 可取消。";
     public IAiProvider ModelProvider { get; }
+    public WorkBuddyAutomation Automation { get; }
     public WorkBuddyAccount(string directory, bool international = false, HttpClient? http = null)
     {
         this.international = international;
+        DataDirectory = directory;
         vault = new TokenVault(Path.Combine(directory, "credentials"));
         this.http = http ?? new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(30) };
         ModelProvider = new WorkBuddyProvider(this);
+        Automation = new WorkBuddyAutomation(this, directory);
     }
     public ApiConfig CreateConfiguration() => new() { ProviderId = Id, Protocol = Id, BaseUrl = Endpoint + "/v2", DisplayName = Name, AuthenticationProviderId = Id, ReasoningProtocol = "none" };
     public void ValidateModelConfiguration(ApiConfig config)
@@ -105,17 +124,35 @@ public sealed class WorkBuddyAccount : IAuthenticationProvider, IAccountModelPro
             if (saved == null) return null;
             if (saved.ExpiresAt > DateTimeOffset.UtcNow.AddMinutes(2)) return saved.AccessToken;
             if (string.IsNullOrEmpty(saved.RefreshToken)) throw new InvalidOperationException("登录已过期；请 /login " + Id);
-            using var request = Request("/v2/plugin/auth/token/refresh", HttpMethod.Post, saved.AccessToken, new { });
-            request.Headers.TryAddWithoutValidation("X-Refresh-Token", saved.RefreshToken);
-            request.Headers.TryAddWithoutValidation("X-Auth-Refresh-Source", international ? "plugin" : "workbuddy");
-            using var response = await http.SendAsync(request, ct);
-            response.EnsureSuccessStatusCode();
-            var result = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync(ct));
-            Check(result);
-            var data = Data(result);
-            if (data.TryGetProperty("data", out var inner)) data = inner;
-            await SaveAsync(data, saved.RefreshToken, ct);
-            return data.GetProperty("accessToken").GetString();
+            return await RefreshLockedAsync(saved, ct);
+        }
+        finally { gate.Release(); }
+    }
+    private async Task<string> RefreshLockedAsync(OAuthTokens saved, CancellationToken ct)
+    {
+        using var request = Request("/v2/plugin/auth/token/refresh", HttpMethod.Post, saved.AccessToken, new { });
+        request.Headers.TryAddWithoutValidation("X-Refresh-Token", saved.RefreshToken);
+        request.Headers.TryAddWithoutValidation("X-Auth-Refresh-Source", international ? "plugin" : "workbuddy");
+        using var response = await http.SendAsync(request, ct);
+        response.EnsureSuccessStatusCode();
+        var result = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync(ct));
+        Check(result);
+        var data = Data(result);
+        if (data.TryGetProperty("data", out var inner)) data = inner;
+        await SaveAsync(data, saved.RefreshToken, ct);
+        return data.GetProperty("accessToken").GetString()!;
+    }
+    internal async Task<bool> KeepAliveAsync(TimeSpan minimumRemaining, CancellationToken ct)
+    {
+        await gate.WaitAsync(ct);
+        try
+        {
+            var saved = await vault.ReadAsync(Id, ct);
+            if (saved == null) return false;
+            if (saved.ExpiresAt - DateTimeOffset.UtcNow >= minimumRemaining) return false;
+            if (string.IsNullOrEmpty(saved.RefreshToken)) throw new InvalidOperationException("登录已过期；请 /login " + Id);
+            await RefreshLockedAsync(saved, ct);
+            return true;
         }
         finally { gate.Release(); }
     }
@@ -151,11 +188,35 @@ public sealed class WorkBuddyAccount : IAuthenticationProvider, IAccountModelPro
         else headers["X-No-Enterprise-Id"] = "1";
         return headers;
     }
-    private HttpRequestMessage Request(string path, HttpMethod method, string? token, object? body)
+    internal Dictionary<string, string> BillingHeaders(string token)
     {
-        var request = new HttpRequestMessage(method, Endpoint + path);
+        var claims = Claims(token);
+        var uid = claims.GetProperty("sub").GetString()!;
+        var headers = new Dictionary<string, string>
+        {
+            ["Accept"] = "application/json, text/plain, */*",
+            ["X-Requested-With"] = "XMLHttpRequest",
+            ["User-Agent"] = international ? "WorkBuddy/5.5.2" : "WorkBuddy/5.5.6",
+            ["Origin"] = Origin, ["Referer"] = Origin + "/",
+            ["X-User-Id"] = uid, ["X-Domain"] = new Uri(Endpoint).Host,
+            ["X-CodeBuddy-Request"] = "1",
+            ["Accept-Language"] = international ? "en-US" : "zh-CN",
+            ["X-Request-ID"] = Guid.NewGuid().ToString("N"),
+            ["X-Machine-ID"] = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(uid + ":machine"))),
+            ["X-Session-ID"] = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(uid + ":session")))
+        };
+        if (!international) headers["X-Product"] = "SaaS";
+        if (claims.TryGetProperty("enterprise_id", out var enterprise) && !string.IsNullOrEmpty(enterprise.GetString()))
+        { headers["X-Enterprise-Id"] = enterprise.GetString()!; headers["X-Tenant-Id"] = enterprise.GetString()!; }
+        else headers["X-No-Enterprise-Id"] = "1";
+        return headers;
+    }
+    private HttpRequestMessage Request(string path, HttpMethod method, string? token, object? body) => Request(new Uri(Endpoint + path), method, token, body, false);
+    internal HttpRequestMessage Request(Uri uri, HttpMethod method, string? token, object? body, bool billing = false)
+    {
+        var request = new HttpRequestMessage(method, uri);
         if (body != null) request.Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
-        var headers = token == null ? new Dictionary<string, string> { ["Origin"] = Origin, ["Referer"] = Origin + "/", ["User-Agent"] = "WorkBuddy/5.5.6", ["X-Requested-With"] = "XMLHttpRequest" } : Headers(token);
+        var headers = token == null ? new Dictionary<string, string> { ["Origin"] = Origin, ["Referer"] = Origin + "/", ["User-Agent"] = "WorkBuddy/5.5.6", ["X-Requested-With"] = "XMLHttpRequest" } : billing ? BillingHeaders(token) : Headers(token);
         foreach (var h in headers) request.Headers.TryAddWithoutValidation(h.Key, h.Value);
         if (token != null) request.Headers.Authorization = new("Bearer", token);
         return request;
@@ -175,17 +236,26 @@ public sealed class WorkBuddyAccount : IAuthenticationProvider, IAccountModelPro
             throw new InvalidOperationException("WorkBuddy 上游错误，code=" + code.GetInt32());
     }
     internal static JsonElement Data(JsonElement result) => result.TryGetProperty("data", out var data) ? data : throw new InvalidOperationException("WorkBuddy 响应缺少 data。");
-    private static JsonElement Claims(string token)
+    internal static JsonElement Claims(string token)
     {
         var segment = token.Split('.')[1].Replace('-', '+').Replace('_', '/');
         return JsonSerializer.Deserialize<JsonElement>(Convert.FromBase64String(segment.PadRight((segment.Length + 3) / 4 * 4, '=')));
+    }
+    internal static string Uid(string token)
+    {
+        try { return Claims(token).TryGetProperty("sub", out var sub) ? sub.GetString() ?? "" : ""; }
+        catch { return ""; }
+    }
+    internal static bool IsEnterprise(string token)
+    {
+        try { return Claims(token).TryGetProperty("enterprise_id", out var id) && !string.IsNullOrEmpty(id.GetString()); }
+        catch { return false; }
     }
     public async Task<string> QuotaAsync(CancellationToken ct)
     {
         var token = await GetAccessTokenAsync(ct) ?? throw new InvalidOperationException("请先 /login " + Id);
         // Billing uses a separate origin in the mainland region.
-        using var request = Request("/v2/billing/meter/get-user-resource", HttpMethod.Post, token, new { PageNumber = 1, PageSize = 100, ProductCode = "p_tcaca", Status = new[] { 0, 3 }, PackageEndTimeRangeBegin = DateTimeOffset.UtcNow.ToOffset(TimeSpan.FromHours(8)).ToString("yyyy-MM-dd HH:mm:ss"), PackageEndTimeRangeEnd = "2036-01-01 00:00:00" });
-        request.RequestUri = new Uri(Origin + "/v2/billing/meter/get-user-resource");
+        using var request = Request(new Uri(Origin + "/v2/billing/meter/get-user-resource"), HttpMethod.Post, token, new { PageNumber = 1, PageSize = 100, ProductCode = "p_tcaca", Status = new[] { 0, 3 }, PackageEndTimeRangeBegin = DateTimeOffset.UtcNow.ToOffset(TimeSpan.FromHours(8)).ToString("yyyy-MM-dd HH:mm:ss"), PackageEndTimeRangeEnd = "2036-01-01 00:00:00" }, true);
         using var response = await http.SendAsync(request, ct);
         response.EnsureSuccessStatusCode();
         var result = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync(ct));
@@ -207,7 +277,7 @@ public sealed class WorkBuddyAccount : IAuthenticationProvider, IAccountModelPro
             if (package.TryGetProperty(key, out var value) && double.TryParse(value.ToString(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var number)) return number;
         throw new InvalidOperationException("套餐额度字段缺失，无法确认额度。");
     }
-    public void Dispose() { http.Dispose(); gate.Dispose(); }
+    public void Dispose() { Automation.Dispose(); http.Dispose(); gate.Dispose(); }
 }
 
 public sealed class WorkBuddyProvider(WorkBuddyAccount account) : IAiProvider

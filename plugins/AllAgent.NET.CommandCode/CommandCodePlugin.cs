@@ -181,8 +181,26 @@ public sealed class CommandCodeAccount : IAuthenticationProvider, IAccountModelP
         using var response = await http.SendAsync(request, ct);
         if (!response.IsSuccessStatusCode) throw new HttpRequestException("CommandCode 模型查询失败：HTTP " + (int)response.StatusCode);
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
-        return json.RootElement.GetProperty("data").EnumerateArray().Select(m => m.GetProperty("id").GetString())
-            .Where(id => !string.IsNullOrWhiteSpace(id)).Distinct().Select(id => new ModelInfo(id!, id!)).ToArray();
+        return json.RootElement.GetProperty("data").EnumerateArray().Select(model =>
+        {
+            if (!model.TryGetProperty("id", out var idNode) || idNode.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(idNode.GetString())) return null;
+            var id = idNode.GetString()!;
+            var name = model.TryGetProperty("display", out var display) && display.ValueKind == JsonValueKind.Object
+                && display.TryGetProperty("label", out var label) && label.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(label.GetString())
+                ? label.GetString()!
+                : model.TryGetProperty("name", out var nameNode) && nameNode.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(nameNode.GetString()) ? nameNode.GetString()! : id;
+            // An explicit null/empty list means the model decides its own reasoning depth; only an
+            // absent field leaves the host's family fallback in place.
+            IReadOnlyList<string>? efforts = null;
+            if (model.TryGetProperty("reasoningEfforts", out var levels))
+                efforts = levels.ValueKind == JsonValueKind.Array
+                    ? levels.EnumerateArray().Select(level => level.ValueKind == JsonValueKind.String ? level.GetString() : null)
+                        .Where(level => !string.IsNullOrWhiteSpace(level)).Select(level => level == "off" ? "none" : level!).Distinct().ToArray()
+                    : [];
+            int? ReadLimit(string key) => model.TryGetProperty(key, out var value) && value.ValueKind == JsonValueKind.Number
+                && value.TryGetInt32(out var number) && number > 0 ? number : null;
+            return new ModelInfo(id, name, ReadLimit("context_length"), ReadLimit("maxOutputTokens")) { ReasoningLevels = efforts };
+        }).Where(model => model != null).Select(model => model!).DistinctBy(model => model.Id).ToArray();
     }
     public void Dispose() => http.Dispose();
 }

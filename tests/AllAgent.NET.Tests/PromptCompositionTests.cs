@@ -27,15 +27,18 @@ public sealed class PromptCompositionTests
     }
 
     [Fact]
-    public void TerminalInstructionsCarryTheSkillCatalogOnce()
+    public void TerminalInstructionsLeaveTheSkillCatalogToTheTailSnapshot()
     {
         using var workspace = new TestWorkspace();
         using var store = new DataStore(Path.Combine(workspace.Root, "data"));
         var catalog = new SkillCatalog(store, workspace.Root, Path.Combine(workspace.Root, "data"), workspace.Root);
         catalog.Create("marker", "Marker skill", "Do nothing.");
         var text = TerminalApp.Instructions(workspace.Root, catalog, plan: false);
-        Assert.Equal(1, Occurrences(text, SkillHeader));
-        Assert.Contains("marker: Marker skill", text);
+        // The catalog is appended by AgentEngine as a volatile tail snapshot; the stable host
+        // instructions stay byte-identical when a skill is enabled or disabled.
+        Assert.DoesNotContain(SkillHeader, text);
+        Assert.DoesNotContain("marker: Marker skill", text);
+        Assert.Contains("marker: Marker skill", catalog.Instructions);
     }
 
     [Fact]
@@ -53,9 +56,27 @@ public sealed class PromptCompositionTests
         Assert.DoesNotContain("computer_", Assert.Single(codeAct.ModelTools).Description);
 
         // One short pointer replaces twelve schemas and the old always-on guidance.
-        Assert.Contains("skill_read(name='computer-use')", codeAct.Instructions);
+        Assert.Contains("## On-demand capabilities", codeAct.Instructions);
+        Assert.Contains("skill_read", codeAct.Instructions);
+        Assert.Contains("computer-use", codeAct.Instructions);
         Assert.DoesNotContain("## Windows Computer Use", codeAct.Instructions);
         Assert.DoesNotContain("computer_tree", Assert.Single(codeAct.ModelTools).Description);
+    }
+
+    [Fact]
+    public async Task CodeActInstructionsRequireShortProgressNarration()
+    {
+        var registry = new ToolRegistry();
+        await using var codeAct = new CodeActProvider(registry, new PythonCodeValidator("python"), new NoopSandbox());
+
+        Assert.Contains("## Progress narration", codeAct.Instructions);
+        Assert.Contains("Report key progress at meaningful checkpoints, not every step", codeAct.Instructions);
+        Assert.Contains("Routine reads, searches, small edits", codeAct.Instructions);
+        Assert.Contains("never a Python comment", codeAct.Instructions);
+
+        codeAct.SimpleModeProvider = () => true;
+        Assert.Contains("Report key progress at meaningful checkpoints", codeAct.Instructions);
+        Assert.Contains("routine operations need no narration", codeAct.Instructions);
     }
 
     private static int Occurrences(string text, string value)

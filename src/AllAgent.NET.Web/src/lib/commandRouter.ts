@@ -1,5 +1,5 @@
 import { invoke } from '@/bridge'
-import { PERMISSION_OPTIONS } from '@/lib/permissions'
+import { permissionOptions } from '@/lib/permissions'
 import { useApiConfigsStore } from '@/stores/apiConfigs'
 import { useAuthStore } from '@/stores/auth'
 import { useCommandsStore } from '@/stores/commands'
@@ -182,7 +182,7 @@ export async function runCommand(raw: string, host: CommandHost, context: Comman
         if (!workspace.available) throw new Error('此宿主不支持权限切换。')
         const mode = rest[0] ?? ''
         if (!mode) { notices.notify('当前权限', workspace.controls?.permissionLabel ?? '未知'); return true }
-        if (!PERMISSION_OPTIONS.some(option => option.value === mode)) throw new Error(`权限模式：${PERMISSION_OPTIONS.map(option => option.value).join(' / ')}。`)
+        if (!permissionOptions().some(option => option.value === mode)) throw new Error(`权限模式：${permissionOptions().map(option => option.value).join(' / ')}。`)
         await workspace.setPermission(mode)
         notices.notify('权限已切换', workspace.controls?.permissionLabel ?? mode, 'success')
         return true

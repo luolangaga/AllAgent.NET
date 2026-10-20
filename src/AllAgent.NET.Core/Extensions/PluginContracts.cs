@@ -64,10 +64,17 @@ public interface IAccountModelProvider
     IAiProvider ModelProvider { get; }
 }
 
-public sealed class PluginContext(string dataDirectory, IReadOnlyDictionary<Type, object>? services = null, string? packageId = null, PluginWebEvents? webEvents = null)
+public sealed class PluginContext(string dataDirectory, IReadOnlyDictionary<Type, object>? services = null, string? packageId = null, PluginWebEvents? webEvents = null, PluginSettingsStore? settings = null)
 {
+    // Preserve the pre-settings constructor signature for already compiled plugins.
+    public PluginContext(string dataDirectory, IReadOnlyDictionary<Type, object>? services, string? packageId, PluginWebEvents? webEvents)
+        : this(dataDirectory, services, packageId, webEvents, null) { }
+
     private readonly PluginWebChannel? _web = webEvents == null ? null : new PluginWebChannel(packageId ?? "plugin", webEvents);
+    private readonly PluginSettings? _settings = settings == null ? null : new(packageId ?? "plugin", settings);
     public string DataDirectory { get; } = dataDirectory;
+    /// <summary>This package's namespace in the shared plugin settings store.</summary>
+    public PluginSettings Settings => _settings ?? throw new InvalidOperationException("此宿主未提供插件设置存储。");
     /// <summary>Channel to the plugin's own browser frames: push events, everything else flows
     /// through the bridge methods registered with <see cref="AddWebBridge"/>.</summary>
     public PluginWebChannel Web => _web ?? throw new InvalidOperationException("此宿主未提供插件 Web 通道。");

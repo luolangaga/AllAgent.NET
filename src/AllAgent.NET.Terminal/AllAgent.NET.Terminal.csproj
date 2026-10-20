@@ -29,6 +29,8 @@
     <ProjectReference Include="../AllAgent.NET.Browser/AllAgent.NET.Browser.csproj" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" SetTargetFramework="TargetFramework=net10.0-windows" />
     <ProjectReference Include="../../plugins/AllAgent.NET.CommandCode/AllAgent.NET.CommandCode.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
     <ProjectReference Include="../../plugins/AllAgent.NET.GitHub/AllAgent.NET.GitHub.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
+    <ProjectReference Include="../../plugins/AllAgent.NET.WorkBuddy/AllAgent.NET.WorkBuddy.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
+    <ProjectReference Include="../../plugins/AllAgent.NET.CodeGraph/AllAgent.NET.CodeGraph.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
     <None Include="../../docs/nuget-tool.zh-CN.md" Pack="true" PackagePath="/README.md" />
     <ProjectReference Include="../AllAgent.NET.Core/AllAgent.NET.Core.csproj" />
     <ProjectReference Include="../AllAgent.NET.Gui/AllAgent.NET.Gui.csproj" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" SetTargetFramework="TargetFramework=net10.0-windows" />
@@ -70,8 +72,23 @@
     <ItemGroup>
       <BuiltinPluginFiles Include="../../plugins/AllAgent.NET.CommandCode/bin/$(Configuration)/$(TargetFramework)/AllAgent.NET.CommandCode.dll" />
       <BuiltinPluginFiles Include="../../plugins/AllAgent.NET.CommandCode/allagent-plugin.json" />
+      <GitHubPluginFiles Include="../../plugins/AllAgent.NET.GitHub/bin/$(Configuration)/$(TargetFramework)/AllAgent.NET.GitHub.dll" Condition="Exists('../../plugins/AllAgent.NET.GitHub/bin/$(Configuration)/$(TargetFramework)/AllAgent.NET.GitHub.dll')" />
+      <GitHubPluginFiles Include="../../plugins/AllAgent.NET.GitHub/allagent-plugin.json" />
+      <GitHubPluginWebFiles Include="../../plugins/AllAgent.NET.GitHub/web/**/*" />
+      <WorkBuddyPluginFiles Include="../../plugins/AllAgent.NET.WorkBuddy/bin/$(Configuration)/$(TargetFramework)/AllAgent.NET.WorkBuddy.dll" Condition="Exists('../../plugins/AllAgent.NET.WorkBuddy/bin/$(Configuration)/$(TargetFramework)/AllAgent.NET.WorkBuddy.dll')" />
+      <WorkBuddyPluginFiles Include="../../plugins/AllAgent.NET.WorkBuddy/allagent-plugin.json" />
+      <WorkBuddyPluginFiles Include="../../plugins/AllAgent.NET.WorkBuddy/README.md" Condition="Exists('../../plugins/AllAgent.NET.WorkBuddy/README.md')" />
+      <CodeGraphPluginFiles Include="../../plugins/AllAgent.NET.CodeGraph/bin/$(Configuration)/$(TargetFramework)/AllAgent.NET.CodeGraph.dll" Condition="Exists('../../plugins/AllAgent.NET.CodeGraph/bin/$(Configuration)/$(TargetFramework)/AllAgent.NET.CodeGraph.dll')" />
+      <CodeGraphPluginFiles Include="../../plugins/AllAgent.NET.CodeGraph/allagent-plugin.json" />
+      <CodeGraphPluginWebFiles Include="../../plugins/AllAgent.NET.CodeGraph/web/**/*" />
     </ItemGroup>
+    <Error Condition="'$(CopyGuiShell)' == 'true' and !Exists('../../plugins/AllAgent.NET.CodeGraph/bin/$(Configuration)/$(TargetFramework)/AllAgent.NET.CodeGraph.dll')" Text="Built-in CodeGraph plugin output is missing; build plugins/AllAgent.NET.CodeGraph before copying." />
     <Copy SourceFiles="@(BuiltinPluginFiles)" DestinationFolder="$(OutDir)builtin-plugins/AllAgent.NET.CommandCode/" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(GitHubPluginFiles)" DestinationFolder="$(OutDir)builtin-plugins/AllAgent.NET.GitHub/" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(GitHubPluginWebFiles)" DestinationFiles="@(GitHubPluginWebFiles->'$(OutDir)builtin-plugins/AllAgent.NET.GitHub/web/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(WorkBuddyPluginFiles)" DestinationFolder="$(OutDir)builtin-plugins/AllAgent.NET.WorkBuddy/" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(CodeGraphPluginFiles)" DestinationFolder="$(OutDir)builtin-plugins/AllAgent.NET.CodeGraph/" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(CodeGraphPluginWebFiles)" DestinationFiles="@(CodeGraphPluginWebFiles->'$(OutDir)builtin-plugins/AllAgent.NET.CodeGraph/web/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
   </Target>
   <Target Name="IncludeBuiltinPluginsInToolPackage" AfterTargets="ComputeFilesToPublish" Condition="'$(PackAsTool)' == 'true'">
     <ItemGroup>

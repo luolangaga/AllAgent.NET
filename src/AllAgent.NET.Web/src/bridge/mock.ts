@@ -6,6 +6,7 @@ import type {
   Conversation,
   McpServerConfig,
   Message,
+  PendingInput,
   Skill,
   TodoItem,
 } from '@/types'
@@ -129,6 +130,7 @@ const demoPlugin = {
   web: { webEnabled: true, pages: 1, panels: 0, toolCards: 1, capabilities: ['notifications', 'storage'], error: null },
 }
 let demoWebEnabled = true
+const demoPluginSettings: Record<string, string> = { endpoint: 'https://example.invalid', enabled: 'true' }
 const demoEntry = 'data:text/html;charset=utf-8,' + encodeURIComponent(`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <title>示例插件 · 仪表盘</title><style>
 :root{color-scheme:light dark;font-family:"Segoe UI Variable","Segoe UI",system-ui,sans-serif}
@@ -235,7 +237,8 @@ const settings: AppSettings = {
   browserExecutablePath: '',
   browserCdpUrl: '',
   theme: 'system',
-  language: 'zh',
+  language: 'auto',
+  languageResolved: 'zh',
   defaultModel: '',
   streamingEnabled: true,
   defaultProviderId: 'cfg-openai',
@@ -248,6 +251,10 @@ export function createMockTransport(deliver: Deliver) {
   let streamTimer: number | undefined
   let cancelled = false
   let taskTick = 0
+  // Parked prompts and the stream that should consume them, so the demo shows the
+  // same steer/queue flow as a real host.
+  let activeStreamId = ''
+  let parked: PendingInput[] = []
 
   function emit(eventName: string, data: unknown, streamId: string) {
     deliver(JSON.stringify({ type: 'event', eventName, data, streamId }))
@@ -367,6 +374,7 @@ export function createMockTransport(deliver: Deliver) {
       case 'conversations.running': return []
       case 'conversations.cancelRun': return false
       case 'todos.get': return structuredClone(todos[p.conversationId] ?? [])
+      case 'plans.get': return null
       case 'todos.set': {
         todos[p.conversationId] = structuredClone((params as { todos: TodoItem[] }).todos)
         return structuredClone(todos[p.conversationId])
@@ -607,10 +615,33 @@ export function createMockTransport(deliver: Deliver) {
       }
       case 'chat.startStream': {
         const streamId = `mock-${Date.now()}`
+        activeStreamId = streamId
         startStream(p.conversationId, streamId)
         return streamId
       }
       case 'chat.cancelStream': { cancelled = true; window.clearTimeout(streamTimer); return true }
+      case 'chat.pendingInputs': return structuredClone(parked)
+      case 'chat.enqueueInput': {
+        const item: PendingInput = {
+          id: crypto.randomUUID(),
+          draft: p.message,
+          delivery: (p.delivery as PendingInput['delivery']) ?? 'steer',
+          createdAt: now(),
+        }
+        parked.push(item)
+        if (activeStreamId && item.delivery === 'steer') {
+          window.setTimeout(() => emit('agent.inputAdmitted', {
+            message: { id: item.id, role: 'user', content: item.draft, createdAt: item.createdAt },
+          }, activeStreamId), 350)
+          parked = parked.filter(existing => existing.id !== item.id)
+        }
+        return structuredClone(item)
+      }
+      case 'chat.cancelPendingInput': {
+        parked = parked.filter(item => item.id !== p.id)
+        return true
+      }
+      case 'chat.runPending': return null
       case 'chat.compact': {
         const streamId = `mock-compact-${Date.now()}`
         window.setTimeout(() => emit('agent.notice', { message: '正在整理上下文；完整消息历史仍保留。' }, streamId), 120)
@@ -683,6 +714,7 @@ export function createMockTransport(deliver: Deliver) {
       case 'settings.get': return structuredClone(settings)
       case 'settings.save': { Object.assign(settings, params); return true }
       case 'agent.approvalRespond': return true
+      case 'plan.respond': return true
       case 'agent.questionAnswer': return true
       case 'plugins.search': return {
         totalHits: 2,
@@ -742,12 +774,26 @@ export function createMockTransport(deliver: Deliver) {
             pages: [{ id: 'dashboard', title: '演示仪表盘', entry: demoEntry, icon: 'gauge', order: 40 }],
             toolCards: [{ tool: 'example_clock', entry: demoEntry }],
             commands: [{ id: 'open-dashboard', title: '打开演示仪表盘', page: 'dashboard' }],
+            settings: [{
+              id: 'demo',
+              title: '演示插件设置',
+              fields: [
+                { key: 'endpoint', label: '服务地址', type: 'text', placeholder: 'https://…', description: '通用插件设置字段的演示。' },
+                { key: 'enabled', label: '启用演示功能', type: 'boolean', default: 'true' },
+              ],
+            }],
           },
           devUrl: null,
           error: null,
         }],
       }
       case 'web.setEnabled': { demoWebEnabled = Boolean((params as { enabled?: boolean }).enabled); return true }
+      case 'web.settings.get': return { packageId: demoPlugin.packageId, values: { ...demoPluginSettings } }
+      case 'web.settings.set': {
+        const setting = params as { packageId?: string; key?: string; value?: string }
+        if (setting.key) demoPluginSettings[setting.key] = setting.value ?? ''
+        return true
+      }
       case 'tools.list': return {
         errors: [],
         tools: [

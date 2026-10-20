@@ -11,7 +11,7 @@ const switches: string[] = []
 
 const state = () => ({
   permissionMode,
-  permissionLabel: permissionMode === 'plan' ? '只读规划' : '限制模式',
+  permissionLabel: permissionMode === 'plan' ? '计划模式' : '限制模式',
   sandboxMode: 'auto',
   sandboxEffective: '首次任务时验证',
   running,
@@ -74,13 +74,13 @@ describe('permission chip', () => {
       await act(async () => { click(chip); await new Promise(resolve => setTimeout(resolve, 30)) })
       const options = Array.from(element.querySelectorAll('[role="menuitemradio"]'))
       expect(options.length).toBeGreaterThan(0)
-      const plan = options.find(option => option.textContent?.includes('只读规划'))
+      const plan = options.find(option => option.textContent?.includes('计划模式'))
       await act(async () => { click(plan ?? null); await new Promise(resolve => setTimeout(resolve, 30)) })
 
       // The switch reached the host and the chip mirrors the reply, still during the run.
       expect(switches).toEqual(['plan'])
       expect(store.controls?.permissionMode).toBe('plan')
-      expect(element.querySelector('button.permission-chip')?.textContent).toContain('只读规划')
+      expect(element.querySelector('button.permission-chip')?.textContent).toContain('计划模式')
     } finally {
       await act(async () => { root.unmount() })
       element.remove()

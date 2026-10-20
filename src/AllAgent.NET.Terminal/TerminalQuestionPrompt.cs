@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AllAgent.NET.Core.Tools;
+using L = AllAgent.NET.Core.Localization.HostText;
 using Spectre.Console;
 
 namespace AllAgent.NET.Terminal;
@@ -25,12 +26,12 @@ internal static class TerminalQuestionPrompt
             var rows = new List<string> { Markup.Escape(TerminalSafeText.Clean(question.Question)) };
             for (var i = 0; i <= question.Choices.Count; i++)
             {
-                var label = i == question.Choices.Count ? "其他 › " + typed : question.Choices[i];
+                var label = i == question.Choices.Count ? L.Pick("其他 › ", "Other › ") + typed : question.Choices[i];
                 var marker = question.Multiple ? (selected.Contains(i) ? "[x] " : "[ ] ") : "";
                 var row = Markup.Escape(marker + TerminalSafeText.Clean(label));
                 rows.Add(i == focus ? "[bold yellow]› " + row + "[/]" : "  " + row);
             }
-            rows.Add("[dim]↑↓ 选择 · 多选空格勾选 · 其他行直接输入/粘贴 · Enter 提交 · Esc 跳过[/]");
+            rows.Add(L.Pick("[dim]↑↓ 选择 · 多选空格勾选 · 其他行直接输入/粘贴 · Enter 提交 · Esc 跳过[/]", "[dim]↑↓ select · Space toggles multi-select · type/paste on the other row · Enter submit · Esc skip[/]"));
             if (notice != null) rows.Add("[yellow]" + Markup.Escape(notice) + "[/]");
             return new Markup(string.Join("\n", rows));
         }
@@ -47,7 +48,7 @@ internal static class TerminalQuestionPrompt
                     if (focus == question.Choices.Count && string.IsNullOrWhiteSpace(typed.ToString()))
                     {
                         if (render == null) { requestOther = true; break; }
-                        notice = "请输入其他回答，再按 Enter 提交。";
+                        notice = L.Pick("请输入其他回答，再按 Enter 提交。", "Type another answer, then press Enter.");
                         update(Render()); continue;
                     }
                     var answers = new List<string>();
@@ -60,7 +61,7 @@ internal static class TerminalQuestionPrompt
                     else if (typed.ToString().Trim().Length > 0) answers.Add(typed.ToString());
                     if (answers.Count == 0)
                     {
-                        notice = "请先按空格勾选答案，再按 Enter 提交。";
+                        notice = L.Pick("请先按空格勾选答案，再按 Enter 提交。", "Press Space to select an answer, then Enter.");
                         update(Render()); continue;
                     }
                     result = question.Multiple ? JsonSerializer.Serialize(answers) : answers[0];
@@ -84,8 +85,8 @@ internal static class TerminalQuestionPrompt
         if (requestOther)
         {
             // Close the Live scope before opening a text prompt; never nest dynamic displays.
-            var other = await host.PromptAsync(new TextPrompt<string>("其他回答 › ")
-                .Validate(value => !string.IsNullOrWhiteSpace(value), "请输入其他回答，再按 Enter 提交。"), ct);
+            var other = await host.PromptAsync(new TextPrompt<string>(L.Pick("其他回答 › ", "Other answer › "))
+                .Validate(value => !string.IsNullOrWhiteSpace(value), L.Pick("请输入其他回答，再按 Enter 提交。", "Type another answer, then press Enter.")), ct);
             if (!question.Multiple) return other;
             var answers = selected.Order().Where(i => i < question.Choices.Count).Select(i => question.Choices[i]).Append(other);
             return JsonSerializer.Serialize(answers);

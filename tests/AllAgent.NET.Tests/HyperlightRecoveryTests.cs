@@ -124,9 +124,10 @@ public sealed class HyperlightRecoveryTests
         await using var sandbox = new HyperlightProcessSandbox(w.Options with { SandboxWorkerPath = worker });
         var calls = 0;
         ValueTask<ToolResult> Callback(string name, JsonElement args, CancellationToken ct) { calls++; return ValueTask.FromResult(ToolResult.Success(null)); }
-        var first = await sandbox.ExecuteAsync("launch", [], Callback, default);
+        var definitions = new[] { new AllAgent.NET.Core.Tools.AgentToolDescriptor("side_effect", "fixture", JsonSerializer.SerializeToElement(new { type = "object" }), AllAgent.NET.Core.Tools.ToolRisk.Execute) };
+        var first = await sandbox.ExecuteAsync("launch", definitions, Callback, default);
         Assert.False(first.Ok); Assert.Contains("discarded", first.Error); Assert.Equal(1, calls);
-        var second = await sandbox.ExecuteAsync("inspect", [], Callback, default);
+        var second = await sandbox.ExecuteAsync("inspect", definitions, Callback, default);
         Assert.True(second.Ok, second.ToJson()); Assert.Equal(1, calls);
         Assert.Equal(2, (await File.ReadAllLinesAsync(Path.Combine(workerDirectory, "worker-starts.txt"))).Length);
     }

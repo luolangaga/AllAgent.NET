@@ -11,6 +11,8 @@ import { Input } from './ui/input'
 import { parseObject } from '@/utils/execution'
 import { useStore } from '@/lib/store'
 import { useApprovalsStore } from '@/stores/approvals'
+import { useT } from '@/i18n'
+import { PlanDialog } from './PlanCard'
 import type { AgentQuestionRequest, ApprovalRequest } from '@/types'
 
 function riskAppearance(risk: string): 'default' | 'warning' | 'destructive' {
@@ -23,9 +25,15 @@ function riskAppearance(risk: string): 'default' | 'warning' | 'destructive' {
 }
 
 function ApprovalDialog({ request, onRespond }: { request: ApprovalRequest; onRespond: (id: string, approved: boolean) => Promise<void> }) {
+  const tr = useT()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const args = parseObject(request.args)
+  const risk = request.risk.toLowerCase() === 'read' ? tr('读取', 'Read')
+    : request.risk.toLowerCase() === 'write' ? tr('写入', 'Write')
+    : request.risk.toLowerCase() === 'execute' ? tr('执行', 'Execute')
+    : request.risk.toLowerCase() === 'network' ? tr('网络', 'Network')
+    : request.risk
   const respond = async (approved: boolean) => {
     setBusy(true)
     try {
@@ -39,24 +47,24 @@ function ApprovalDialog({ request, onRespond }: { request: ApprovalRequest; onRe
   return <AlertDialog open onOpenChange={() => { /* the run is blocked until an answer arrives */ }}>
     <AlertDialogContent>
       <AlertDialogHeader>
-        <AlertDialogTitle>需要授权 · {request.name}</AlertDialogTitle>
+        <AlertDialogTitle>{tr('需要授权', 'Approval required')} · {request.name}</AlertDialogTitle>
         <AlertDialogDescription>
-          Agent 请求执行这一步操作。允许后仅这一次生效，后续操作仍会重新确认。
+          {tr('Agent 请求执行这一步操作。允许后仅这一次生效，后续操作仍会重新确认。', 'The agent wants to run this operation. Allowing applies only to this call; later operations ask again.')}
         </AlertDialogDescription>
       </AlertDialogHeader>
       <div className="approval-body">
         <div className="approval-meta">
-          <Badge color={riskAppearance(request.risk) === 'destructive' ? 'red' : riskAppearance(request.risk) === 'warning' ? 'amber' : 'gray'} size="sm">{request.risk}</Badge>
+          <Badge color={riskAppearance(request.risk) === 'destructive' ? 'red' : riskAppearance(request.risk) === 'warning' ? 'amber' : 'gray'} size="sm">{risk}</Badge>
           {request.source ? <Badge size="sm" variant="dot">{request.source}</Badge> : null}
-          {request.requiresExplicitApproval ? <Badge color="amber" size="sm" variant="dot">始终确认</Badge> : null}
+          {request.requiresExplicitApproval ? <Badge color="amber" size="sm" variant="dot">{tr('始终确认', 'Always confirm')}</Badge> : null}
         </div>
         <CodeBlock code={JSON.stringify(args, null, 2)} language="json" maxHeight={280} />
       </div>
       {error ? <p className="text-destructive text-sm" role="alert">{error}</p> : null}
       <AlertDialogFooter>
-        <AlertDialogCancel disabled={busy} onClick={event => { event.preventDefault(); void respond(false) }}>拒绝</AlertDialogCancel>
+        <AlertDialogCancel disabled={busy} onClick={event => { event.preventDefault(); void respond(false) }}>{tr('拒绝', 'Reject')}</AlertDialogCancel>
         <AlertDialogAction closeOnClick={false} disabled={busy} onClick={() => void respond(true)} variant="default">
-          {busy ? '处理中…' : '允许这一次'}
+          {busy ? tr('处理中…', 'Working…') : tr('允许这一次', 'Allow this once')}
         </AlertDialogAction>
       </AlertDialogFooter>
     </AlertDialogContent>
@@ -64,6 +72,7 @@ function ApprovalDialog({ request, onRespond }: { request: ApprovalRequest; onRe
 }
 
 function QuestionDialog({ request, onAnswer }: { request: AgentQuestionRequest; onAnswer: (id: string, answer: string) => Promise<void> }) {
+  const tr = useT()
   const [text, setText] = useState('')
   const [selected, setSelected] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
@@ -81,7 +90,7 @@ function QuestionDialog({ request, onAnswer }: { request: AgentQuestionRequest; 
   return <Dialog open onOpenChange={() => { /* stay open until answered */ }}>
     <DialogContent size="default">
       <DialogHeader>
-        <DialogTitle>Agent 需要你的回答</DialogTitle>
+        <DialogTitle>{tr('Agent 需要你的回答', 'The agent needs your answer')}</DialogTitle>
         <DialogDescription>{request.question}</DialogDescription>
       </DialogHeader>
       {request.choices.length > 0 ? <div className="question-choices">
@@ -97,15 +106,15 @@ function QuestionDialog({ request, onAnswer }: { request: AgentQuestionRequest; 
         >{choice}</Button>)}
       </div> : null}
       <div className="question-input">
-        <Input autoFocus onValueChange={setText} placeholder="输入回答…" value={text} />
+        <Input autoFocus onValueChange={setText} placeholder={tr('输入回答…', 'Type an answer…')} value={text} />
       </div>
       {error ? <p className="text-destructive text-sm" role="alert">{error}</p> : null}
       <DialogFooter>
-        <Button disabled={busy} onClick={() => void answer('')} variant="ghost">跳过</Button>
+        <Button disabled={busy} onClick={() => void answer('')} variant="ghost">{tr('跳过', 'Skip')}</Button>
         <Button
           disabled={busy || (!text.trim() && selected.length === 0)}
           onClick={() => void answer(request.multiple ? JSON.stringify([...selected, ...(text.trim() ? [text.trim()] : [])]) : text.trim())}
-        >发送回答</Button>
+        >{tr('发送回答', 'Send answer')}</Button>
       </DialogFooter>
     </DialogContent>
   </Dialog>
@@ -113,10 +122,12 @@ function QuestionDialog({ request, onAnswer }: { request: AgentQuestionRequest; 
 
 export function PendingInteractions() {
   const approvals = useStore(useApprovalsStore)
+  const plan = approvals.plans[0]
   const approval = approvals.approvals[0]
   const question = approvals.questions[0]
   return <>
-    {approval ? <ApprovalDialog key={approval.requestId} onRespond={approvals.respond} request={approval} /> : null}
-    {!approval && question ? <QuestionDialog key={question.id} onAnswer={approvals.answer} request={question} /> : null}
+    {plan ? <PlanDialog key={plan.id} onRespond={approvals.respondPlan} request={plan} /> : null}
+    {!plan && approval ? <ApprovalDialog key={approval.requestId} onRespond={approvals.respond} request={approval} /> : null}
+    {!plan && !approval && question ? <QuestionDialog key={question.id} onAnswer={approvals.answer} request={question} /> : null}
   </>
 }

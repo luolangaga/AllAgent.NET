@@ -35,6 +35,9 @@ public record ChatMessage(string Role, string Content, string? ToolCallsJson = n
     public string? ProviderContextKey { get; init; }
     /// <summary>Learned memory/profile tail, excluded from stable prompt cache breakpoints.</summary>
     public bool IsVolatileContext { get; init; }
+    /// <summary>Host-owned execution contract; restored after request extensions run.</summary>
+    internal bool IsHostContract { get; init; }
+    internal IReadOnlyList<InstructionBlock> InstructionSources { get; init; } = [];
     public IReadOnlyList<ImageAttachment> Images { get; init; } = [];
 }
 

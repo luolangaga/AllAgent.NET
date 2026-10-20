@@ -9,6 +9,12 @@ public sealed record BackgroundTaskInfo(string Id, string Title, Guid SessionId,
 {
     /// <summary>Last completed assistant response; null for legacy records or unfinished jobs.</summary>
     public string? FinalOutput { get; init; }
+    public SubAgentEvidence? Evidence { get; init; }
+    public long InputTokens { get; init; }
+    public long OutputTokens { get; init; }
+    public int ModelSteps { get; init; }
+    public int HostToolCalls { get; init; }
+    public int CodeExecutions { get; init; }
     public string? OwnerId { get; init; }
     public Guid? ParentSessionId { get; init; }
     public string? ParentToolCallId { get; init; }
@@ -23,6 +29,7 @@ public sealed record BackgroundTaskActivity(long Version, IReadOnlyList<AgentEve
 /// <summary>Host-owned jobs, unlimited by default; positive concurrency opts into queuing. Restarted durable jobs are interrupted, never replayed automatically.</summary>
 public sealed class BackgroundTasks : IAsyncDisposable
 {
+    internal SemaphoreSlim DispatchGate { get; } = new(1, 1);
     private sealed class Running(BackgroundTaskInfo info)
     {
         public BackgroundTaskInfo Info = info;
@@ -33,6 +40,7 @@ public sealed class BackgroundTasks : IAsyncDisposable
         public bool AllowsSteer;
         public readonly List<AgentEvent> Events = [];
         public long ActivityVersion;
+        public readonly Dictionary<string, ToolCallStarted> ToolCalls = new(StringComparer.Ordinal);
     }
     private readonly Dictionary<string, Running> _jobs = new();
     private readonly object _sync = new();
@@ -155,6 +163,13 @@ public sealed class BackgroundTasks : IAsyncDisposable
                             job.Cancellation.Token.ThrowIfCancellationRequested();
                             lock (_sync)
                             {
+                                if (evt is AgentTokenUsage usage) job.Info = job.Info with { InputTokens = job.Info.InputTokens + usage.InputTokens, OutputTokens = job.Info.OutputTokens + usage.OutputTokens };
+                                if (evt is AgentIteration) job.Info = job.Info with { ModelSteps = job.Info.ModelSteps + 1 };
+                                if (evt is ToolCallStarted count) job.Info = count.ToolName == "execute_code"
+                                    ? job.Info with { CodeExecutions = job.Info.CodeExecutions + 1 } : job.Info with { HostToolCalls = job.Info.HostToolCalls + 1 };
+                                if (evt is ToolCallStarted invocation && invocation.ToolName != "execute_code") job.ToolCalls[invocation.Id] = invocation;
+                                if (evt is ToolCallCompleted completion && job.ToolCalls.Remove(completion.Id, out var started))
+                                    job.Info = job.Info with { Evidence = SubAgentEvidence.Observe(job.Info.Evidence, started, completion) };
                                 if (evt is AgentIteration) { responseText = ""; job.Events.Clear(); }
                                 if (evt is AgentNotice { ResetResponse: true }) { responseText = ""; job.Info = job.Info with { Error = null, Output = "" }; job.Events.RemoveAll(e => e is TokenDelta or ThinkingDelta or AgentError); }
                                 if (evt is TokenDelta text && job.Events.LastOrDefault() is TokenDelta previous)

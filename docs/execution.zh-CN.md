@@ -36,7 +36,7 @@ for item in r["data"]["results"]:
 | `/permissions restricted` | 限制模式（默认）；工作区内的文件读写和可信 Shell 别名直接执行，工作区外的路径、未信任的程序与 MCP / 桌面 / 插件工具逐次授权 |
 | `/permissions ask` | 逐次授权（`--ask` 启动）；工作区内的写入也要逐次审核，未信任的 Shell 程序、MCP 和插件执行操作同样单独审核 |
 | `/permissions full` | 完全访问；C# 工具不再逐次审核，可访问工作区外的普通文件并执行已安装程序或指定绝对路径的程序 |
-| `/permissions plan` | 只读规划；拒绝写入、Shell 和外部执行操作 |
+| `/permissions plan` | 计划模式；只读调研，模型通过 `plan_propose` 提交 Markdown 计划，批准后切换完全访问并继续执行 |
 | `/permissions simple` | 简单模式；只保留 `powershell_script`、`file_read`、`file_edit` 三个宿主工具，技能、MCP、子代理、插件、浏览器与桌面工具停用 |
 
 底栏和 `/status` 显示当前模式。模式作用于当前终端进程，新终端默认限制模式，`--full-access` 启用完全访问，`--ask` 启用逐次授权。权限模式是进程级的活状态：任务运行中也可以切换，正在运行的任务从下一次工具调用起采用新模式（审批立场与工作区边界立即变化），`plan` / `simple` 的工具面收窄从下一轮生效；沙箱模式仍需任务结束后切换。权限模式也应用于此后创建的后台任务和子 Agent，已派发的子 Agent 保持派发时的快照。plan 与 simple 是叠加模式：进入后底层的限制 / 逐次授权 / 完全访问仍然生效，退出时恢复。

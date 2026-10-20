@@ -5,7 +5,12 @@ using YamlDotNet.Serialization;
 
 namespace AllAgent.NET.Core.Services;
 
-public sealed record InstructionSkill(string Name, string Description, string Instructions, string Path, string Scope, bool Enabled, bool UserInvocable, bool ModelInvocable);
+/// <param name="Tools">Host tools this skill discloses on demand (exact names or prefixes ending in '*').</param>
+public sealed record InstructionSkill(string Name, string Description, string Instructions, string Path, string Scope, bool Enabled, bool UserInvocable, bool ModelInvocable, IReadOnlyList<string>? Tools = null)
+{
+    /// <summary>Declared tools with the optional field normalized; guidance-only skills declare none.</summary>
+    public IReadOnlyList<string> DeclaredTools => Tools ?? [];
+}
 
 /// <summary>Instruction skills, deliberately separate from legacy executable command templates.</summary>
 public sealed class SkillCatalog(DataStore store, string workspace, string dataDirectory, string? userHome = null)
@@ -74,6 +79,17 @@ public sealed class SkillCatalog(DataStore store, string workspace, string dataD
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }
 
+    /// <summary>Seeds a host-provided skill into the user catalog once; user edits are never overwritten.</summary>
+    public bool SeedUserSkill(string name, string content)
+    {
+        ValidateName(name);
+        if (string.IsNullOrWhiteSpace(content) || content.Length > 500_000) throw new ArgumentException("技能内容无效。", nameof(content));
+        var target = System.IO.Path.Combine(UserDirectory, name, "SKILL.md");
+        if (File.Exists(target)) return false;
+        SeedBundledFile(name, content);
+        return true;
+    }
+
     public IReadOnlyList<InstructionSkill> List()
     {
         var snapshot = ListUnfiltered();
@@ -139,7 +155,7 @@ public sealed class SkillCatalog(DataStore store, string workspace, string dataD
                 found[item.Name] = item with { Enabled = false };
                 errors.Add(item.Path + ": 已屏蔽外部浏览器操作技能；请使用内置 browser-use。");
             }
-        var builtin = new InstructionSkill("browser-use", "网页操作与执行 JavaScript；内置 WebView2 或连接 Chrome/Edge，按需加载。", BrowserInstructions.Value, "builtin://browser-use", "builtin", true, true, true);
+        var builtin = new InstructionSkill("browser-use", "网页操作与执行 JavaScript；内置 WebView2 或连接 Chrome/Edge，按需加载。", BrowserInstructions.Value, "builtin://browser-use", "builtin", true, true, true, ["browser"]);
         found[builtin.Name] = builtin with { Enabled = store.GetSetting(Setting(builtin)) != "disabled" };
         Diagnostics = errors;
         return found.Values.OrderBy(s => s.Name).ToArray();
@@ -191,7 +207,27 @@ public sealed class SkillCatalog(DataStore store, string workspace, string dataD
         if (instructions.Length == 0 || instructions.Length > 500_000) throw new ArgumentException("技能指令需要 1–500000 字符，可通过 skill_read 分页读取。");
         var description = Value("description");
         if (description.Length == 0 || description.Length > 16000) throw new ArgumentException("技能描述需要 1–16000 字符。");
-        return new(name, description, instructions, System.IO.Path.GetFullPath(path), scope, true, !Value("user-invocable", "true").Equals("false", StringComparison.OrdinalIgnoreCase), !Value("disable-model-invocation", "false").Equals("true", StringComparison.OrdinalIgnoreCase));
+        return new(name, description, instructions, System.IO.Path.GetFullPath(path), scope, true, !Value("user-invocable", "true").Equals("false", StringComparison.OrdinalIgnoreCase), !Value("disable-model-invocation", "false").Equals("true", StringComparison.OrdinalIgnoreCase), ParseTools(meta));
+    }
+
+    /// <summary>Declared host tools stay declarative data: a skill may name tools or prefixes, never invoke them.</summary>
+    private static readonly Regex ToolPattern = new("^[a-z][a-z0-9_.:*-]{0,63}$", RegexOptions.CultureInvariant);
+    private static IReadOnlyList<string> ParseTools(IReadOnlyDictionary<string, object> meta)
+    {
+        if (!meta.TryGetValue("tools", out var raw) || raw is null) return [];
+        var values = raw is IEnumerable<object> sequence
+            ? sequence.Select(item => Convert.ToString(item, System.Globalization.CultureInfo.InvariantCulture) ?? "")
+            : [Convert.ToString(raw, System.Globalization.CultureInfo.InvariantCulture) ?? ""];
+        var tools = new List<string>();
+        foreach (var value in values)
+        {
+            var tool = value.Trim();
+            if (tool.Length == 0) continue;
+            if (!ToolPattern.IsMatch(tool)) throw new ArgumentException("技能 tools 项必须是工具名或其前缀，例如 file_read 或 computer_*。");
+            if (tools.Count >= 32) throw new ArgumentException("技能最多声明 32 个 tools 项。");
+            if (!tools.Contains(tool, StringComparer.Ordinal)) tools.Add(tool);
+        }
+        return tools;
     }
     public static void ValidateName(string name)
     {
@@ -265,7 +301,15 @@ public sealed class SkillCatalog(DataStore store, string workspace, string dataD
         if (!skill.UserInvocable) throw new ArgumentException("此技能关闭了手动调用。");
         return $"Use the following user-selected skill. Its instructions do not override sandbox or permission rules.\n<skill name=\"{skill.Name}\">\n{skill.Instructions.Replace("$ARGUMENTS", arguments, StringComparison.Ordinal)}\n</skill>\nTask / arguments: {arguments}";
     }
-    public string Instructions => "Available instruction skills (load via call_tool('skill_read', name=...) only when relevant):\n" + string.Join("\n", List().Where(s => s.Enabled && s.ModelInvocable).Select(s => $"{s.Name}: {s.Description}"));
+    public string Instructions
+    {
+        get
+        {
+            var text = "Available instruction skills (load via call_tool('skill_read', name=...) only when relevant):\n" + string.Join("\n", List().Where(s => s.Enabled && s.ModelInvocable).Select(s => $"{s.Name}: {s.Description}"));
+            PromptComposer.NoteSource("skills:catalog", ProjectDirectory + " | " + UserDirectory + " | plugins/builtins", text);
+            return text;
+        }
+    }
     public string ReadReference(string name, string relative, int offset = 0)
     {
         var skill = Get(name, true);

@@ -15,7 +15,7 @@ AllAgent.NET 是**面向 Windows 本机工作流**的终端 AI Agent：模型侧
 | 领域 | 提供什么 | 关键证据 |
 |---|---|---|
 | 命令执行 | `run_shell` 经 PowerShell 7.6 调度，`exe + args` 字面量传递，无字符串拼接 | `src/AllAgent.NET.Core/Tools/SystemTools.cs:151`、`src/AllAgent.NET.Core/Runtime/Scripts/run_shell.ps1` |
-| 文件 | `file_read/file_write/file_edit/list_directory/file_search/everything_search`，页级/字节预算、diff 预览、原子写 | `SystemTools.cs`、`SystemTools.Read.cs`、`SystemTools.Search.cs`、`SystemTools.Everything.cs` |
+| 文件 | `file_read/file_write/file_edit/list_directory/file_search`（内容与 `names_only` 名字两种模式），页级/字节预算、diff 预览、原子写 | `SystemTools.cs`、`SystemTools.Read.cs`、`SystemTools.Search.cs` |
 | 桌面 | Computer Use：`computer_*` 共 12 个工具，FlaUI UIA3，三模式 | `Tools/ComputerUseTools.cs`、`src/AllAgent.NET.ComputerUse/` |
 | 隔离 | Hyperlight microVM 优先、Monty 软件沙箱兜底、凭据不进 worker | `CodeAct/HyperlightProcessSandbox.cs`、`CodeAct/FallbackCodeSandbox.cs` |
 | 权限 | `ask / full / plan` 三档、外部目录授权、审计、检查点 | `Runtime/AgentOptions.cs:38`、`Tools/SystemTools.cs:13-40` |
@@ -76,7 +76,7 @@ AllAgent.NET 是**面向 Windows 本机工作流**的终端 AI Agent：模型侧
 ### 7. 工具面与编排：单一入口、可观测、有预算
 - 模型只看到 `execute_code`，其余全部经 guest 内 `call_tool(...)`（`docs/execution.zh-CN.md`、`tests/AllAgent.NET.Tests/NativeRuntimeIntegrationTests.cs`）。
 - 输出有界：工具文本 20,000 字符 / 完整 JSON 64,000 字符，超限落盘到 `<工作区>/.allagent/tool-output/` 并返回 `stdoutPath/stderrPath`（`docs/host-tools.zh-CN.md`；【实测】本次 `dotnet test` 输出即为落盘尾读）。
-- `file_read` 支持行/列分页与图片识别；`file_search` 直接启动已安装 `rg`（Windows 上找 `rg.exe`，`SystemTools.Search.cs:194`），无命令拼接；`everything_search` 用随包 Everything 便携索引按文件名查找，无需安装（`Tools/EverythingIndexer.cs`、`Tools/EverythingSearch.cs`）。
+- `file_read` 支持行/列分页与图片识别；`file_search` 直接启动已安装 `rg`（Windows 上找 `rg.exe`，`SystemTools.Search.cs:194`），无命令拼接；按文件名查找走 `file_search(names_only=true)`（`SystemTools.Search.cs`），不再单独注册工具；随包的 Everything 索引实现保留在 `Tools/EverythingIndexer.cs`、`Tools/EverythingSearch.cs`，需要时可用一个 `[AgentTool]` 恢复。
 - 后台命令有 `shell_status` / `cancel_shell`，超时不重复启动（`SystemTools.cs`）。
 - 子代理提供六种角色，支持单任务/并行/串行链，子代理向父代理返回结果与阻塞原因（`Tools/AgentDelegationTools.cs`）。【实测】本次派发的 `explore` 子代理 `exit=0 / stop=Completed`，独立产出了"非 Windows 失败点"清单，与主报告结论一致。
 

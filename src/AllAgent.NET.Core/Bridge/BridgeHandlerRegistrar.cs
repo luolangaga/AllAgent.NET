@@ -9,6 +9,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using AllAgent.NET.Core.Data;
+using AllAgent.NET.Core.Localization;
 using AllAgent.NET.Core.Models;
 using AllAgent.NET.Core.Services;
 using AllAgent.NET.Core.Services.AI;
@@ -31,7 +32,7 @@ public record ApiConfigDto(Guid Id, string ProviderId, string DisplayName, strin
     List<string>? Models = null, string? ApiKeyEnvironmentVariable = null, string? AuthenticationProviderId = null,
     int EffectiveContextTokens = 0, string EffectiveProtocol = "", int EffectiveMaxTokens = 0);
 public record McpServerConfigDto(string Id, string Name, string Command, string Arguments, bool IsEnabled, DateTime CreatedAt, bool IsConnected = false);
-public record SettingsDto(string Theme, string Language, string DefaultModel, bool StreamingEnabled, string DefaultProviderId, bool BrowserUseEnabled = true, string BrowserUseMode = "builtin", string BrowserExecutablePath = "", string BrowserCdpUrl = "", string GitCommitConfigId = "");
+public record SettingsDto(string Theme, string Language, string DefaultModel, bool StreamingEnabled, string DefaultProviderId, bool BrowserUseEnabled = true, string BrowserUseMode = "builtin", string BrowserExecutablePath = "", string BrowserCdpUrl = "", string GitCommitConfigId = "", string LanguageResolved = "zh");
 public record ToolInfoDto(string Name, string Description, string Risk, string ParametersJson, string Source, string Owner);
 public record ToolsSnapshotDto(IReadOnlyList<ToolInfoDto> Tools, IReadOnlyList<string> Errors);
 
@@ -44,6 +45,10 @@ public record SetTodosParams(Guid ConversationId, List<TodoItem> Todos);
 public record StartStreamParams(Guid ConversationId, string Message, Guid ApiConfigId, bool ThinkingEnabled = false, int ThinkingBudget = 8000, string? Model = null, string? ReasoningEffort = null, List<ImageAttachment>? Images = null, string? Prompt = null);
 public record StartCompactParams(Guid ConversationId, Guid ApiConfigId, string? Focus = null);
 public record CancelStreamParams(string StreamId);
+public record EnqueueInputParams(Guid ConversationId, string Message, string Delivery = "steer", string? Prompt = null, List<ImageAttachment>? Images = null);
+public record CancelPendingInputParams(Guid ConversationId, Guid Id);
+public record RunPendingParams(Guid ConversationId, Guid ApiConfigId, bool ThinkingEnabled = false, int ThinkingBudget = 8000, string? Model = null, string? ReasoningEffort = null);
+public record PendingInputDto(Guid Id, string Draft, string Delivery, DateTime CreatedAt);
 public record ImportSkillParams(string Json);
 public record ImportSkillZipParams(string Base64Zip);
 public record ToggleSkillParams(Guid Id, bool Enabled);
@@ -98,6 +103,7 @@ public class BridgeHandlerRegistrar
         _dispatcher.Register<DeleteConversationParams, bool>("conversations.delete", DeleteConversationAsync);
         _dispatcher.Register<GetMessagesParams, List<MessageDto>>("conversations.getMessages", GetMessagesAsync);
         _dispatcher.Register<GetMessagesParams, IReadOnlyList<TodoItem>>("todos.get", (p, ct) => Task.FromResult(_store.GetTodos(p.ConversationId)));
+        _dispatcher.Register<GetMessagesParams, PlanDocument?>("plans.get", (p, ct) => Task.FromResult(_store.GetPlan(p.ConversationId)));
         _dispatcher.Register<SetTodosParams, IReadOnlyList<TodoItem>>("todos.set", (p, ct) =>
         {
             if (_agentService.IsRunning(p.ConversationId)) throw new InvalidOperationException("请先停止当前生成再编辑 TODO。");
@@ -114,6 +120,19 @@ public class BridgeHandlerRegistrar
                 return Task.FromResult(_webStreams.TryGetValue(p.ConversationId, out var stream)
                     ? stream.Snapshot(GetEventName, GetEventData) : null);
         });
+        _dispatcher.Register<GetMessagesParams, object?>("chat.promptDiagnostics", (p, _) => Task.FromResult(_agentService.PromptDiagnostics(p.ConversationId)));
+        // Input admitted while a turn is running: steer reaches the next model step, queue waits
+        // for the run to finish and is then started through chat.runPending.
+        _dispatcher.Register<EnqueueInputParams, PendingInputDto>("chat.enqueueInput", EnqueueInputAsync);
+        _dispatcher.Register<GetMessagesParams, IReadOnlyList<PendingInputDto>>("chat.pendingInputs", (p, _) =>
+            Task.FromResult<IReadOnlyList<PendingInputDto>>(_store.GetPendingInputs(p.ConversationId)
+                .Select(item => new PendingInputDto(item.Id, item.Draft, item.Delivery, item.CreatedAt)).ToArray()));
+        _dispatcher.Register<CancelPendingInputParams, bool>("chat.cancelPendingInput", (p, _) =>
+        {
+            _store.CancelPendingInput(p.ConversationId, p.Id);
+            return Task.FromResult(true);
+        });
+        _dispatcher.Register<RunPendingParams, string?>("chat.runPending", RunPendingAsync);
         _dispatcher.Register<TaskParams, BackgroundTaskInfo>("tasks.get", (p, ct) => Task.FromResult(_agentService.Jobs.Get(p.Id)));
         _dispatcher.Register<TaskParams, bool>("tasks.cancel", async (p, ct) => { _agentService.Jobs.Cancel(p.Id); await _agentService.Jobs.WaitAsync(p.Id, ct); return true; });
         _dispatcher.Register<IReadOnlyList<BackgroundTaskInfo>>("tasks.list", (ct) => Task.FromResult(_agentService.Jobs.List));
@@ -172,11 +191,16 @@ public class BridgeHandlerRegistrar
         var tools = new List<ToolInfoDto>();
         try
         {
-            foreach (var definition in await _agentService.ListToolDefinitionsAsync(ct))
+            var listing = await _agentService.ListToolsAsync(ct);
+            foreach (var definition in listing.Tools)
             {
-                var source = mcpOwners.TryGetValue(definition.Name, out var server) ? "mcp"
+                // On-demand families stay registered but out of the model catalog until their skill loads.
+                var capability = listing.Surface.Match(definition.Name);
+                mcpOwners.TryGetValue(definition.Name, out var server);
+                var source = capability != null ? "on-demand"
+                    : server != null ? "mcp"
                     : definition.Name.StartsWith("skill_", StringComparison.Ordinal) ? "skill" : "host";
-                tools.Add(new ToolInfoDto(definition.Name, definition.Description, definition.Risk.ToString().ToLowerInvariant(), definition.Parameters.GetRawText(), source, server ?? ""));
+                tools.Add(new ToolInfoDto(definition.Name, definition.Description, definition.Risk.ToString().ToLowerInvariant(), definition.Parameters.GetRawText(), source, capability?.Label ?? server ?? ""));
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -224,13 +248,14 @@ public class BridgeHandlerRegistrar
         return Task.FromResult(true);
     }
 
-    private Task<bool> DeleteConversationAsync(DeleteConversationParams p, CancellationToken ct)
+    private async Task<bool> DeleteConversationAsync(DeleteConversationParams p, CancellationToken ct)
     {
         if (_agentService.IsRunning(p.Id)) throw new InvalidOperationException("请先停止当前生成再删除会话。");
         var conv = _store.GetConversation(p.Id);
-        if (conv == null) return Task.FromResult(false);
+        if (conv == null) return false;
+        await _agentService.ReleaseRuntimeAsync(p.Id);
         _store.DeleteConversation(p.Id);
-        return Task.FromResult(true);
+        return true;
     }
 
     private Task<List<MessageDto>> GetMessagesAsync(GetMessagesParams p, CancellationToken ct)
@@ -265,31 +290,7 @@ public class BridgeHandlerRegistrar
         if (p.Images is { Count: > 0 }) images.AddRange(p.Images);
         ImageAttachment.Validate(images);
 
-        // Apply chat-level overrides to the config copy
-        config = new ApiConfig
-        {
-            Id = config.Id,
-            ProviderId = config.ProviderId,
-            DisplayName = config.DisplayName,
-            BaseUrl = config.BaseUrl,
-            ApiKey = config.ApiKey,
-            DefaultModel = string.IsNullOrWhiteSpace(p.Model) ? config.DefaultModel : p.Model!,
-            Temperature = config.Temperature,
-            MaxTokens = config.MaxTokens,
-            IsEnabled = config.IsEnabled,
-            ExtraHeadersJson = config.ExtraHeadersJson,
-            ThinkingEnabled = p.ThinkingEnabled,
-            ThinkingBudget = p.ThinkingBudget,
-            ReasoningEffort = string.IsNullOrWhiteSpace(p.ReasoningEffort) ? config.ReasoningEffort : p.ReasoningEffort!,
-            ReasoningProtocol = config.ReasoningProtocol,
-            ContextWindowTokens = config.ContextWindowTokens,
-            ModelContextWindows = config.ModelContextWindows,
-            ModelLimits = config.ModelLimits,
-            Models = config.Models,
-            Protocol = config.Protocol,
-            AuthenticationProviderId = config.AuthenticationProviderId,
-            ApiKeyEnvironmentVariable = config.ApiKeyEnvironmentVariable,
-        };
+        config = WithChatOverrides(config, p.ThinkingEnabled, p.ThinkingBudget, p.Model, p.ReasoningEffort);
 
         lock (_streamsGate)
         {
@@ -303,6 +304,74 @@ public class BridgeHandlerRegistrar
             return streamId;
         }
     }
+
+    /// <summary>Expands `@` references exactly like a submitted turn, then parks the prompt in the
+    /// durable inbox. A steer is admitted at the next model step; a queue entry waits for idle.</summary>
+    private async Task<PendingInputDto> EnqueueInputAsync(EnqueueInputParams p, CancellationToken ct)
+    {
+        if (_store.GetConversation(p.ConversationId) == null) throw new ArgumentException("会话不存在。");
+        if (string.IsNullOrWhiteSpace(p.Message)) throw new ArgumentException("消息不能为空。");
+        var expanded = string.IsNullOrEmpty(p.Prompt)
+            ? await PromptReferences.ExpandWithImagesAsync(p.Message, _agentService.WorkspaceRoot, ct,
+                allowExplicitExternalImages: true, unresolved: PromptReferences.UnresolvedReference.KeepAsText)
+            : new PromptReferences.ExpandedPrompt(p.Prompt!, Array.Empty<ImageAttachment>());
+        var images = new List<ImageAttachment>(expanded.Images);
+        if (p.Images is { Count: > 0 }) images.AddRange(p.Images);
+        ImageAttachment.Validate(images);
+        var item = _store.EnqueueInput(p.ConversationId, p.Message, expanded.Text, images, p.Delivery);
+        return new PendingInputDto(item.Id, item.Draft, item.Delivery, item.CreatedAt);
+    }
+
+    /// <summary>Starts the next parked prompt as its own turn. The engine promotes the pending
+    /// items itself, so the queued text reaches history exactly once and emits AgentInputAdmitted.</summary>
+    private Task<string?> RunPendingAsync(RunPendingParams p, CancellationToken ct)
+    {
+        if (_store.GetConversation(p.ConversationId) == null) throw new ArgumentException("会话不存在。");
+        var config = _store.GetApiConfig(p.ApiConfigId) ?? throw new Exception($"ApiConfig {p.ApiConfigId} not found");
+        if (!config.IsEnabled) throw new InvalidOperationException("所选模型配置已停用。");
+        config = WithChatOverrides(config, p.ThinkingEnabled, p.ThinkingBudget, p.Model, p.ReasoningEffort);
+
+        lock (_streamsGate)
+        {
+            if (_agentService.IsRunning(p.ConversationId)) return Task.FromResult<string?>(null);
+            var pending = _store.GetPendingInputs(p.ConversationId);
+            var next = pending.FirstOrDefault(item => item.Delivery == "steer") ?? pending.FirstOrDefault();
+            if (next == null) return Task.FromResult<string?>(null);
+            var journal = new BridgeStreamJournal(_store.GetVisibleMessages(p.ConversationId).Where(message => !message.IsInternal).ToList(), next.Draft);
+            var streamId = _agentService.StartStream(p.ConversationId, next.Content, config,
+                StreamForwarder(p.ConversationId, journal), images: next.Images, inputText: next.Draft, fromInbox: true);
+
+            journal.StreamId = streamId;
+            _webStreams[p.ConversationId] = journal;
+            return Task.FromResult<string?>(streamId);
+        }
+    }
+
+    /// <summary>Chat-level model and thinking overrides share the base provider credentials.</summary>
+    private static ApiConfig WithChatOverrides(ApiConfig config, bool thinkingEnabled, int thinkingBudget, string? model, string? reasoningEffort) => new()
+    {
+        Id = config.Id,
+        ProviderId = config.ProviderId,
+        DisplayName = config.DisplayName,
+        BaseUrl = config.BaseUrl,
+        ApiKey = config.ApiKey,
+        DefaultModel = string.IsNullOrWhiteSpace(model) ? config.DefaultModel : model!,
+        Temperature = config.Temperature,
+        MaxTokens = config.MaxTokens,
+        IsEnabled = config.IsEnabled,
+        ExtraHeadersJson = config.ExtraHeadersJson,
+        ThinkingEnabled = thinkingEnabled,
+        ThinkingBudget = thinkingBudget,
+        ReasoningEffort = string.IsNullOrWhiteSpace(reasoningEffort) ? config.ReasoningEffort : reasoningEffort!,
+        ReasoningProtocol = config.ReasoningProtocol,
+        ContextWindowTokens = config.ContextWindowTokens,
+        ModelContextWindows = config.ModelContextWindows,
+        ModelLimits = config.ModelLimits,
+        Models = config.Models,
+        Protocol = config.Protocol,
+        AuthenticationProviderId = config.AuthenticationProviderId,
+        ApiKeyEnvironmentVariable = config.ApiKeyEnvironmentVariable,
+    };
 
     // Compaction only summarizes existing context, so it runs as an internal turn without the
     // sandbox probe and without chat-level model overrides; everything else (journal, stream
@@ -583,33 +652,43 @@ public class BridgeHandlerRegistrar
     // ── Settings ───────────────────────────────────────────────────────────────
 
 private Task<SettingsDto> GetSettingsAsync(CancellationToken ct)
-    {
-        var settings = _store.GetAllSettings();
-        return Task.FromResult(new SettingsDto(
-            settings.GetValueOrDefault("theme", "system"),
-            settings.GetValueOrDefault("language", "zh"),
-            settings.GetValueOrDefault("defaultModel", ""),
-            settings.GetValueOrDefault("streamingEnabled", "true") == "true",
-            settings.GetValueOrDefault("defaultProviderId", ""),
-            _agentService.BrowserUse.Snapshot().Configuration.Enabled,
-            _agentService.BrowserUse.Snapshot().Configuration.Mode,
-            _agentService.BrowserUse.Snapshot().Configuration.ExecutablePath,
-            _agentService.BrowserUse.Snapshot().Configuration.CdpUrl,
-            settings.GetValueOrDefault("gitCommitConfigId", "")
-        ));
-    }
+{
+    var settings = _store.GetAllSettings();
+    var language = LanguageSetting.Current(_store);
+    return Task.FromResult(new SettingsDto(
+        settings.GetValueOrDefault("theme", "system"),
+        language,
+        settings.GetValueOrDefault("defaultModel", ""),
+        settings.GetValueOrDefault("streamingEnabled", "true") == "true",
+        settings.GetValueOrDefault("defaultProviderId", ""),
+        _agentService.BrowserUse.Snapshot().Configuration.Enabled,
+        _agentService.BrowserUse.Snapshot().Configuration.Mode,
+        _agentService.BrowserUse.Snapshot().Configuration.ExecutablePath,
+        _agentService.BrowserUse.Snapshot().Configuration.CdpUrl,
+        settings.GetValueOrDefault("gitCommitConfigId", ""),
+        HostText.ResolvedCode
+    ));
+}
 
-    private Task<bool> SaveSettingsAsync(SaveSettingsParams p, CancellationToken ct)
+private Task<bool> SaveSettingsAsync(SaveSettingsParams p, CancellationToken ct)
+{
+    var language = LanguageSetting.Values.Contains(p.Language) ? p.Language : LanguageSetting.Default;
+    _agentService.BrowserUse.Save(_store, new(p.BrowserUseEnabled, p.BrowserUseMode, p.BrowserExecutablePath, p.BrowserCdpUrl));
+    _store.SetSetting("theme", p.Theme);
+    _store.SetSetting(LanguageSetting.Key, language);
+    _store.SetSetting("defaultModel", p.DefaultModel);
+    _store.SetSetting("streamingEnabled", p.StreamingEnabled.ToString().ToLower());
+    _store.SetSetting("defaultProviderId", p.DefaultProviderId);
+    _store.SetSetting("gitCommitConfigId", p.GitCommitConfigId ?? "");
+    LanguageSetting.Apply(_store);
+    _eventPusher.Push(JsonSerializer.Serialize(new
     {
-        _agentService.BrowserUse.Save(_store, new(p.BrowserUseEnabled, p.BrowserUseMode, p.BrowserExecutablePath, p.BrowserCdpUrl));
-        _store.SetSetting("theme", p.Theme);
-        _store.SetSetting("language", p.Language);
-        _store.SetSetting("defaultModel", p.DefaultModel);
-        _store.SetSetting("streamingEnabled", p.StreamingEnabled.ToString().ToLower());
-        _store.SetSetting("defaultProviderId", p.DefaultProviderId);
-        _store.SetSetting("gitCommitConfigId", p.GitCommitConfigId ?? "");
-        return Task.FromResult(true);
-    }
+        type = "settings.changed",
+        language,
+        languageResolved = HostText.ResolvedCode,
+    }, JsonOptions.Default));
+    return Task.FromResult(true);
+}
 
     // ── MCP Server Configs ────────────────────────────────────────────────
 
@@ -704,6 +783,7 @@ private Task<SettingsDto> GetSettingsAsync(CancellationToken ct)
         AgentError => "agent.error",
         AgentNotice => "agent.notice",
         AgentContextUsage => "agent.contextUsage",
+        AgentInputAdmitted => "agent.inputAdmitted",
         _ => "agent.unknown"
     };
 
@@ -720,6 +800,7 @@ private Task<SettingsDto> GetSettingsAsync(CancellationToken ct)
         AgentError e => new { message = e.Message },
         AgentNotice e => new { message = e.Message, resetResponse = e.ResetResponse },
         AgentContextUsage e => new { usedTokens = e.UsedTokens, capacityTokens = e.CapacityTokens, estimated = e.Estimated },
+        AgentInputAdmitted e => new { message = MessageDto.From(e.Message) },
         _ => new { }
     };
 }

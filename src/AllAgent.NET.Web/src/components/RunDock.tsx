@@ -7,15 +7,11 @@ import { useStore } from '@/lib/store'
 import { useConversationsStore } from '@/stores/conversations'
 import { useNoticesStore } from '@/stores/ui'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { useT } from '@/i18n'
+import { runStateLabel } from './RunMarker'
 import type { RunningConversation } from '@/types'
 
 const COLLAPSED_KEY = 'allagent.run-dock.collapsed'
-
-const labels: Record<string, string> = {
-  running: '正在执行',
-  'awaiting-approval': '等待授权',
-  'awaiting-answer': '等待回答',
-}
 
 /**
  * Bottom-right dock listing the sessions that keep running while you look at another one.
@@ -23,6 +19,7 @@ const labels: Record<string, string> = {
  * is jumped to, or is stopped on purpose.
  */
 export function RunDock() {
+  const tr = useT()
   const conv = useStore(useConversationsStore)
   const workspace = useStore(useWorkspaceStore)
   const notices = useStore(useNoticesStore)
@@ -45,7 +42,7 @@ export function RunDock() {
     for (const [id, title] of previous) {
       if (current.has(id) || id === conv.activeId) continue
       if (stopped.current.delete(id)) continue
-      notices.notify('后台会话已完成', `「${title}」已跑完，切回去可以查看结果。`, 'success')
+      notices.notify(tr('后台会话已完成', 'Background conversation finished'), tr(`「${title}」已跑完，切回去可以查看结果。`, `“${title}” finished; switch back to see the result.`), 'success')
     }
   }, [conv.running, conv.activeId])
 
@@ -77,7 +74,7 @@ export function RunDock() {
     stopped.current.add(run.conversationId)
     try {
       await conv.cancelRun(run.conversationId)
-      notices.notify('已停止后台会话', `「${run.title}」`, 'info')
+      notices.notify(tr('已停止后台会话', 'Stopped background conversation'), `「${run.title}」`, 'info')
     } catch (error) {
       stopped.current.delete(run.conversationId)
       notices.report(error)
@@ -88,36 +85,36 @@ export function RunDock() {
 
   if (!others.length) return null
 
-  return <aside className={`run-dock${collapsed ? ' is-collapsed' : ''}`} aria-label="后台运行中的会话">
+  return <aside className={`run-dock${collapsed ? ' is-collapsed' : ''}`} aria-label={tr('后台运行中的会话', 'Conversations running in the background')}>
     <header>
       <StatusDot animate size="sm" tone="active" />
-      <strong>{others.length} 个会话在后台运行</strong>
-      <Tooltip content={collapsed ? '展开' : '收起'}>
-        <Button iconLabel={collapsed ? '展开后台会话' : '收起后台会话'} onClick={toggle} size="icon-xs" variant="ghost">
+      <strong>{tr(`${others.length} 个会话在后台运行`, `${others.length} conversations running in the background`)}</strong>
+      <Tooltip content={collapsed ? tr('展开', 'Expand') : tr('收起', 'Collapse')}>
+        <Button iconLabel={collapsed ? tr('展开后台会话', 'Expand background conversations') : tr('收起后台会话', 'Collapse background conversations')} onClick={toggle} size="icon-xs" variant="ghost">
           {collapsed ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
         </Button>
       </Tooltip>
     </header>
     {collapsed ? null : <div className="run-dock-list">
       {others.map(run => {
-        const waiting = run.state === 'awaiting-approval' || run.state === 'awaiting-answer'
+        const waiting = run.state === 'awaiting-approval' || run.state === 'awaiting-answer' || run.state === 'awaiting-plan'
         return <div className={`run-dock-row${waiting ? ' is-waiting' : ''}`} key={run.conversationId}>
           <button
             className="run-dock-open"
             disabled={opening === run.conversationId}
             onClick={() => void open(run)}
-            title="切换到该会话"
+            title={tr('切换到该会话', 'Switch to this conversation')}
             type="button"
           >
             <StatusDot animate={!waiting} size="sm" tone={waiting ? 'warning' : 'active'} />
             <span className="run-dock-title">{run.title}</span>
-            <small>{labels[run.state] ?? '正在执行'}</small>
+            <small>{runStateLabel(run.state)}</small>
             <em>{run.workspaceName}</em>
           </button>
-          <Tooltip content="停止该会话">
+          <Tooltip content={tr('停止该会话', 'Stop this conversation')}>
             <Button
               disabled={stopping === run.conversationId}
-              iconLabel="停止后台会话"
+              iconLabel={tr('停止后台会话', 'Stop background conversation')}
               onClick={() => void stop(run)}
               size="icon-xs"
               variant="ghost"

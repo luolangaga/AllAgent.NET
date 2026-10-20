@@ -81,7 +81,7 @@ public sealed class OutputBudgetTests
     }
 
     [Fact]
-    public async Task ParallelAggregateAlsoHonorsRegistryBudget()
+    public async Task ParallelAggregatePreservesGuestDataIndependentlyOfPreviewBudget()
     {
         await using var provider = new CodeActProvider(new ToolRegistry(), new PythonCodeValidator("unused"), new LargeBatchSandbox());
         var result = await provider.ExecuteAsync("execute_code", JsonSerializer.SerializeToElement(new { code = "fixture" }),
@@ -94,8 +94,8 @@ public sealed class OutputBudgetTests
         public async Task<ToolResult> ExecuteAsync(string code, IReadOnlyList<AgentToolDescriptor> tools, HostToolCallback callback, CancellationToken ct)
         {
             var batch = await callback("parallel", JsonSerializer.SerializeToElement(new { calls = Enumerable.Range(0, 8).Select(_ => new { name = "probe", arguments = new { } }) }), ct);
-            Assert.True(batch.Truncated);
-            Assert.True(batch.ToJson().Length <= 64_000);
+            Assert.False(batch.Truncated);
+            Assert.InRange(batch.ToJson().Length, 200_000, SandboxProtocol.MaxFrameBytes);
             Assert.Equal(8, JsonSerializer.SerializeToElement(batch.Data).GetProperty("results").GetArrayLength());
             return ToolResult.Success(new { stdout = "done" });
         }

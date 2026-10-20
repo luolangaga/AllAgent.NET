@@ -18,6 +18,7 @@ namespace AllAgent.NET.Core.Data;
 /// </summary>
 public partial class DataStore : IDisposable
 {
+    public string DataDirectory => Path.GetDirectoryName(Path.GetFullPath(_filePath))!;
     private readonly string _filePath;
     private readonly string _bakPath;
     private readonly string _tmpPath;
@@ -113,7 +114,7 @@ public partial class DataStore : IDisposable
                 AdoptShared();
                 return;
             }
-            if (TryLoadFile(_sharedFilePath, out var shared) && shared is not null)
+            if (ReadSharedManifest() is { } shared)
             {
                 _sharedConfig.Data = shared;
                 try { _sharedConfig.Hash = SHA256.HashData(File.ReadAllBytes(_sharedFilePath)); } catch { _sharedConfig.Hash = null; }
@@ -122,24 +123,97 @@ public partial class DataStore : IDisposable
                 Log($"[DataStore] Shared config loaded from {_sharedFilePath}. ApiConfigs={shared.ApiConfigs.Count}, Skills={shared.Skills.Count}, Settings={shared.AppSettings.Count}");
                 return;
             }
-            // No shared manifest yet: seed it from this workspace so nothing is lost, then
-            // stop carrying configuration inside the workspace manifest.
+            // No shared manifest anywhere: seed from the legacy manifests when they still hold
+            // configuration. The workspace manifest deliberately no longer carries providers,
+            // so seeding only from it would silently discard a pre-split login.
+            var seed = ReadLegacySeed(out var legacySource);
             _sharedConfig.Data = new StoreData
             {
                 Version = StoreData.CurrentVersion,
-                Skills = _data.Skills,
-                ApiConfigs = _data.ApiConfigs,
-                McpServerConfigs = _data.McpServerConfigs,
-                TokenUsageStats = _data.TokenUsageStats,
-                AppSettings = _data.AppSettings,
+                Skills = seed.Skills,
+                ApiConfigs = seed.ApiConfigs,
+                McpServerConfigs = seed.McpServerConfigs,
+                TokenUsageStats = seed.TokenUsageStats,
+                AppSettings = seed.AppSettings,
             };
             _sharedData = _sharedConfig.Data;
             AdoptShared();
-            Log($"[DataStore] Seeded shared config at {_sharedFilePath}. ApiConfigs={_sharedData.ApiConfigs.Count}");
-            SaveShared();
+            if (legacySource || HasConfiguration(_sharedData))
+            {
+                Log($"[DataStore] Seeded shared config at {_sharedFilePath}. ApiConfigs={_sharedData.ApiConfigs.Count}");
+                SaveShared();
+            }
+            else
+            {
+                // A genuinely empty profile must not create a manifest on startup: a
+                // transiently missing shared file must never be replaced with empty data.
+                Log($"[DataStore] No shared configuration found at {_sharedFilePath}; keeping it unset until configuration is saved.");
+            }
         }
         finally { _lock.ExitWriteLock(); }
     }
+
+    /// <summary>
+    /// Reads the shared manifest without ever treating a missing file as permission to
+    /// overwrite it. A concurrent writer may briefly replace the file, so a missing main
+    /// is retried and then recovered from the backup before the profile is considered new.
+    /// </summary>
+    private StoreData? ReadSharedManifest()
+    {
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            if (File.Exists(_sharedFilePath))
+            {
+                if (TryLoadFile(_sharedFilePath, out var loaded) && loaded is not null) return loaded;
+                // Present but unreadable: fall through to the backup, then fail loudly instead
+                // of replacing a damaged manifest with whatever this workspace happens to hold.
+                break;
+            }
+            // A concurrent writer may be between the temp file and the atomic replace.
+            Thread.Sleep(50);
+        }
+
+        if (_sharedBakPath != null && TryLoadFile(_sharedBakPath, out var backup) && backup is not null)
+        {
+            Log($"[DataStore] Shared config recovered from backup: {_sharedBakPath}");
+            if (!_readOnly)
+            {
+                try
+                {
+                    WriteToFileAtomic(File.ReadAllBytes(_sharedBakPath), _sharedTmpPath!);
+                    File.Move(_sharedTmpPath!, _sharedFilePath!, overwrite: true);
+                    Log("[DataStore] Healed shared config from backup.");
+                }
+                catch (Exception ex) { Log($"[DataStore] Failed to heal shared config: {ex.Message}"); }
+            }
+            return backup;
+        }
+
+        if (File.Exists(_sharedFilePath) || (_sharedBakPath != null && File.Exists(_sharedBakPath)))
+            throw new InvalidDataException("共享配置及备份均无法完整读取；原文件已保留，请修复或恢复备份。");
+        return null;
+    }
+
+    /// <summary>Pre-split manifests in the shared or workspace directory, newest naming first.</summary>
+    private StoreData ReadLegacySeed(out bool fromLegacy)
+    {
+        var sharedLegacy = Path.Combine(Path.GetDirectoryName(_sharedFilePath!)!, "lanagent.json");
+        if (TryLoadFile(sharedLegacy, out var sharedData) && sharedData is not null) { fromLegacy = true; return sharedData; }
+        if (TryLoadFile(sharedLegacy + ".bak", out var sharedBackup) && sharedBackup is not null) { fromLegacy = true; return sharedBackup; }
+        if (HasConfiguration(_data)) { fromLegacy = false; return _data; }
+
+        var workspaceLegacy = Path.Combine(Path.GetDirectoryName(_filePath)!, "lanagent.json");
+        if (TryLoadFile(workspaceLegacy, out var workspaceData) && workspaceData is not null) { fromLegacy = true; return workspaceData; }
+        if (TryLoadFile(workspaceLegacy + ".bak", out var workspaceBackup) && workspaceBackup is not null) { fromLegacy = true; return workspaceBackup; }
+        fromLegacy = false;
+        return _data;
+    }
+
+    /// <summary>User-owned configuration; migration markers and host defaults in
+    /// <see cref="StoreData.AppSettings"/> alone are not a profile worth creating.</summary>
+    private static bool HasConfiguration(StoreData data) =>
+        data.ApiConfigs.Count > 0 || data.Skills.Count > 0 || data.McpServerConfigs.Count > 0 ||
+        data.TokenUsageStats.Count > 0;
 
     /// <summary>Share the configuration collections so every existing accessor keeps working.</summary>
     private void AdoptShared()
@@ -187,13 +261,17 @@ public partial class DataStore : IDisposable
                 else
                 {
                     File.Move(_sharedTmpPath, _sharedFilePath);
-                    try { File.WriteAllBytes(_sharedBakPath, json); } catch { /* ignore */ }
+                    // Keep an older snapshot instead of replacing it with the same bytes:
+                    // it may be the only remaining copy of a profile whose main file was lost.
+                    if (!File.Exists(_sharedBakPath))
+                        try { File.WriteAllBytes(_sharedBakPath, json); } catch { /* ignore */ }
                 }
             }
             catch (IOException)
             {
                 File.Move(_sharedTmpPath, _sharedFilePath, overwrite: true);
-                try { File.WriteAllBytes(_sharedBakPath, json); } catch { /* ignore */ }
+                if (!File.Exists(_sharedBakPath))
+                    try { File.WriteAllBytes(_sharedBakPath, json); } catch { /* ignore */ }
             }
             using var verification = new FileStream(_sharedFilePath, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, FileOptions.SequentialScan);
             if (verification.Length != json.Length || !SHA256.HashData(verification).AsSpan().SequenceEqual(hash))

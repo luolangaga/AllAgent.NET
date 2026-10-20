@@ -4,6 +4,11 @@ namespace AllAgent.NET.Core.Data;
 
 public partial class DataStore
 {
+    private long _todosRevision;
+
+    /// <summary>Bumped whenever a session's TODO list changes, so live views can redraw immediately.</summary>
+    public long TodosRevision => Interlocked.Read(ref _todosRevision);
+
     public IReadOnlyList<TodoItem> GetTodos(Guid conversationId)
     {
         _lock.EnterReadLock();
@@ -30,6 +35,7 @@ public partial class DataStore
             if (conversation.Todos.SequenceEqual(snapshot)) return snapshot.ToArray();
             conversation.Todos = snapshot;
             conversation.UpdatedAt = DateTime.UtcNow;
+            Interlocked.Increment(ref _todosRevision);
             SaveAndVerify(conversationId);
             return snapshot.ToArray();
         }

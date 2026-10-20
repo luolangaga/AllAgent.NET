@@ -52,10 +52,26 @@ public interface IAgentToolApprovalPolicy
 
 public sealed record ToolOutputTruncation(int OriginalJsonCharacters, int RetainedJsonCharacters, int RemovedJsonCharacters);
 
+/// <param name="Tone">Display hint for the host: ok, error, add, del or muted.</param>
+public sealed record AgentToolCardField(string Label, string Value, string? Tone = null);
+
+/// <summary>Platform-neutral card data a tool can attach to its result. Hosts render it
+/// natively, so a plugin does not need a host-specific HTML card for every UI.</summary>
+public sealed record AgentToolCard(
+    string? Badge = null,
+    string? Title = null,
+    string? Summary = null,
+    string Body = "text",
+    string? Text = null,
+    IReadOnlyList<string>? Paths = null,
+    IReadOnlyList<AgentToolCardField>? Fields = null);
+
 public sealed record ToolResult(bool Ok, object? Data = null, string? Error = null, bool Truncated = false)
 {
     [System.Text.Json.Serialization.JsonIgnore]
     public IReadOnlyList<AllAgent.NET.Core.Models.ImageAttachment> Images { get; init; } = [];
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public AgentToolCard? Card { get; init; }
     public static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         Encoder = System.Text.Encodings.Web.JavaScriptEncoder.Create(System.Text.Unicode.UnicodeRanges.All)

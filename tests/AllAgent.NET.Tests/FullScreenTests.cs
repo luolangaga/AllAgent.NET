@@ -73,6 +73,24 @@ public sealed class FullScreenTests
     }
 
     [Fact]
+    public async Task TodoProgressStaysAtTheSidebarBottomAndTracksUpdates()
+    {
+        using var workspace = new TestWorkspace(); using var store = new DataStore(Path.Combine(workspace.Root, "data"));
+        var catalog = new SkillCatalog(store, workspace.Root, Path.Combine(workspace.Root, "data"), workspace.Root);
+        await using var mcp = new McpToolService(store, new SkillExecutor());
+        var console = new TestConsole(); console.Profile.Width = 120; console.Profile.Height = 50;
+        using var screen = new FullScreenTerminal(store, catalog, mcp, new TerminalUi(false, false) { Workspace = workspace.Root }, console);
+        var conversation = new Conversation { Title = "TODO 会话" }; store.AddConversation(conversation); screen.Session(conversation.Id, "local-model");
+        string Frame() { var output = new TestConsole(); output.Profile.Width = 120; output.Profile.Height = 50; output.Write(screen.BuildFrame(120, 50)); return output.Output; }
+        store.SetTodos(conversation.Id, [new("1", "实现侧栏进度", "in_progress"), new("2", "补充测试", "pending")]);
+        var initial = Frame();
+        Assert.Contains("TODO", initial); Assert.Contains("0/2", initial); Assert.Contains("▶ 实现侧栏进度", initial); Assert.Contains("补充测试", initial);
+        store.SetTodos(conversation.Id, [new("1", "实现侧栏进度", "completed"), new("2", "补充测试", "completed")]);
+        var completed = Frame();
+        Assert.Contains("2/2", completed); Assert.Contains("100%", completed); Assert.Contains("全部完成", completed);
+    }
+
+    [Fact]
     public async Task PermissionDialogDecodesUnicodeDiffAndAlwaysShowsChoices()
     {
         using var workspace = new TestWorkspace(); using var store = new DataStore(Path.Combine(workspace.Root, "data"));

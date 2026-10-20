@@ -1,5 +1,6 @@
 using System.Reflection;
 using AllAgent.NET.CommandCode;
+using AllAgent.NET.Core.Services.AI;
 using Xunit;
 
 namespace AllAgent.NET.Tests;
@@ -100,6 +101,44 @@ public class CommandCodePluginTests
             await account.LoginWithInputAsync("  user_good  ", default);
             Assert.Equal("user_good", await account.GetAccessTokenAsync(default));
             Assert.Contains("/provider/v1/models", calls);
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    }
+
+    [Fact]
+    public async Task ModelCatalogKeepsAdvertisedEffortsAndLimits()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var directory = Path.Combine(Path.GetTempPath(), "commandcode-models-" + Guid.NewGuid());
+        using var client = new HttpClient(new Handler(request => Task.FromResult(request.RequestUri!.AbsolutePath.EndsWith("models")
+            ? """
+                {"schemaVersion":1,"catalogVersion":"test","refreshAfterSeconds":60,"roles":{},
+                 "data":[
+                   {"id":"deepseek/deepseek-v4-pro","name":"DeepSeek V4 Pro","display":{"label":"DeepSeek V4 Pro (latest)"},"context_length":1000000,"maxOutputTokens":64000,"reasoningEfforts":["off","high","max"]},
+                   {"id":"moonshotai/Kimi-K2.7-Code","name":"Kimi K2.7 Code","context_length":262144,"maxOutputTokens":null,"reasoningEfforts":null}
+                 ]}
+                """
+            : "{}")));
+        using var account = new CommandCodeAccount(directory, client);
+        try
+        {
+            await account.LoginWithInputAsync("user_test", default);
+            var config = account.CreateConfiguration();
+            var models = await account.ModelProvider.ListModelsAsync(config, default);
+            var deepseek = models.Single(model => model.Id == "deepseek/deepseek-v4-pro");
+            Assert.Equal("DeepSeek V4 Pro (latest)", deepseek.DisplayName);
+            Assert.Equal(1000000, deepseek.ContextTokens);
+            Assert.Equal(64000, deepseek.OutputTokens);
+            Assert.Equal(["none", "high", "max"], deepseek.ReasoningLevels);
+            var kimi = models.Single(model => model.Id == "moonshotai/Kimi-K2.7-Code");
+            Assert.Empty(kimi.ReasoningLevels!);
+            config.DefaultModel = deepseek.Id;
+            ModelCatalog.Remember(config, models);
+            Assert.Equal(["default", "none", "high", "max"], ReasoningSettings.Efforts(config));
+            config.ReasoningEffort = "max";
+            Assert.Equal("max", CommandCodeProvider.BuildRequest(new ChatRequest(config, [new("user", "hi")]))["params"]!["reasoning_effort"]!.GetValue<string>());
+            config.ReasoningEffort = "none";
+            Assert.Equal("off", CommandCodeProvider.BuildRequest(new ChatRequest(config, [new("user", "hi")]))["params"]!["reasoning_effort"]!.GetValue<string>());
         }
         finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
     }

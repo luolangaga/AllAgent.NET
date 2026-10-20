@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CodeGraph</title>
+  <link rel="stylesheet" href="settings.css" />
+  <script src="/__sdk/allagent-plugin-sdk.js"></script>
+</head>
+<body>
+  <div class="head">
+    <span id="cli" data-state="muted">正在检测 CodeGraph…</span>
+    <span id="path" class="mono muted"></span>
+  </div>
+  <div class="line">
+    <span id="index" data-state="muted">索引：正在检测…</span>
+  </div>
+  <div class="actions">
+    <button id="install" type="button">安装 CodeGraph</button>
+    <button id="init" type="button">构建索引</button>
+    <button id="sync" type="button">增量同步</button>
+    <button id="rebuild" type="button">重建索引</button>
+    <button id="cancel" type="button" hidden>取消</button>
+  </div>
+  <pre id="output" hidden></pre>
+  <p class="hint">安装优先使用 npm 全局安装，否则执行 CodeGraph 官方 PowerShell 安装脚本。索引保存在当前工作区的 <code>.codegraph/</code> 中。</p>
+  <script src="settings.js"></script>
+</body>
+</html>

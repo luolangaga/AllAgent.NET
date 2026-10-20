@@ -2,7 +2,9 @@
 
 ## 运行与取消语义
 
-模型只有一个委派工具 `subagent`(single / parallel / chain),另有 `cancel_agent`:
+模型通过 `execute_code` 内的 `subagent`(single / parallel / chain) 派发，另有 `cancel_agent` 和 `wait_agents`。结构化范围与必需结果规则见[派发合同](subagent-contract.zh-CN.md)，主子代理行为见[提示词说明](agent-prompts.zh-CN.md)。
+
+带 `contract` 的新后台任务默认 `requiredForCompletion=true`：父代理可继续独立工作，但交付前需要接收并核对其结果。旧 `task` 后台调用保留独立生命周期；文件修改需要显式 `editablePaths`。
 
 - **前台(默认)**:调用阻塞到所有子代理进入终态,结果内联返回;父 turn 被取消(终端 Esc、桌面取消流)时,本次调用启动的前台子代理连同沙箱一起取消(Queued 直接取消,运行中先进入 Cancelling)。前台结果不产生额外通知。
 - **后台(`background=true`,仅 single;或终端 `/background`)**:立即返回 `taskId`,子代理独立生命周期,不受父 turn 取消影响;完成(或失败/取消/中断)时向父会话投递**一次**内部通知,终端与桌面/Web 都会在父会话空闲时自动唤醒并消化通知。
@@ -29,7 +31,7 @@
     "readOnly": true,
     "provider": "你的提供商配置 ID",
     "model": "你的模型 ID",
-    "tools": ["file_read", "file_search", "everything_search", "list_directory", "skill_read", "skill_reference"],
+    "tools": ["file_read", "file_search", "list_directory", "skill_read", "skill_reference"],
     "execution": {
       "temperature": 0.2,
       "maxOutputTokens": 4096,

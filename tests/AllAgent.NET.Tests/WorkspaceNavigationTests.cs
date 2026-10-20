@@ -50,7 +50,9 @@ public sealed class WorkspaceNavigationTests
         });
         try
         {
-            await Wait(() => Contains("workspace-model"));
+            // Project navigation also works without an authenticated model. Shared settings
+            // may select a different provider than the fixture's local legacy configuration.
+            await Wait(() => Contains(first));
             await Wait(() => Count(firstData, first) == 2);
             Send("/workspace missing-folder");
             await Wait(() => Contains("missing-folder"));

@@ -1,0 +1,463 @@
+{
+  "model": "deepseek/deepseek-v4.1-flash",
+  "provider": "commandcode",
+  "comparison": "Legacy vs framework loop with the same migrated host policies and prompts; modelSteps exclude retries and compaction requests.",
+  "runs": [
+    {
+      "case": "aggregate",
+      "kernel": "legacy",
+      "repeat": 1,
+      "elapsedSeconds": 44.047,
+      "exitCode": 0,
+      "timeout": false,
+      "passed": true,
+      "childCount": 0,
+      "inputTokens": 62274,
+      "outputTokens": 1132,
+      "modelSteps": 5,
+      "hostToolCalls": 5,
+      "codeExecutions": 4,
+      "finishReasons": [
+        "stop"
+      ],
+      "errorEvents": 0
+    },
+    {
+      "case": "aggregate",
+      "kernel": "framework",
+      "repeat": 1,
+      "elapsedSeconds": 31.313,
+      "exitCode": 0,
+      "timeout": false,
+      "passed": true,
+      "childCount": 0,
+      "inputTokens": 36297,
+      "outputTokens": 579,
+      "modelSteps": 3,
+      "hostToolCalls": 5,
+      "codeExecutions": 2,
+      "finishReasons": [
+        "stop"
+      ],
+      "errorEvents": 0
+    },
+    {
+      "case": "edit",
+      "kernel": "legacy",
+      "repeat": 1,
+      "elapsedSeconds": 48.64,
+      "exitCode": 0,
+      "timeout": false,
+      "passed": true,
+      "childCount": 0,
+      "inputTokens": 48759,
+      "outputTokens": 818,
+      "modelSteps": 4,
+      "hostToolCalls": 4,
+      "codeExecutions": 3,
+      "finishReasons": [
+        "stop"
+      ],
+      "errorEvents": 0
+    },
+    {
+      "case": "edit",
+      "kernel": "framework",
+      "repeat": 1,
+      "elapsedSeconds": 55.469,
+      "exitCode": 0,
+      "timeout": false,
+      "passed": true,
+      "childCount": 0,
+      "inputTokens": 48955,
+      "outputTokens": 412,
+      "modelSteps": 4,
+      "hostToolCalls": 4,
+      "codeExecutions": 3,
+      "finishReasons": [
+        "stop"
+      ],
+      "errorEvents": 0
+    },
+    {
+      "case": "recover",
+      "kernel": "legacy",
+      "repeat": 1,
+      "elapsedSeconds": 70.328,
+      "exitCode": 0,
+      "timeout": false,
+      "passed": true,
+      "childCount": 0,
+      "inputTokens": 62966,
+      "outputTokens": 1481,
+      "modelSteps": 5,
+      "hostToolCalls": 10,
+      "codeExecutions": 4,
+      "finishReasons": [
+        "stop"
+      ],
+      "errorEvents": 0
+    },
+    {
+      "case": "recover",
+      "kernel": "framework",
+      "repeat": 1,
+      "elapsedSeconds": 36.672,
+      "exitCode": 0,
+      "timeout": false,
+      "passed": true,
+      "childCount": 0,
+      "inputTokens": 36421,
+      "outputTokens": 605,
+      "modelSteps": 3,
+      "hostToolCalls": 6,
+      "codeExecutions": 2,
+      "finishReasons": [
+        "stop"
+      ],
+      "errorEvents": 0
+    },
+    {
+      "case": "skill",
+      "kernel": "legacy",
+      "repeat": 1,
+      "elapsedSeconds": 29.297,
+      "exitCode": 0,
+      "timeout": false,
+      "passed": true,
+      "childCount": 0,
+      "inputTokens": 48439,
+      "outputTokens": 504,
+      "modelSteps": 4,
+      "hostToolCalls": 5,
+      "codeExecutions": 3,
+      "finishReasons": [
+        "stop"
+      ],
+      "errorEvents": 0
+    },
+    {
+      "case": "skill",
+      "kernel": "framework",
+      "repeat": 1,
+      "elapsedSeconds": 47.672,
+      "exitCode": 0,
+      "timeout": false,
+      "passed": true,
+      "childCount": 0,
+      "inputTokens": 48942,
+      "outputTokens": 424,
+      "modelSteps": 4,
+      "hostToolCalls": 4,
+      "codeExecutions": 3,
+      "finishReasons": [
+        "stop"
+      ],
+      "errorEvents": 0
+    },
+    {
+      "case": "parallel",
+      "kernel": "legacy",
+      "repeat": 1,
+      "elapsedSeconds": 77.703,
+      "exitCode": 0,
+      "timeout": false,
+      "passed": true,
+      "childCount": 2,
+      "inputTokens": 134710,
+      "outputTokens": 3421,
+      "modelSteps": 12,
+      "hostToolCalls": 14,
+      "codeExecutions": 9,
+      "finishReasons": [
+        "stop"
+      ],
+      "errorEvents": 0
+    },
+    {
+      "case": "parallel",
+      "kernel": "framework",
+      "repeat": 1,
+      "elapsedSeconds": 107.672,
+      "exitCode": 0,
+      "timeout": false,
+      "passed": true,
+      "childCount": 2,
+      "inputTokens": 121454,
+      "outputTokens": 3534,
+      "modelSteps": 11,
+      "hostToolCalls": 14,
+      "codeExecutions": 8,
+      "finishReasons": [
+        "stop"
+      ],
+      "errorEvents": 0
+    },
+    {
+      "case": "required-child",
+      "kernel": "legacy",
+      "repeat": 1,
+      "elapsedSeconds": 74.046,
+      "exitCode": 0,
+      "timeout": false,
+      "passed": true,
+      "childCount": 1,
+      "inputTokens": 89010,
+      "outputTokens": 2914,
+      "modelSteps": 7,
+      "hostToolCalls": 12,
+      "codeExecutions": 5,
+      "finishReasons": [
+        "stop"
+      ],
+      "errorEvents": 0
+    },
+    {
+      "case": "required-child",
+      "kernel": "framework",
+      "repeat": 1,
+      "elapsedSeconds": 66.891,
+      "exitCode": 0,
+      "timeout": false,
+      "passed": true,
+      "childCount": 1,
+      "inputTokens": 95148,
+      "outputTokens": 2186,
+      "modelSteps": 8,
+      "hostToolCalls": 8,
+      "codeExecutions": 6,
+      "finishReasons": [
+        "stop"
+      ],
+      "errorEvents": 0
+    },
+    {
+      "case": "aggregate",
+      "kernel": "framework",
+      "repeat": 2,
+      "elapsedSeconds": 28.64,
+      "exitCode": 0,
+      "timeout": false,
+      "passed": true,
+      "childCount": 0,
+      "inputTokens": 36034,
+      "outputTokens": 362,
+      "modelSteps": 3,
+      "hostToolCalls": 4,
+      "codeExecutions": 2,
+      "finishReasons": [
+        "stop"
+      ],
+      "errorEvents": 0
+    },
+    {
+      "case": "aggregate",
+      "kernel": "legacy",
+      "repeat": 2,
+      "elapsedSeconds": 29.578,
+      "exitCode": 0,
+      "timeout": false,
+      "passed": true,
+      "childCount": 0,
+      "inputTokens": 49255,
+      "outputTokens": 571,
+      "modelSteps": 4,
+      "hostToolCalls": 6,
+      "codeExecutions": 3,
+      "finishReasons": [
+        "stop"
+      ],
+      "errorEvents": 0
+    },
+    {
+      "case": "edit",
+      "kernel": "framework",
+      "repeat": 2,
+      "elapsedSeconds": 25.813,
+      "exitCode": 0,
+      "timeout": false,
+      "passed": true,
+      "childCount": 0,
+      "inputTokens": 35838,
+      "outputTokens": 303,
+      "modelSteps": 3,
+      "hostToolCalls": 3,
+      "codeExecutions": 2,
+      "finishReasons": [
+        "stop"
+      ],
+      "errorEvents": 0
+    },
+    {
+      "case": "edit",
+      "kernel": "legacy",
+      "repeat": 2,
+      "elapsedSeconds": 49.906,
+      "exitCode": 0,
+      "timeout": false,
+      "passed": true,
+      "childCount": 0,
+      "inputTokens": 36656,
+      "outputTokens": 364,
+      "modelSteps": 3,
+      "hostToolCalls": 4,
+      "codeExecutions": 2,
+      "finishReasons": [
+        "stop"
+      ],
+      "errorEvents": 0
+    },
+    {
+      "case": "recover",
+      "kernel": "framework",
+      "repeat": 2,
+      "elapsedSeconds": 29.11,
+      "exitCode": 0,
+      "timeout": false,
+      "passed": true,
+      "childCount": 0,
+      "inputTokens": 49223,
+      "outputTokens": 776,
+      "modelSteps": 4,
+      "hostToolCalls": 7,
+      "codeExecutions": 3,
+      "finishReasons": [
+        "stop"
+      ],
+      "errorEvents": 0
+    },
+    {
+      "case": "recover",
+      "kernel": "legacy",
+      "repeat": 2,
+      "elapsedSeconds": 43.985,
+      "exitCode": 0,
+      "timeout": false,
+      "passed": true,
+      "childCount": 0,
+      "inputTokens": 48579,
+      "outputTokens": 725,
+      "modelSteps": 4,
+      "hostToolCalls": 5,
+      "codeExecutions": 3,
+      "finishReasons": [
+        "stop"
+      ],
+      "errorEvents": 0
+    },
+    {
+      "case": "skill",
+      "kernel": "framework",
+      "repeat": 2,
+      "elapsedSeconds": 45.297,
+      "exitCode": 0,
+      "timeout": false,
+      "passed": true,
+      "childCount": 0,
+      "inputTokens": 61361,
+      "outputTokens": 655,
+      "modelSteps": 5,
+      "hostToolCalls": 6,
+      "codeExecutions": 4,
+      "finishReasons": [
+        "stop"
+      ],
+      "errorEvents": 0
+    },
+    {
+      "case": "skill",
+      "kernel": "legacy",
+      "repeat": 2,
+      "elapsedSeconds": 53.922,
+      "exitCode": 0,
+      "timeout": false,
+      "passed": true,
+      "childCount": 0,
+      "inputTokens": 48976,
+      "outputTokens": 797,
+      "modelSteps": 4,
+      "hostToolCalls": 4,
+      "codeExecutions": 3,
+      "finishReasons": [
+        "stop"
+      ],
+      "errorEvents": 0
+    },
+    {
+      "case": "parallel",
+      "kernel": "framework",
+      "repeat": 2,
+      "elapsedSeconds": 106.437,
+      "exitCode": 0,
+      "timeout": false,
+      "passed": true,
+      "childCount": 2,
+      "inputTokens": 134579,
+      "outputTokens": 3349,
+      "modelSteps": 12,
+      "hostToolCalls": 17,
+      "codeExecutions": 9,
+      "finishReasons": [
+        "stop"
+      ],
+      "errorEvents": 0
+    },
+    {
+      "case": "parallel",
+      "kernel": "legacy",
+      "repeat": 2,
+      "elapsedSeconds": 101.562,
+      "exitCode": 0,
+      "timeout": false,
+      "passed": true,
+      "childCount": 2,
+      "inputTokens": 124338,
+      "outputTokens": 3328,
+      "modelSteps": 11,
+      "hostToolCalls": 16,
+      "codeExecutions": 8,
+      "finishReasons": [
+        "stop"
+      ],
+      "errorEvents": 0
+    },
+    {
+      "case": "required-child",
+      "kernel": "framework",
+      "repeat": 2,
+      "elapsedSeconds": 69.235,
+      "exitCode": 0,
+      "timeout": false,
+      "passed": true,
+      "childCount": 1,
+      "inputTokens": 83874,
+      "outputTokens": 2265,
+      "modelSteps": 7,
+      "hostToolCalls": 9,
+      "codeExecutions": 5,
+      "finishReasons": [
+        "stop"
+      ],
+      "errorEvents": 0
+    },
+    {
+      "case": "required-child",
+      "kernel": "legacy",
+      "repeat": 2,
+      "elapsedSeconds": 69.343,
+      "exitCode": 0,
+      "timeout": false,
+      "passed": true,
+      "childCount": 1,
+      "inputTokens": 78772,
+      "outputTokens": 1854,
+      "modelSteps": 7,
+      "hostToolCalls": 9,
+      "codeExecutions": 5,
+      "finishReasons": [
+        "stop"
+      ],
+      "errorEvents": 0
+    }
+  ]
+}

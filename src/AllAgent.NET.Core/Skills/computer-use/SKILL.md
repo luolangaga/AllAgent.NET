@@ -1,6 +1,7 @@
 ---
 name: computer-use
 description: Windows 软件界面测试与电脑操作：自动选择后台 UIA、前台键鼠或独立环境，定位控件、执行操作并验证结果。
+tools: [computer_*]
 ---
 
 Use this skill for Windows application operation or UI testing, including testing software you just built. Work on the user's actual requested application/task.

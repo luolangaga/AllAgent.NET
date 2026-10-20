@@ -5,13 +5,15 @@ using AllAgent.NET.Core.Data;
 using AllAgent.NET.Core.Models;
 using AllAgent.NET.Core.Services;
 using AllAgent.NET.Core.Tools;
+using L = AllAgent.NET.Core.Localization.HostText;
 
 namespace AllAgent.NET.Terminal;
 
-internal enum SessionRunState { Running, AwaitingApproval, AwaitingAnswer, Cancelling, Done, Failed }
+internal enum SessionRunState { Running, AwaitingApproval, AwaitingAnswer, AwaitingPlan, Cancelling, Done, Failed }
 
 internal sealed record PendingApproval(ApprovalPreview Preview, TaskCompletionSource<bool> Completion, CancellationToken Token);
 internal sealed record PendingQuestion(AgentQuestion Question, TaskCompletionSource<string?> Completion, CancellationToken Token);
+internal sealed record PendingPlan(PlanPreview Preview, TaskCompletionSource<bool> Completion, CancellationToken Token);
 
 /// <summary>
 /// One main-session turn with a life of its own: the pump that drains the engine lives here, not in
@@ -33,13 +35,14 @@ internal sealed class SessionRun(Guid conversationId, string title, string strea
 
     private readonly ConcurrentQueue<PendingApproval> _approvals = new();
     private readonly ConcurrentQueue<PendingQuestion> _questions = new();
+    private readonly ConcurrentQueue<PendingPlan> _plans = new();
     private Channel<(long Sequence, AgentEvent Event)>? _channel;
     private volatile bool _released;
 
     public bool Attached => Volatile.Read(ref _channel) != null;
     public bool IsFinished => State is SessionRunState.Done or SessionRunState.Failed;
-    public bool Waiting => State is SessionRunState.AwaitingApproval or SessionRunState.AwaitingAnswer;
-    public int PendingPrompts => _approvals.Count + _questions.Count;
+    public bool Waiting => State is SessionRunState.AwaitingApproval or SessionRunState.AwaitingAnswer or SessionRunState.AwaitingPlan;
+    public int PendingPrompts => _approvals.Count + _questions.Count + _plans.Count;
 
     /// <summary>Starts forwarding live events to a viewer and returns the reader to consume them from.
     /// Events appended before this call stay in the journal, so the viewer replays it and skips the overlap.</summary>
@@ -68,8 +71,15 @@ internal sealed class SessionRun(Guid conversationId, string title, string strea
         _questions.Enqueue(question);
         if (_released) ReleasePrompts();
     }
+    public void EnqueuePlan(PendingPlan plan)
+    {
+        if (_released) { plan.Completion.TrySetResult(false); return; }
+        _plans.Enqueue(plan);
+        if (_released) ReleasePrompts();
+    }
     public bool TryDequeueApproval(out PendingApproval? approval) => _approvals.TryDequeue(out approval);
     public bool TryDequeueQuestion(out PendingQuestion? question) => _questions.TryDequeue(out question);
+    public bool TryDequeuePlan(out PendingPlan? plan) => _plans.TryDequeue(out plan);
 
     /// <summary>Answers everything still waiting — a run that ends or is stopped must not leave a prompt hanging.</summary>
     public void ReleasePrompts()
@@ -77,6 +87,7 @@ internal sealed class SessionRun(Guid conversationId, string title, string strea
         _released = true;
         while (_approvals.TryDequeue(out var approval)) approval.Completion.TrySetResult(false);
         while (_questions.TryDequeue(out var question)) question.Completion.TrySetResult(null);
+        while (_plans.TryDequeue(out var plan)) plan.Completion.TrySetResult(false);
     }
 }
 
@@ -101,10 +112,11 @@ internal sealed class SessionRuns
     public string Label(Guid id) => Find(id)?.State switch
     {
         null => "",
-        SessionRunState.AwaitingApproval => " · 需要授权",
-        SessionRunState.AwaitingAnswer => " · 需要回答",
-        SessionRunState.Cancelling => " · 正在停止",
-        _ => " · 运行中",
+        SessionRunState.AwaitingApproval => L.Pick(" · 需要授权", " · approval needed"),
+        SessionRunState.AwaitingAnswer => L.Pick(" · 需要回答", " · answer needed"),
+        SessionRunState.AwaitingPlan => L.Pick(" · 等待计划审批", " · plan approval pending"),
+        SessionRunState.Cancelling => L.Pick(" · 正在停止", " · stopping"),
+        _ => L.Pick(" · 运行中", " · running"),
     };
 
     /// <summary>Runs that finished in the background and have not been reported yet.</summary>
@@ -124,8 +136,8 @@ internal sealed class SessionRuns
         if (!internalMessage && !fromInbox)
             history.Add(new Message { ConversationId = conversationId, Role = "user", Content = prompt, InputText = inputText ?? prompt, Images = images?.ToList() ?? [] });
         var journal = new BridgeStreamJournal(history, inputText ?? prompt);
-        var run = new SessionRun(conversationId, store.GetConversation(conversationId)?.Title ?? "会话", Guid.NewGuid().ToString("N"), journal, new CancellationTokenSource());
-        if (!_runs.TryAdd(conversationId, run)) throw new InvalidOperationException("该会话已有任务正在运行；输入文字可作为指导发送，或先停止它。");
+        var run = new SessionRun(conversationId, store.GetConversation(conversationId)?.Title ?? L.Pick("会话", "Conversation"), Guid.NewGuid().ToString("N"), journal, new CancellationTokenSource());
+        if (!_runs.TryAdd(conversationId, run)) throw new InvalidOperationException(L.Pick("该会话已有任务正在运行；输入文字可作为指导发送，或先停止它。", "This conversation already has a running task; send text as guidance or stop it first."));
         checkpoints.Begin(conversationId, prompt, store.GetVisibleMessages(conversationId));
         Bump();
         _ = Task.Run(async () =>

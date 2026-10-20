@@ -54,7 +54,7 @@ describe('plugin web SDK', () => {
     expect(document.documentElement.style.getPropertyValue('--ag-brand')).toBe('#38bdf8')
 
     const pending = client.invoke('history', { limit: 3 })
-    const invoke = sent().find(message => message?.type === 'invoke' && message.payload.method === 'history')
+    const invoke = sent().find(message => message?.type === 'invoke' && message.payload.method === 'plugin.allagent.net.sampleplugin.history')
     expect(invoke.payload.params).toEqual({ limit: 3 })
     window.dispatchEvent(new MessageEvent('message', {
       data: { allagent: 1, type: 'invokeResult', payload: { id: invoke.id, result: { items: [], total: 0 } } },

@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import { connectionState, onConnectionChange, type ConnectionState } from '@/bridge'
+import { t } from '@/i18n'
 
 export function useConnection(): ConnectionState {
   return useSyncExternalStore(
@@ -10,10 +11,10 @@ export function useConnection(): ConnectionState {
 
 export function connectionLabel(state: ConnectionState): string {
   switch (state) {
-    case 'native': return '桌面后端 · 已连接'
-    case 'connected': return '本地后端 · 实时通道'
-    case 'connecting': return '正在连接本地后端'
-    case 'preview': return '演示数据 · 未连接后端'
-    default: return '未连接后端'
+    case 'native': return t('桌面后端 · 已连接', 'Desktop backend · connected')
+    case 'connected': return t('本地后端 · 实时通道', 'Local backend · live channel')
+    case 'connecting': return t('正在连接本地后端', 'Connecting to the local backend')
+    case 'preview': return t('演示数据 · 未连接后端', 'Demo data · backend not connected')
+    default: return t('未连接后端', 'Backend not connected')
   }
 }

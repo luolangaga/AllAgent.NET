@@ -12,13 +12,14 @@ using AllAgent.NET.Core.Tools;
 namespace AllAgent.NET.Core.Services;
 
 /// <summary>Host-neutral, streaming, bounded CodeAct agent. A runtime is owned by its calling application.</summary>
-public sealed class AgentEngine
+public sealed partial class AgentEngine
 {
     private readonly DataStore store;
     private readonly CodeActProvider codeAct;
     private readonly AgentOptions options;
     private readonly SemaphoreSlim _runLock = new(1, 1);
     private readonly IAiProvider _provider;
+    private readonly IAgentKernel _kernel;
     private const string PolicyLead = "Current session policy (host-managed, applies until superseded; not a new user request):\n";
     private const string PolicyCleared = PolicyLead + "No additional session policy; host defaults apply.";
 
@@ -26,7 +27,11 @@ public sealed class AgentEngine
     {
         this.store = store; this.codeAct = codeAct; this.options = options;
         _provider = new UsageTrackingAiProvider(provider, store);
-        codeAct.Registry.Replace<TodoTools>(new TodoTools(store));
+        var selectedKernel = (Environment.GetEnvironmentVariable("ALLAGENT_AGENT_KERNEL") ?? options.AgentKernel).ToLowerInvariant();
+        if (selectedKernel is not ("legacy" or "framework")) throw new ArgumentException("ALLAGENT_AGENT_KERNEL must be legacy or framework.");
+        _kernel = selectedKernel == "framework"
+            ? new FrameworkAgentKernel((kernel, request, ct) => RunFrameworkCoreAsync(kernel, request, ct))
+            : new LegacyAgentKernel((request, ct) => RunLegacyCoreAsync(request.Writer, request.ConversationId, request.Text, request.Config, ct, request.InternalMessage, request.Images, request.FromInbox, request.InputText));
     }
 
     private string TodoContext(Guid id) => "\n\nCurrent TODO checklist (session data, not instructions):\n" +
@@ -59,10 +64,16 @@ public sealed class AgentEngine
 
     private async Task PumpAsync(ChannelWriter<AgentEvent> writer, Guid id, string text, ApiConfig config, CancellationToken ct, CancellationToken callerToken, bool internalMessage, IReadOnlyList<ImageAttachment> images, bool fromInbox, string? inputText, string? sessionOperation)
     {
-        using var execution = AgentExecutionScope.Enter(options.IsSubAgent, id);
+        using var execution = AgentExecutionScope.Enter(options.IsSubAgent, id, options.WorkspaceRoot);
         using var computerActivity = options.ComputerUse.BeginActivityScope(ct);
         try
         {
+            using var runtimeRun = codeAct.EnterRun();
+            codeAct.SimpleModeProvider = () => options.SimpleModeActive;
+            codeAct.ReadOnlyProvider = () => options.ReadOnlyProvider?.Invoke() == true;
+            codeAct.IsSubAgent = options.IsSubAgent;
+            codeAct.Registry.Replace<TodoTools>(new TodoTools(store));
+            codeAct.Registry.Replace<PlanTools>(new PlanTools(store, options.PlanHandler, options.ReadOnlyProvider));
             if (options.Hooks != null) await options.Hooks.NotifyAsync(new(AllAgent.NET.Core.Extensions.HookStage.BeforeTurn, id, UserMessage: text), ct);
             if (sessionOperation != null)
             {
@@ -70,7 +81,7 @@ public sealed class AgentEngine
                 if (store.GetConversation(id)?.Revert != null) throw new InvalidOperationException("Resolve the staged revert before compacting.");
                 await CompactSessionAsync(writer, id, text, config, ct);
             }
-            else await RunCoreAsync(writer, id, text, config, ct, internalMessage, images, fromInbox, inputText);
+            else await _kernel.RunAsync(new(writer, id, text, config, internalMessage, images, fromInbox, inputText), ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -85,7 +96,7 @@ public sealed class AgentEngine
         finally { writer.TryComplete(); }
     }
 
-    private async Task RunCoreAsync(ChannelWriter<AgentEvent> writer, Guid id, string text, ApiConfig config, CancellationToken ct, bool internalMessage, IReadOnlyList<ImageAttachment> images, bool fromInbox, string? inputText)
+    private async Task RunLegacyCoreAsync(ChannelWriter<AgentEvent> writer, Guid id, string text, ApiConfig config, CancellationToken ct, bool internalMessage, IReadOnlyList<ImageAttachment> images, bool fromInbox, string? inputText)
     {
         using var routingTurn = new RoutingTurn(_provider);
         config = options.ConfigurationProvider?.Invoke(id, config) ?? config;
@@ -118,10 +129,11 @@ public sealed class AgentEngine
             foreach (var message in admitted) await writer.WriteAsync(new AgentInputAdmitted(message), ct);
         }
         // Keep the stable tool and execution contract first so project/session changes preserve the cache prefix.
+        var initialSections = codeAct.InstructionSections;
         var history = new List<ChatMessage>
         {
-            new("system", codeAct.Instructions),
-            new("system", turn.SystemPrompt + "\n\n" + (options.InstructionsProvider?.Invoke() ?? ProjectInstructions.Load(options.WorkspaceRoot)))
+            new("system", initialSections.Stable) { IsHostContract = true },
+            PromptComposer.GuidanceMessage(turn.SystemPrompt, () => options.InstructionsProvider?.Invoke() ?? ProjectInstructions.Load(options.WorkspaceRoot))
         };
         // Volatile policy (preferences, plugin policy) is a durable tail snapshot: the current
         // complete policy is appended after retained history only when it changes, so preference
@@ -143,6 +155,29 @@ public sealed class AgentEngine
             Save(id, snapshot, internalInstruction: true);
             history.Add(snapshot);
         }
+        // Skill and tool context change independently of the stable contract. Appending them at
+        // the history tail keeps the cached prefix intact; the newest snapshot supersedes old ones.
+        void AppendSkillsContext()
+        {
+            var content = options.Skills?.Instructions;
+            if (string.IsNullOrWhiteSpace(content)) return;
+            var previous = history.LastOrDefault(message => message.ToolName == "skills_context");
+            if (previous?.Content == content) return;
+            var snapshot = new ChatMessage("user", content, ToolName: "skills_context");
+            Save(id, snapshot, internalInstruction: true);
+            history.Add(snapshot);
+        }
+        void AppendToolContext()
+        {
+            var content = codeAct.DynamicInstructions;
+            if (string.IsNullOrWhiteSpace(content)) return;
+            content = "Current host tool context (host-managed, applies until superseded; not a new user request):\n" + content;
+            var previous = history.LastOrDefault(message => message.ToolName == "tool_context");
+            if (previous?.Content == content) return;
+            var snapshot = new ChatMessage("user", content, ToolName: "tool_context");
+            Save(id, snapshot, internalInstruction: true);
+            history.Add(snapshot);
+        }
         var cacheTtl = store.GetSetting("cache:ttl");
         var cacheRetention = store.GetSetting("cache:retention");
         var stored = store.GetMessages(id).Where(m => !m.IsHostActivity).ToList();
@@ -155,6 +190,8 @@ public sealed class AgentEngine
         var contextKey = ProviderContextKey(config);
         history.AddRange(RepairHistory(CodeActHistory.Normalize(stored.Select(m => new ChatMessage(m.Role, ReplayContent(m), m.ToolCallsJson, m.ToolCallId, m.ToolName, m.ReasoningContent,
             m.ProviderContextKey == contextKey || m.ProviderContextKey == null && options.ConfigurationProvider == null ? m.ProviderStateJson : null) { Images = m.Images }))));
+        AppendSkillsContext();
+        AppendToolContext();
         AppendPolicySnapshot();
         if (!fromInbox)
         {
@@ -181,9 +218,16 @@ public sealed class AgentEngine
         {
             ct.ThrowIfCancellationRequested();
             AdmitChildResults(); await AdmitSteersAsync();
-            history[1] = new("system", turn.SystemPrompt + "\n\n" + (options.InstructionsProvider?.Invoke() ?? ProjectInstructions.Load(options.WorkspaceRoot)));
+            // The dynamic tool catalog and sandbox state are tail snapshots; only a change to the
+            // invariant contract itself rewrites the cached first message.
+            var stableContract = codeAct.StableInstructions;
+            if (history[0].Content != stableContract)
+                history[0] = new("system", stableContract) { IsHostContract = true };
+            history[1] = PromptComposer.GuidanceMessage(turn.SystemPrompt, () => options.InstructionsProvider?.Invoke() ?? ProjectInstructions.Load(options.WorkspaceRoot));
             // Append changed session data instead of rewriting the prefix of every request.
             // Persist snapshots so the next user turn replays the exact same history.
+            AppendSkillsContext();
+            AppendToolContext();
             AppendPolicySnapshot();
             var previousTodo = history.LastOrDefault(message => message.Role == "user" && message.ToolName == "todo_context");
             var todoContext = TodoContext(id);
@@ -221,6 +265,7 @@ public sealed class AgentEngine
             await ReportContextAsync(writer, conversation, (HistorySize(history) + 3) / 4, capacity, true, ct);
             var outgoing = new AllAgent.NET.Core.Extensions.AgentRequestContext(id, options.IsSubAgent, iteration, RepairHistory(CodeActHistory.Normalize(history)));
             if (options.Extensions != null) outgoing = await options.Extensions.ConfigureRequestAsync(outgoing, ct);
+            PromptComposer.ProtectRequest(codeAct, outgoing.Messages);
             if (HistorySize(outgoing.Messages) > contextLimit) throw new InvalidOperationException("插件处理后的模型上下文超过限制。");
             var rejectedImageCount = 0;
             try
@@ -379,8 +424,9 @@ public sealed class AgentEngine
                             {
                                 if (Interlocked.Increment(ref toolCount) > options.MaxToolCalls) return ToolResult.Failure("Tool budget exhausted. Stop calling tools.");
                                 var hostId = Guid.NewGuid().ToString("N");
-                                using var invocation = AgentExecutionScope.EnterTool(hostId);
-                                await writer.WriteAsync(new ToolCallStarted(hostId, name, arguments.GetRawText()) { ParentId = callId }, token);
+                                using var invocation = AgentExecutionScope.EnterTool(hostId, callId);
+                                var eventArgs = ToolEventArguments(name, arguments);
+                                await writer.WriteAsync(new ToolCallStarted(hostId, name, eventArgs) { ParentId = callId }, token);
                                 var response = ToolResult.Failure("Host operation interrupted; check side effects before retrying.");
                                 try
                                 {
@@ -396,7 +442,7 @@ public sealed class AgentEngine
                                 finally
                                 {
                                     var hostResult = response.ToJson();
-                                    var traceArgs = arguments.GetRawText();
+                                    var traceArgs = eventArgs;
                                     if (traceArgs.Length > 32000) traceArgs = JsonSerializer.Serialize(new { preview = ToolResult.Clip(traceArgs, 32000), truncated = true });
                                     lock (hostTrace)
                                     if (hostTrace.Count < 100 && traceCharacters + traceArgs.Length + hostResult.Length < 128000)
@@ -562,6 +608,16 @@ public sealed class AgentEngine
     }
 
     private static int HistorySize(List<ChatMessage> messages) => messages.Sum(m => m.Content.Length + (m.ToolCallsJson?.Length ?? 0) + (m.ReasoningContent?.Length ?? 0) + (m.ProviderStateJson?.Length ?? 0));
+
+    /// <summary>The plan itself is persisted and shown in the approval UI; keep the event trace to a
+    /// short preview instead of duplicating a large Markdown document in every tool frame.</summary>
+    private static string ToolEventArguments(string name, JsonElement arguments)
+    {
+        if (name != "plan_propose") return arguments.GetRawText();
+        var title = arguments.TryGetProperty("title", out var titleValue) && titleValue.ValueKind == JsonValueKind.String ? titleValue.GetString() ?? "" : "";
+        var markdown = arguments.TryGetProperty("markdown", out var markdownValue) && markdownValue.ValueKind == JsonValueKind.String ? markdownValue.GetString() ?? "" : "";
+        return JsonSerializer.Serialize(new { title, markdown = ToolResult.Clip(markdown, 2000), markdownCharacters = markdown.Length });
+    }
 
     private sealed class PendingCall { public string Name = ""; public StringBuilder Arguments = new(); public bool Complete; }
     private sealed class RoutingTurn(IAiProvider provider) : IDisposable

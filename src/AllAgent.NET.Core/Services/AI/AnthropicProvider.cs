@@ -196,21 +196,43 @@ public class AnthropicProvider : IAiProvider
         else if (body["tools"] is JsonArray tools && tools.LastOrDefault() is JsonObject lastTool)
             lastTool["cache_control"] = CacheControl();
 
-        var conversationBreakpoints = 0;
         if (body["messages"] is JsonArray messages)
-            foreach (var message in messages.Reverse().OfType<JsonObject>())
+        {
+            var lastIndex = messages.Count - 1;
+            (JsonObject Block, string Text)? lastOverall = null;
+            (JsonObject Block, string Text)? lastStable = null;
+            for (var index = lastIndex; index >= 0; index--)
             {
+                if (messages[index] is not JsonObject message) continue;
                 if (message["content"] is JsonValue value && value.TryGetValue<string>(out var text) && !string.IsNullOrEmpty(text))
                     message["content"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = text });
                 if (message["content"] is not JsonArray content) continue;
                 // Signed/redacted thinking blocks must be replayed exactly, never annotated.
                 var last = content.OfType<JsonObject>().LastOrDefault(block => block["type"]?.GetValue<string>() is "text" or "tool_use" or "tool_result");
                 if (last == null) continue;
-                last["cache_control"] = CacheControl();
-                // Preserve the previous turn boundary even after a large batch of tool blocks.
-                if (++conversationBreakpoints == 2) break;
+                var blockText = last["text"]?.GetValue<string>() ?? "";
+                lastOverall ??= (last, blockText);
+                // The newest message is the current turn; the stable breakpoint belongs to the
+                // previous turn boundary, not the volatile snapshots or the new user message.
+                if (lastStable == null && index < lastIndex && !IsVolatileSnapshot(blockText)) lastStable = (last, blockText);
+                if (lastOverall != null && lastStable != null) break;
             }
+            if (lastOverall is { } overall) overall.Block["cache_control"] = CacheControl();
+            if (lastStable is { } stable && !ReferenceEquals(stable.Block, lastOverall?.Block))
+                stable.Block["cache_control"] = CacheControl();
+        }
         return body;
+
+        // Snapshots appended at the history tail supersede earlier ones. They must not displace
+        // the breakpoint that preserves the stable conversation prefix.
+        static bool IsVolatileSnapshot(string text)
+        {
+            var trimmed = text.TrimStart();
+            return trimmed.StartsWith("Current session policy", StringComparison.Ordinal) ||
+                   trimmed.StartsWith("Current host tool context", StringComparison.Ordinal) ||
+                   trimmed.StartsWith("Current TODO checklist", StringComparison.Ordinal) ||
+                   trimmed.StartsWith("Available instruction skills", StringComparison.Ordinal);
+        }
     }
 
     private static object BuildBody(ChatRequest request)

@@ -21,7 +21,9 @@ public static class ProjectInstructions
             var content = File.ReadAllText(path);
             if (content.Length > MaxCharacters)
                 throw new ArgumentException(relative + " 超过项目指令大小上限（100000 字符）。");
-            sections.Add("Project instructions from " + relative + ":\n" + content);
+            var section = "Project instructions from " + relative + ":\n" + content;
+            PromptComposer.NoteSource("project:" + relative, path, section);
+            sections.Add(section);
         }
         return string.Join("\n\n", sections);
     }

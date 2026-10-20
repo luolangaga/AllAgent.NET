@@ -27,7 +27,7 @@ internal sealed class ExtensionManager(PluginHost host, BackgroundTasks tasks, s
             TerminalOutput.Write(table); TerminalOutput.Write(new Text("/plugins search 关键词 · install 包ID 版本 · import 文件.nupkg · enable/disable/remove 包ID\n带 web 块的插件会向 Web 工作台贡献页面、面板与自定义工具卡。\n中文开发文档：docs/plugins.zh-CN.md\n"));
         });
     }
-    private static string WebLabel(PluginStatus plugin) => plugin.Web is not { } web ? "" : web.Error != null ? " · Web 异常" : $" · Web {web.Pages + web.Panels} 界面/{web.ToolCards} 工具卡";
+    private static string WebLabel(PluginStatus plugin) => plugin.Web is not { } web ? "" : web.Error != null ? " · Web 异常" : $" · Web {web.Pages + web.Panels} 界面/{web.ToolCards} 工具卡" + (web.Settings > 0 ? $"/{web.Settings} 设置区" : "");
     public async Task PluginsAsync(IReadOnlyList<string> words, CancellationToken ct)
     {
         var action = words.FirstOrDefault() ?? (ui.Interactive && !ui.Json ? "panel" : "list");

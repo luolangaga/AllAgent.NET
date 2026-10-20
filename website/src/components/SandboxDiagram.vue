@@ -94,7 +94,7 @@ const hostTools: HoverInfo[] = [
   {
     id: 'tool-file',
     label: '文件',
-    desc: 'file_read / file_write / file_edit / list_directory / file_search / everything_search，带页级与字节预算、diff 预览和原子写。',
+    desc: 'file_read / file_write / file_edit / list_directory / file_search（内容与 names_only 文件名搜索），带页级与字节预算、diff 预览和原子写。',
   },
   {
     id: 'tool-shell',

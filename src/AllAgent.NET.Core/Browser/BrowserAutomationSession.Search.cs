@@ -5,11 +5,12 @@ public sealed partial class BrowserAutomationSession
     // Extract organic results from rendered DOM, never from a search API or HTML fetch.
     internal const string SearchResultsScript = """
         (() => {
-          const blocked = !!document.querySelector('#b_captcha,iframe[src*="captcha"],form[action*="/sorry/"]');
-          const rows = document.querySelectorAll('#b_results .b_algo, #search .MjjYud, [data-testid="result"]');
+          const blocked = !!document.querySelector('#b_captcha,iframe[src*="captcha"],form[action*="/sorry/"],form[action*="verify"],#captcha,.wappass') ||
+            location.hostname.includes('wappass');
+          const rows = document.querySelectorAll('#b_results .b_algo, #search .MjjYud, [data-testid="result"], #content_left > div');
           const results = [], seen = new Set();
           for (const row of rows) {
-            const a = row.querySelector('h2 a, a:has(h3), a[data-testid="result-title-a"]');
+            const a = row.querySelector('h2 a, h3 a, a:has(h3), a[data-testid="result-title-a"]');
             if (!a) continue;
             let url = a.href;
             try {
@@ -22,14 +23,18 @@ public sealed partial class BrowserAutomationSession
                   url = new TextDecoder().decode(Uint8Array.from(atob(b64.padEnd(Math.ceil(b64.length/4)*4,'=')),c=>c.charCodeAt(0)));
                 }
               }
+              // Baidu marks paid links as /baidu.php; organic cards often expose the destination in mu.
+              if (parsed.hostname === 'www.baidu.com' && parsed.pathname === '/baidu.php') continue;
+              if (parsed.hostname === 'www.baidu.com' && parsed.pathname === '/link' && row.getAttribute('mu')) url = row.getAttribute('mu');
               const target = new URL(url);
               if (!['http:','https:'].includes(target.protocol) || target.username || target.password) continue;
               url = target.href;
             } catch { continue; }
-            const title = (a.innerText || a.textContent || '').trim().slice(0,300);
+            const title = (a.innerText || a.textContent || row.querySelector('h3')?.innerText || '').trim().slice(0,300);
             if (!title || seen.has(url)) continue;
             seen.add(url);
-            const description = (row.querySelector('.b_caption p, .VwiC3b, [data-result="snippet"], [data-testid="result-snippet"]')?.innerText || '').trim().slice(0,1500);
+            const snippet = row.querySelector('.b_caption p, .VwiC3b, [data-result="snippet"], [data-testid="result-snippet"], .c-abstract, .c-font-normal[aria-label], .cos-row');
+            const description = (snippet?.getAttribute('aria-label') || snippet?.innerText || '').trim().slice(0,1500);
             results.push({title,url,description});
             if (results.length >= __LIMIT__) break;
           }

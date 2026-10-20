@@ -1,21 +1,19 @@
 # 文件搜索与工具输出
 
-工具调用以紧凑的终端行展示：紫色 READ / EDIT / WRITE / SEARCH / EVERYTHING / SHELL 标签，文件修改附带行号和红绿差异。终端点击操作或按 Ctrl+E 查看完整详情；桌面聊天点击标题或“展开详情”。长输出默认预览三行。
+工具调用以紧凑的终端行展示：紫色 READ / EDIT / WRITE / SEARCH / SHELL 标签（历史会话里的 EVERYTHING 标签仍然保留显示），文件修改附带行号和红绿差异。终端点击操作或按 Ctrl+E 查看完整详情；桌面聊天点击标题或“展开详情”。长输出默认预览三行。
 
-## 内置 Everything 文件名搜索（Windows）
+## 按文件名搜索（`names_only=true`）
 
-`everything_search` 随应用携带 Everything 1.4.1.1032 便携索引引擎和 ES 1.1.0.38 查询端，支持 Windows x64、x86、ARM64。无需另行安装、配置、启动 Everything，也不要求管理员权限或系统服务。首次调用自动在后台索引获准目录，后续调用复用索引并监控文件变化。首次扫描大型目录仍需时间；它不提供 NTFS 服务模式的首次全盘建库速度。
+`file_search` 的 `names_only=true` 走 ripgrep 的 `--files`，只列文件、不读内容：`file_pattern` 是文件名或相对路径通配符（如 `*.tsx`、`src/**/*.cs`），`pattern` 变成可选的名字过滤（默认普通文本，`regex=true` 时是正则），留空即列出全部匹配文件。名字模式同样遵守 `.gitignore`、排除构建/依赖目录（`include_ignored=true` 可放开），只列文件不列目录——查目录用 `list_directory`。结果返回工作区相对路径、`hasMore` 与 `nextOffset`，与内容模式共用同一套分页。
 
 ```python
-# 在工作区按名称快速找文件（包含子目录）
-print(call_tool('everything_search', query='*合同*.docx'))
-# 明确指定更大的目录；工作区外沿用目录授权
-print(call_tool('everything_search', query='*.pdf', path='C:/Users/me/Documents', limit=50))
+# 按名称找文件（包含子目录，遵守 .gitignore）
+print(call_tool('file_search', names_only=True, file_pattern='*合同*.docx'))
+# 名字里再过滤一层；limit/offset 与其他文件工具一致
+print(call_tool('file_search', names_only=True, file_pattern='*.pdf', pattern='合同', limit=50))
 ```
 
-`query` 是普通文件名文本或 `*` / `?` 通配符，不接受路径；Everything 查询操作符按普通名称字符处理，不提供内容搜索。返回绝对路径 `paths`、`hasMore` 和 `nextOffset`；`hasMore=true` 时用相同参数和返回的 `nextOffset` 翻页，过滤失效索引项时本页可能为空。它包含隐藏文件和忽略文件，不读取 `.gitignore`；全文与忽略规则搜索继续用 `file_search`。
-
-索引缓存位于 `%LOCALAPPDATA%/AllAgent.NET/Everything/`，只对本次获准目录建库；不安装开机启动项，不影响用户自己的 Everything。每个宿主最多运行一个索引进程，切换目录时重启自己的索引器；启动时刷新目录，避免遗漏停机期间新增的文件，之后复用当前索引，宿主正常退出时关闭自己的后台进程。并发宿主使用独立数据库避免写冲突。索引反映最近监控到的状态，文件刚修改时可能短暂滞后；返回前重新检查路径边界、存在性和链接。
+随包仍然携带 Everything 便携索引（`everything/`）与 `EverythingSearch` / `EverythingIndexer` 实现，供需要 Windows 索引加速的宿主恢复 `[AgentTool("everything_search")]` 后重新启用；默认不再注册为模型工具，`%LOCALAPPDATA%/AllAgent.NET/Everything/` 的索引缓存也不再随调用增长。
 
 `file_search` 由 C# 宿主直接运行已安装的 ripgrep，无 Shell 拼接，尊重 `.gitignore`（包括子目录规则和否定规则）：
 

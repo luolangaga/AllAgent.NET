@@ -1,3 +1,4 @@
+using System.Globalization;
 using AllAgent.NET.Core.Data;
 using AllAgent.NET.Core.Models;
 using AllAgent.NET.Core.Services.AI;
@@ -232,6 +233,48 @@ internal sealed class ModelManager(DataStore store, TerminalUi ui, TerminalArgum
         foreach (var ch in key) hash = unchecked(hash * 31 + ch);
         return palette[hash % palette.Length];
     }
+    private const string CodexCatalogStamp = "terminal:codexCatalogRefresh:";
+    private static readonly TimeSpan CodexCatalogLifetime = TimeSpan.FromMinutes(30);
+    private Task? _codexCatalogRefresh;
+
+    /// <summary>
+    /// Refreshes an account catalog after the selection is stored, so /model never blocks on the
+    /// network and a slow or failing endpoint keeps the previously saved list.
+    /// </summary>
+    private void QueueCodexCatalogRefresh()
+    {
+        if (!ui.Interactive || ui.Json || _codexCatalogRefresh is { IsCompleted: false }) return;
+        var due = store.ApiConfigs
+            .Where(config => config.IsEnabled && config.AuthenticationProviderId == "codex" && config.Models.Count > 0)
+            .Where(config => !DateTimeOffset.TryParse(store.GetSetting(CodexCatalogStamp + config.Id), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var last) || DateTimeOffset.UtcNow - last >= CodexCatalogLifetime)
+            .ToArray();
+        if (due.Length > 0) _codexCatalogRefresh = RefreshCodexCatalogsAsync(due);
+    }
+
+    private async Task RefreshCodexCatalogsAsync(IReadOnlyList<ApiConfig> providers)
+    {
+        foreach (var provider in providers)
+        {
+            try
+            {
+                var discovered = await Provider(provider).ListModelsAsync(provider, CancellationToken.None);
+                if (discovered.Count > 0 && store.GetApiConfig(provider.Id) is { } saved)
+                {
+                    var refreshed = ManagementUi.Clone(saved);
+                    refreshed.Models = discovered.Select(item => item.Id).Distinct(StringComparer.Ordinal).ToList();
+                    ModelCatalog.Remember(refreshed, discovered);
+                    store.UpdateApiConfig(refreshed);
+                }
+            }
+            catch (Exception) { /* The saved catalog stays selectable. */ }
+            finally
+            {
+                try { store.SetSetting(CodexCatalogStamp + provider.Id, DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture)); }
+                catch (Exception) { /* The store may close while the refresh is in flight. */ }
+            }
+        }
+    }
+
     public async Task<ApiConfig> SelectAsync(string? selector = null, string? model = null, bool forceSelection = false)
     {
         await ModelCatalog.RefreshAsync();
@@ -251,11 +294,12 @@ internal sealed class ModelManager(DataStore store, TerminalUi ui, TerminalArgum
             var remembered = available.FirstOrDefault(item => item.Id.ToString() == store.GetSetting("terminal:lastConfig"));
             if (forceSelection && ui.Interactive && !ui.Json)
             {
-                foreach (var provider in available.Where(provider => provider.AuthenticationProviderId == "codex"))
+                // The saved catalog opens the picker immediately; only a provider without one waits.
+                foreach (var provider in available.Where(provider => provider.AuthenticationProviderId == "codex" && provider.Models.Count == 0))
                 {
                     try
                     {
-                        var discovered = await ManagementUi.Busy("刷新 Codex 模型目录", ct => Provider(provider).ListModelsAsync(provider, ct));
+                        var discovered = await ManagementUi.Busy("获取 Codex 模型目录", ct => Provider(provider).ListModelsAsync(provider, ct));
                         if (discovered.Count == 0) throw new InvalidOperationException("Codex 返回了空模型目录。");
                         var refreshed = ManagementUi.Clone(provider);
                         refreshed.Models = discovered.Select(item => item.Id).Distinct(StringComparer.Ordinal).ToList();
@@ -265,7 +309,7 @@ internal sealed class ModelManager(DataStore store, TerminalUi ui, TerminalArgum
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
-                        ui.Error("刷新 Codex 模型失败，使用已保存列表：" + ex.Message);
+                        ui.Error("获取 Codex 模型目录失败：" + ex.Message);
                     }
                 }
                 var choices = available.SelectMany(provider => (provider.Models.Count > 0 ? provider.Models : [provider.DefaultModel])
@@ -300,9 +344,17 @@ internal sealed class ModelManager(DataStore store, TerminalUi ui, TerminalArgum
         ui.SetModelContext(c);
         if (store.ApiConfigs.Any(item => item.Id == c.Id))
         {
+            // A background refresh may have landed while the picker was open; keep its catalog.
+            if (store.GetApiConfig(c.Id) is { } latest && latest.Models.Count > 0)
+            {
+                c.Models = latest.Models;
+                c.ModelLimits = latest.ModelLimits;
+                c.ModelReasoningLevels = latest.ModelReasoningLevels;
+            }
             store.UpdateApiConfig(c);
             store.SetSetting("terminal:lastConfig", c.Id.ToString());
         }
+        QueueCodexCatalogRefresh();
         return c;
     }
 }

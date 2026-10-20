@@ -72,30 +72,38 @@ public static class SubAgentConcurrency
         public int Active;
         public readonly Dictionary<string, int> Roles = new(StringComparer.Ordinal);
     }
-    private static readonly ConditionalWeakTable<DataStore, Counter> Stores = new();
+    private static readonly Dictionary<string, Counter> Stores = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly object GlobalGate = new();
+    private static int _active;
     public static async Task<IDisposable> AcquireAsync(DataStore store, string role, int limit, CancellationToken ct)
     {
         if (limit is < 1 or > 6) throw new ArgumentOutOfRangeException(nameof(limit));
-        var counter = Stores.GetOrCreateValue(store);
+        var key = store.DataDirectory;
         while (true)
         {
             ct.ThrowIfCancellationRequested();
-            lock (counter)
+            lock (GlobalGate)
             {
+                if (!Stores.TryGetValue(key, out var counter)) Stores.Add(key, counter = new());
                 var roleActive = counter.Roles.GetValueOrDefault(role);
-                if (counter.Active < 6 && roleActive < limit)
+                if (_active < 6 && roleActive < limit)
                 {
                     counter.Active++;
+                    _active++;
                     counter.Roles[role] = roleActive + 1;
-                    return new Lease(counter, role);
+                    return new Lease(counter, role, key);
                 }
             }
             await Task.Delay(50, ct);
         }
     }
-    private sealed class Lease(Counter counter, string role) : IDisposable
+    private sealed class Lease(Counter counter, string role, string key) : IDisposable
     {
         private int _disposed;
-        public void Dispose() { if (Interlocked.Exchange(ref _disposed, 1) == 0) lock (counter) { counter.Active--; counter.Roles[role]--; } }
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+            lock (GlobalGate) { _active--; counter.Active--; counter.Roles[role]--; if (counter.Active == 0) Stores.Remove(key); }
+        }
     }
 }

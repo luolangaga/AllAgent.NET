@@ -6,7 +6,7 @@
     "readOnly": true,
     "model": null,
     "provider": null,
-    "tools": ["file_read", "file_search", "everything_search", "list_directory", "skill_read", "skill_reference"],
+    "tools": ["file_read", "file_search", "list_directory", "skill_read", "skill_reference"],
     "permissions": [
       { "action": "*", "resource": "*", "effect": "allow" },
       { "action": "file_read", "resource": "*.env", "effect": "ask" },

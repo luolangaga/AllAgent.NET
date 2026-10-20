@@ -30,8 +30,9 @@ public sealed class AgentEngineTests
         var events = await Collect(new AgentEngine(store, provider, codeAct, workspace.Options).RunAsync(session.Id, "continue", Config));
         Assert.DoesNotContain(events, e => e is AgentError);
         Assert.Equal(2, provider.Requests.Count);
-        Assert.Equal(retained, Assert.Single(provider.Requests[1].Messages[2].Images));
-        Assert.Contains("retain this text", provider.Requests[1].Messages[2].Content);
+        var retainedMessage = Assert.Single(provider.Requests[1].Messages, message => message.Images.Count > 0);
+        Assert.Equal(retained, Assert.Single(retainedMessage.Images));
+        Assert.Contains("retain this text", retainedMessage.Content);
         Assert.Single(Directory.GetFiles(Path.Combine(data, "rejected-images")));
         using var reopened = new DataStore(data);
         Assert.Equal(retained, Assert.Single(reopened.GetMessages(session.Id).SelectMany(m => m.Images)));
@@ -220,7 +221,9 @@ public sealed class AgentEngineTests
         var first = model.Requests[0].Messages.Where(message => message.Role == "system").ToArray();
         var second = model.Requests[1].Messages.Where(message => message.Role == "system").ToArray();
         Assert.Equal(2, first.Length); Assert.Equal(2, second.Length);
-        Assert.Equal(first[0], second[0]); Assert.Equal(codeAct.Instructions, first[0].Content);
+        Assert.Equal(first[0], second[0]); Assert.StartsWith(first[0].Content, codeAct.Instructions);
+        var firstTool = Assert.Single(model.Requests[0].Messages, message => message.ToolName == "tool_context");
+        Assert.Contains("## Sandbox runtime", firstTool.Content);
         Assert.Contains("Project A policy", first[1].Content); Assert.Contains("Session A policy", first[1].Content);
         Assert.Contains("Project B policy", second[1].Content); Assert.Contains("Session B policy", second[1].Content);
         var firstBody = AnthropicProvider.Body(model.Requests[0]); var secondBody = AnthropicProvider.Body(model.Requests[1]);
@@ -244,8 +247,8 @@ public sealed class AgentEngineTests
         await Collect(engine.RunAsync(session.Id, "again", Config));
         static string[] Bytes(IEnumerable<ChatMessage> messages) => messages.Select(message => JsonSerializer.Serialize(message)).ToArray();
         var first = model.Requests[0].Messages; var second = model.Requests[1].Messages; var third = model.Requests[2].Messages;
-        // Volatile policy is a tail snapshot, not a system block: the stable prefix is the two instruction blocks.
-        Assert.Equal(new[] { "system", "system", "user", "user" }, first.Select(message => message.Role));
+        // Learned policy stays at the tail; runtime policy follows the two stable system blocks.
+        Assert.Equal(new[] { "system", "system", "user", "user", "user" }, first.Select(message => message.Role));
         Assert.DoesNotContain(first, message => message.Role == "system" && message.Content.Contains("Question preference"));
         // Every request keeps all earlier messages byte-identical, so prefix caches survive policy changes.
         Assert.Equal(Bytes(first), Bytes(second).Take(first.Count));
@@ -263,6 +266,25 @@ public sealed class AgentEngineTests
         var cleared = model.Requests[3].Messages.Last(message => message.ToolName == "policy_context");
         Assert.Contains("host defaults apply", cleared.Content);
         Assert.Equal(Bytes(third), Bytes(model.Requests[3].Messages).Take(third.Count));
+    }
+
+    [Fact]
+    public async Task SkillAndToolContextAreTailSnapshots()
+    {
+        using var workspace = new TestWorkspace(); using var store = new DataStore(Path.Combine(workspace.Root, "data"));
+        var session = new Conversation(); store.AddConversation(session);
+        var catalog = new SkillCatalog(store, workspace.Root, Path.Combine(workspace.Root, "shared"));
+        catalog.SeedUserSkill("marker-skill", "---\nname: marker-skill\ndescription: Marker skill\n---\n\nDo nothing.");
+        var model = new ScriptedProvider(Answer("done"));
+        await using var codeAct = new CodeActProvider(new ToolRegistry(), new(workspace.Python), new FakeSandbox());
+        await Collect(new AgentEngine(store, model, codeAct, workspace.Options with { Skills = catalog }).RunAsync(session.Id, "task", Config));
+        var request = Assert.Single(model.Requests);
+        // The stable system block stays free of the changing skill catalog.
+        Assert.DoesNotContain("Available instruction skills", request.Messages[0].Content);
+        Assert.Contains(request.Messages, message => message.ToolName == "skills_context" && message.Content.Contains("marker-skill"));
+        var toolContext = Assert.Single(request.Messages, message => message.ToolName == "tool_context");
+        Assert.Contains("## Host tool catalog", toolContext.Content);
+        Assert.Contains("## Sandbox runtime", toolContext.Content);
     }
 
     [Theory]
@@ -334,9 +356,11 @@ public sealed class AgentEngineTests
         Assert.Empty(model.Requests[0].Tools!); Assert.Contains(model.Requests[1].Messages, m => m.Content.Contains("preserved goal"));
         Assert.DoesNotContain("Project compaction policy", model.Requests[0].Messages.Last().Content);
         var systems = model.Requests[1].Messages.Where(message => message.Role == "system").ToArray();
-        Assert.Equal(2, systems.Length); Assert.Equal(codeAct.Instructions, systems[0].Content);
+        Assert.Equal(2, systems.Length); Assert.StartsWith(systems[0].Content, codeAct.Instructions);
+        var toolContext = Assert.Single(model.Requests[1].Messages, message => message.ToolName == "tool_context");
+        Assert.Contains("## Sandbox runtime", toolContext.Content);
         Assert.Contains("Project compaction policy", systems[1].Content); Assert.Contains("Session compaction policy", systems[1].Content);
-        Assert.NotNull(session.ContextSummaryThroughId); Assert.Equal(14, store.GetMessages(session.Id).Count);
+        Assert.NotNull(session.ContextSummaryThroughId); Assert.Equal(15, store.GetMessages(session.Id).Count);
         await Collect(engine.RunAsync(session.Id, "resume", Config));
         Assert.Contains(model.Requests.Last().Messages, m => m.Content.Contains("preserved goal"));
         Assert.DoesNotContain(model.Requests.Last().Messages, m => m.Content.StartsWith("0xxx"));
@@ -386,8 +410,8 @@ public sealed class AgentEngineTests
         Assert.Equal("stop", Assert.IsType<AgentDone>(events.Last()).FinishReason);
         Assert.Equal(2, provider.Requests.Count);
         Assert.All(provider.Requests, request => Assert.Equal("execute_code", Assert.Single(request.Tools!).Name));
-        Assert.Single(provider.Requests[0].Messages, m => m.Role == "user");
-        var saved = store.GetMessages(session.Id);
+        Assert.Single(provider.Requests[0].Messages, m => m.Role == "user" && m.ToolName == null);
+        var saved = store.GetMessages(session.Id).Where(m => m.ToolName is not ("tool_context" or "skills_context" or "policy_context")).ToArray();
         Assert.Equal(new[] { "user", "assistant", "tool", "assistant" }, saved.Select(m => m.Role));
         Assert.Equal("tc1", saved[2].ToolCallId);
     }

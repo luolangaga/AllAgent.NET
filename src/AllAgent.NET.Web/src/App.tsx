@@ -23,6 +23,7 @@ import { TerminalPanel } from './components/TerminalPanel'
 import { WorkspacePanel } from './components/WorkspacePanel'
 import { WorkspaceSwitcher } from './components/WorkspaceSwitcher'
 import { useStore } from './lib/store'
+import { useT } from './i18n'
 import { connectionLabel, useConnection } from './lib/useConnection'
 import { formatRelative } from './lib/format'
 import { bridgeEvents, onReconnect, reconnect } from './bridge'
@@ -54,17 +55,19 @@ import Tasks from './views/Tasks'
 import Tools from './views/Tools'
 import type { Conversation } from './types'
 
-const navigation = [
-  { id: 'chat', label: '对话', icon: MessageSquare },
-  { id: 'models', label: '模型与 API', icon: SlidersHorizontal },
-  { id: 'skills', label: '技能', icon: Blocks },
-  { id: 'tools', label: '工具', icon: Wrench },
-  { id: 'powershell', label: 'PowerShell', icon: SquareTerminal },
-  { id: 'plugins', label: '插件', icon: Puzzle },
-  { id: 'mcp', label: 'MCP 服务', icon: Plug },
-  { id: 'tasks', label: '任务', icon: ListTodo },
-  { id: 'settings', label: '设置', icon: SettingsIcon },
-]
+function navigationItems(tr: (zh: string, en: string) => string) {
+  return [
+    { id: 'chat', label: tr('对话', 'Chat'), icon: MessageSquare },
+    { id: 'models', label: tr('模型与 API', 'Models & API'), icon: SlidersHorizontal },
+    { id: 'skills', label: tr('技能', 'Skills'), icon: Blocks },
+    { id: 'tools', label: tr('工具', 'Tools'), icon: Wrench },
+    { id: 'powershell', label: 'PowerShell', icon: SquareTerminal },
+    { id: 'plugins', label: tr('插件', 'Plugins'), icon: Puzzle },
+    { id: 'mcp', label: tr('MCP 服务', 'MCP servers'), icon: Plug },
+    { id: 'tasks', label: tr('任务', 'Tasks'), icon: ListTodo },
+    { id: 'settings', label: tr('设置', 'Settings'), icon: SettingsIcon },
+  ]
+}
 
 const GROUP_KEY = 'allagent.sidebar.groups'
 
@@ -98,6 +101,7 @@ export default function App() {
   const notices = useStore(useNoticesStore)
   const panels = useStore(usePanelsStore)
   const git = useStore(useGitStore)
+  const tr = useT()
   const browser = useStore(useWorkspaceBrowserStore)
   const terminal = useStore(useTerminalStore)
   const connection = useConnection()
@@ -151,7 +155,7 @@ export default function App() {
     if (target === workspace.workspace) return
     try {
       await workspace.switchTo(target)
-      notices.notify('已切换工作区', name, 'success')
+      notices.notify(tr('已切换工作区', 'Workspace switched'), name, 'success')
       await conv.loadAll()
       go('chat')
     } catch (error) {
@@ -176,7 +180,7 @@ export default function App() {
     ]).then(results => {
       const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected')
       if (failures.length) {
-        notices.notify('部分数据加载失败', failures.map(failure => String(failure.reason instanceof Error ? failure.reason.message : failure.reason)).join('；'), 'destructive')
+        notices.notify(tr('部分数据加载失败', 'Some data failed to load'), failures.map(failure => String(failure.reason instanceof Error ? failure.reason.message : failure.reason)).join(tr('；', '; ')), 'destructive')
       }
       setReady(true)
     })
@@ -206,12 +210,21 @@ export default function App() {
     }
     const offReconnect = onReconnect(() => { void reloadAll() })
     const onWorkspaceChanged = () => { void reloadAll() }
+    const onSettingsChanged = (next: { language: typeof settings.language; languageResolved: typeof settings.languageResolved }) => {
+      settings.applyFromBridge(next)
+    }
     bridgeEvents.on('workspace.changed', onWorkspaceChanged)
+    bridgeEvents.on('settings.changed', onSettingsChanged)
     return () => {
       offReconnect()
       bridgeEvents.off('workspace.changed', onWorkspaceChanged)
+      bridgeEvents.off('settings.changed', onSettingsChanged)
     }
   }, [])
+
+  useEffect(() => {
+    document.title = tr('AllAgent.NET · 本地 Agent 工作台', 'AllAgent.NET · Local Agent workspace')
+  }, [settings.languageResolved])
 
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
@@ -252,10 +265,11 @@ export default function App() {
     : connection === 'connecting' ? 'active' as const : 'neutral' as const
 
   const filtered = conv.conversations.filter(item => item.title.toLowerCase().includes(query.toLowerCase()))
+  const navigation = navigationItems(tr)
   const activeTitle = conv.active?.title
-    || (conv.messages.length ? '对话' : '新对话')
+    || (conv.messages.length ? tr('对话', 'Chat') : tr('新对话', 'New conversation'))
   const otherWorkspaces = workspace.list.filter(entry => !entry.isCurrent)
-  // Plugin pages slot into the sidebar before 设置, right after the built-in entries.
+  // Plugin pages slot into the sidebar before Settings, right after the built-in entries.
   const navItems = [
     ...navigation.slice(0, -1),
     ...contributions.pages.map(entry => ({ id: entry.route, label: entry.title, icon: pluginIcon(entry.icon) })),
@@ -267,27 +281,27 @@ export default function App() {
     <aside className={`sidebar ${sidebarOpen ? 'is-open' : ''}`}>
       <div className="brand">
         <div className="brand-symbol"><Command size={18} /></div>
-        <div className="brand-copy"><strong>AllAgent.NET</strong><span>你的智能工作伙伴</span></div>
+        <div className="brand-copy"><strong>AllAgent.NET</strong><span>{tr('你的智能工作伙伴', 'Your intelligent work partner')}</span></div>
         <Badge size="sm">BETA</Badge>
       </div>
       <div className="new-chat-row">
-        <Tooltip content="新建对话 · Ctrl N">
+        <Tooltip content={tr('新建对话 · Ctrl N', 'New conversation · Ctrl N')}>
           <Button className="new-chat" icon={<Plus size={15} />} onClick={() => void newChat()}>
-            新建对话
+            {tr('新建对话', 'New conversation')}
           </Button>
         </Tooltip>
-        <Tooltip content="打开或新建工作区">
+        <Tooltip content={tr('打开或新建工作区', 'Open or create a workspace')}>
           <Button
             className="new-chat"
             icon={<FolderPlus size={15} />}
             onClick={() => workspace.openSwitcher()}
             variant="outline"
           >
-            新建工作区
+            {tr('新建工作区', 'New workspace')}
           </Button>
         </Tooltip>
       </div>
-      <nav aria-label="主导航" className="sidebar-nav">{navItems.map(item => <Button
+      <nav aria-label={tr('主导航', 'Main navigation')} className="sidebar-nav">{navItems.map(item => <Button
         className={`nav-link ${page === item.id ? 'selected' : ''}`}
         icon={<item.icon size={15} />}
         key={item.id}
@@ -302,12 +316,12 @@ export default function App() {
 
       <div className="sidebar-section">
         <div className="section-row">
-          <span>工作区</span>
+          <span>{tr('工作区', 'Workspace')}</span>
         </div>
         <Input
-          aria-label="搜索对话"
+          aria-label={tr('搜索对话', 'Search conversations')}
           onValueChange={setQuery}
-          placeholder="搜索对话…  Ctrl K"
+          placeholder={tr('搜索对话…  Ctrl K', 'Search conversations…  Ctrl K')}
           ref={search}
           size="sm"
           startAdornment={<Search size={13} />}
@@ -322,8 +336,8 @@ export default function App() {
             >
               <ChevronRight className={`ws-group-chevron ${(groups[workspace.workspace] ?? true) ? 'is-open' : ''}`} size={13} />
               <FolderOpen size={13} />
-              <span className="ws-group-name">{workspaceName || '当前工作区'}</span>
-              <Badge size="sm" variant="dot">当前</Badge>
+              <span className="ws-group-name">{workspaceName || tr('当前工作区', 'Current workspace')}</span>
+              <Badge size="sm" variant="dot">{tr('当前', 'Current')}</Badge>
               <span className="ws-group-count">{conv.conversations.length}</span>
             </button>
             {(groups[workspace.workspace] ?? true) ? <div className="history">
@@ -339,24 +353,24 @@ export default function App() {
                 <RunMarker state={conv.runState(item.id)} />
                 <span className="history-time">{formatRelative(item.updatedAt)}</span>
                 <div className="history-actions">
-                  <Tooltip content="重命名"><Button
+                  <Tooltip content={tr('重命名', 'Rename')}><Button
                     disabled={busy}
-                    iconLabel="重命名"
+                    iconLabel={tr('重命名', 'Rename')}
                     onClick={() => { setRename(item); setRenameValue(item.title) }}
                     size="icon-xs"
                     variant="ghost"
                   ><Pencil size={12} /></Button></Tooltip>
-                  <Tooltip content="删除对话"><Button
+                  <Tooltip content={tr('删除对话', 'Delete conversation')}><Button
                     disabled={busy}
-                    iconLabel="删除对话"
+                    iconLabel={tr('删除对话', 'Delete conversation')}
                     onClick={() => setRemove(item)}
                     size="icon-xs"
                     variant="ghost"
                   ><Trash2 size={12} /></Button></Tooltip>
                 </div>
               </div>)}
-              {!conv.conversations.length ? <p className="history-empty">你的下一段灵感，从这里开始。</p> : null}
-              {conv.conversations.length > 0 && !filtered.length ? <p className="history-empty">没有匹配的对话。</p> : null}
+              {!conv.conversations.length ? <p className="history-empty">{tr('你的下一段灵感，从这里开始。', 'Your next idea starts here.')}</p> : null}
+              {conv.conversations.length > 0 && !filtered.length ? <p className="history-empty">{tr('没有匹配的对话。', 'No matching conversations.')}</p> : null}
             </div> : null}
           </div> : null}
           {otherWorkspaces.map(entry => <div className="ws-group" key={entry.workspace}>
@@ -369,7 +383,7 @@ export default function App() {
               <FolderOpen size={13} />
               <span className="ws-group-name">{entry.name}</span>
               {conv.runsIn(entry.dataDirectory).length
-                ? <span className="run-badge" title="此工作区有会话正在运行">{conv.runsIn(entry.dataDirectory).length} 运行中</span>
+                ? <span className="run-badge" title={tr('此工作区有会话正在运行', 'A conversation in this workspace is running')}>{tr(`${conv.runsIn(entry.dataDirectory).length} 运行中`, `${conv.runsIn(entry.dataDirectory).length} running`)}</span>
                 : null}
               <span className="ws-group-count">{entry.sessionCount}</span>
             </button>
@@ -381,8 +395,8 @@ export default function App() {
                   onClick={() => void switchWorkspace(entry.workspace, entry.name)}
                   size="xs"
                   variant="outline"
-                >切换到此工作区</Button>
-                <span>{entry.sessionCount} 个会话</span>
+                >{tr('切换到此工作区', 'Switch to this workspace')}</Button>
+                <span>{tr(`${entry.sessionCount} 个会话`, `${entry.sessionCount} conversations`)}</span>
               </div>
             </div> : null}
           </div>)}
@@ -399,7 +413,7 @@ export default function App() {
               <RunMarker state={conv.runState(item.id)} />
               <span className="history-time">{formatRelative(item.updatedAt)}</span>
             </div>)}
-            {!conv.conversations.length ? <p className="history-empty">你的下一段灵感，从这里开始。</p> : null}
+            {!conv.conversations.length ? <p className="history-empty">{tr('你的下一段灵感，从这里开始。', 'Your next idea starts here.')}</p> : null}
           </div> : null}
         </div>
       </div>
@@ -407,43 +421,43 @@ export default function App() {
       <div className="sidebar-footer">
         <StatusDot animate={connection === 'connecting'} size="sm" tone={connectionTone} />
         <div><strong>{connectionLabel(connection)}</strong><small>{workspace.available
-          ? `工作区 ${workspaceName || '未设置'}`
-          : mcp.connectedIds.length ? `${mcp.connectedIds.length} 个 MCP 服务已连接` : '本地工作空间 · 数据不出本机'}</small></div>
-        <Tooltip content="工作区设置"><Button iconLabel="工作区设置" onClick={() => go('settings')} size="icon-sm" variant="ghost"><SettingsIcon size={14} /></Button></Tooltip>
+          ? tr(`工作区 ${workspaceName || '未设置'}`, `Workspace ${workspaceName || 'not set'}`)
+          : mcp.connectedIds.length ? tr(`${mcp.connectedIds.length} 个 MCP 服务已连接`, `${mcp.connectedIds.length} MCP servers connected`) : tr('本地工作空间 · 数据不出本机', 'Local workspace · data stays on this machine')}</small></div>
+        <Tooltip content={tr('工作区设置', 'Workspace settings')}><Button iconLabel={tr('工作区设置', 'Workspace settings')} onClick={() => go('settings')} size="icon-sm" variant="ghost"><SettingsIcon size={14} /></Button></Tooltip>
       </div>
     </aside>
 
     <main className="main-column">
       <header className="topbar">
-        <Button className="mobile-menu" iconLabel="展开侧栏" onClick={() => setSidebarOpen(!sidebarOpen)} size="icon-sm" variant="ghost"><PanelLeft size={16} /></Button>
+        <Button className="mobile-menu" iconLabel={tr('展开侧栏', 'Expand sidebar')} onClick={() => setSidebarOpen(!sidebarOpen)} size="icon-sm" variant="ghost"><PanelLeft size={16} /></Button>
         {workspace.available ? <button className="topbar-workspace" onClick={() => workspace.openSwitcher()} type="button">
-          <FolderOpen size={13} /><span>{workspaceName || '工作区'}</span>
-        </button> : <span className="topbar-scope">工作空间</span>}
+          <FolderOpen size={13} /><span>{workspaceName || tr('工作区', 'Workspace')}</span>
+        </button> : <span className="topbar-scope">{tr('工作空间', 'Workspace')}</span>}
         <ChevronRight className="breadcrumb-slash" size={13} />
-        <strong>{navItems.find(item => item.id === page)?.id === 'chat' ? activeTitle : navItems.find(item => item.id === page)?.label ?? '对话'}</strong>
+        <strong>{navItems.find(item => item.id === page)?.id === 'chat' ? activeTitle : navItems.find(item => item.id === page)?.label ?? tr('对话', 'Chat')}</strong>
         <div className="topbar-right">
-          <Tooltip content="工作区文件 · Ctrl+Shift+E">
+          <Tooltip content={tr('工作区文件 · Ctrl+Shift+E', 'Workspace files · Ctrl+Shift+E')}>
             <Button
               className={panels.open.files ? 'is-active' : undefined}
-              iconLabel="工作区文件"
+              iconLabel={tr('工作区文件', 'Workspace files')}
               onClick={() => panels.togglePanel('files')}
               size="icon-sm"
               variant="ghost"
             ><FolderTree size={14} /></Button>
           </Tooltip>
-          <Tooltip content={gitBadge ? `Git 管理 · ${gitBadge} 项更改 · Ctrl+Shift+G` : 'Git 管理 · Ctrl+Shift+G'}>
+          <Tooltip content={gitBadge ? tr(`Git 管理 · ${gitBadge} 项更改 · Ctrl+Shift+G`, `Git · ${gitBadge} changes · Ctrl+Shift+G`) : tr('Git 管理 · Ctrl+Shift+G', 'Git · Ctrl+Shift+G')}>
             <Button
               className={panels.open.git ? 'is-active' : undefined}
-              iconLabel="Git 管理"
+              iconLabel={tr('Git 管理', 'Git')}
               onClick={() => panels.togglePanel('git')}
               size="icon-sm"
               variant="ghost"
             ><span className="topbar-icon-badge"><GitBranch size={14} />{gitBadge ? <i>{gitBadge > 99 ? '99+' : gitBadge}</i> : null}</span></Button>
           </Tooltip>
-          <Tooltip content="集成终端 · Ctrl+`">
+          <Tooltip content={tr('集成终端 · Ctrl+`', 'Integrated terminal · Ctrl+`')}>
             <Button
               className={panels.open.terminal ? 'is-active' : undefined}
-              iconLabel="集成终端"
+              iconLabel={tr('集成终端', 'Integrated terminal')}
               onClick={() => {
                 panels.togglePanel('terminal')
                 if (panels.open.terminal) terminal.requestFocus()
@@ -452,38 +466,38 @@ export default function App() {
               variant="ghost"
             ><TerminalIcon size={14} /></Button>
           </Tooltip>
-          <Tooltip content="命令面板 · Ctrl+Shift+P">
-            <Button iconLabel="命令面板" onClick={() => setPalette(true)} size="icon-sm" variant="ghost"><Command size={14} /></Button>
+          <Tooltip content={tr('命令面板 · Ctrl+Shift+P', 'Command palette · Ctrl+Shift+P')}>
+            <Button iconLabel={tr('命令面板', 'Command palette')} onClick={() => setPalette(true)} size="icon-sm" variant="ghost"><Command size={14} /></Button>
           </Tooltip>
           {tasks.activeTasks.length ? <Button
             icon={<StatusDot animate size="sm" tone="active" />}
             onClick={() => go('tasks')}
             size="sm"
             variant="ghost"
-          >{tasks.activeTasks.length} 个任务</Button> : null}
-          <Tooltip content={dark ? '切换到浅色' : '切换到深色'}>
-            <Button iconLabel="切换主题" onClick={cycleTheme} size="icon-sm" variant="ghost">{dark ? <Sun size={14} /> : <Moon size={14} />}</Button>
+          >{tr(`${tasks.activeTasks.length} 个任务`, `${tasks.activeTasks.length} tasks`)}</Button> : null}
+          <Tooltip content={dark ? tr('切换到浅色', 'Switch to light') : tr('切换到深色', 'Switch to dark')}>
+            <Button iconLabel={tr('切换主题', 'Switch theme')} onClick={cycleTheme} size="icon-sm" variant="ghost">{dark ? <Sun size={14} /> : <Moon size={14} />}</Button>
           </Tooltip>
-          <Badge color={busy ? 'blue' : 'green'} size="sm" variant="dot">{busy ? '正在执行' : '就绪'}</Badge>
+          <Badge color={busy ? 'blue' : 'green'} size="sm" variant="dot">{busy ? tr('正在执行', 'Working') : tr('就绪', 'Ready')}</Badge>
         </div>
       </header>
       {connection === 'offline' ? <div className="connection-strip is-warning">
         <AlertTriangle size={14} />
-        <span>未连接本地后端</span>
-        <small>请在桌面应用中打开，或在终端运行 allagent 后使用 /web-ui 启动本地工作台。</small>
-        <Button onClick={() => reconnect()} size="xs" variant="outline">重试连接</Button>
+        <span>{tr('未连接本地后端', 'Local backend not connected')}</span>
+        <small>{tr('请在桌面应用中打开，或在终端运行 allagent 后使用 /web-ui 启动本地工作台。', 'Open it from the desktop app, or run allagent in a terminal and start the workspace with /web-ui.')}</small>
+        <Button onClick={() => reconnect()} size="xs" variant="outline">{tr('重试连接', 'Retry connection')}</Button>
       </div> : null}
       {connection === 'connecting' && !reconnectStalled ? <div className="connection-strip">
         <StatusDot animate size="sm" tone="active" />
-        <span>正在连接本地后端…</span>
-        <small>界面上的操作会自动排队等待。</small>
+        <span>{tr('正在连接本地后端…', 'Connecting to the local backend…')}</span>
+        <small>{tr('界面上的操作会自动排队等待。', 'Actions in the UI will queue automatically.')}</small>
       </div> : null}
       {connection === 'connecting' && reconnectStalled ? <div className="connection-strip is-warning">
         <AlertTriangle size={14} />
-        <span>仍未连接上本地后端</span>
-        <small>后端重启后会换端口：请在终端查看 /web-ui 输出的地址，或点击重试。</small>
-        <Button onClick={() => reconnect()} size="xs" variant="outline">重试连接</Button>
-        <Button onClick={() => location.reload()} size="xs" variant="ghost">刷新页面</Button>
+        <span>{tr('仍未连接上本地后端', 'Still not connected to the local backend')}</span>
+        <small>{tr('后端重启后会换端口：请在终端查看 /web-ui 输出的地址，或点击重试。', 'The backend uses a new port after a restart: check the address printed by /web-ui, or retry.')}</small>
+        <Button onClick={() => reconnect()} size="xs" variant="outline">{tr('重试连接', 'Retry connection')}</Button>
+        <Button onClick={() => location.reload()} size="xs" variant="ghost">{tr('刷新页面', 'Reload page')}</Button>
       </div> : null}
       {page.startsWith('plugin:') ? <PluginPage onNavigate={go} route={page} />
         : page === 'models' ? <Models />
@@ -502,18 +516,18 @@ export default function App() {
         const title = renameValue.trim()
         if (!title) return
         void conv.renameConversation(rename.id, title).then(() => setRename(null)).catch(notices.report)
-      }}>保存</Button>}
+      }}>{tr('保存', 'Save')}</Button>}
       onClose={() => setRename(null)}
       size="sm"
-      title="重命名对话"
+      title={tr('重命名对话', 'Rename conversation')}
     >
-      <Field label="对话名称" onChange={setRenameValue} required value={renameValue} />
+      <Field label={tr('对话名称', 'Conversation name')} onChange={setRenameValue} required value={renameValue} />
     </Modal> : null}
     {remove ? <Confirm
       onClose={() => setRemove(null)}
       onConfirm={() => conv.deleteConversation(remove.id)}
-      title={`删除「${remove.title}」？`}
-      description="这段对话及其历史记录将从工作区移除。"
+      title={tr(`删除「${remove.title}」？`, `Delete “${remove.title}”?`)}
+      description={tr('这段对话及其历史记录将从工作区移除。', 'This conversation and its history are removed from the workspace.')}
     /> : null}
     <Notices />
     <RunDock />

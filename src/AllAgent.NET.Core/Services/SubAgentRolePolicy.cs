@@ -6,15 +6,19 @@ namespace AllAgent.NET.Core.Services;
 
 /// <summary>Live read-only restrictions apply even when the parent granted full access.</summary>
 public sealed class SubAgentRolePolicy(Func<bool> readOnly, string workspace, ExternalDirectoryPermissions? permissions = null,
-    Func<AgentRoleDefinition>? role = null, ToolApprover? approver = null, Func<IReadOnlyList<string>?>? parentTools = null)
+    Func<AgentRoleDefinition>? role = null, ToolApprover? approver = null, Func<IReadOnlyList<string>?>? parentTools = null,
+    AgentRoleDefinition? grant = null, IReadOnlyList<string>? parentToolGrant = null)
 {
+    public SubAgentRolePolicy(Func<bool> readOnly, string workspace, ExternalDirectoryPermissions? permissions,
+        Func<AgentRoleDefinition>? role, ToolApprover? approver, Func<IReadOnlyList<string>?>? parentTools)
+        : this(readOnly, workspace, permissions, role, approver, parentTools, null, null) { }
     private readonly Lazy<WorkspacePolicy> _workspace = new(() => new(workspace, permissions: permissions));
     public ToolResult? Validate(AgentToolDescriptor tool, JsonElement arguments)
     {
         if (Evaluate(tool, arguments).Effect == "deny") return ToolResult.Failure("Current agent permission rules deny this operation. Do not retry or bypass this restriction.");
-        if (!readOnly()) return null;
+        if (!readOnly() && grant?.ReadOnly != true) return null;
         if (tool.Risk != ToolRisk.Read) return ToolResult.Failure("Current child role is read-only. Do not retry or bypass this restriction.");
-        if (tool.Name is "file_read" or "list_directory" or "file_search" or "everything_search" or "read" or "grep" or "find" or "ls")
+        if (tool.Name is "file_read" or "list_directory" or "file_search" or "read" or "grep" or "find" or "ls")
         {
             try { _workspace.Value.Resolve(ToolArguments.Get(arguments, "path", ".")); }
             catch (Exception ex) when (ex is UnauthorizedAccessException or ArgumentException or IOException)
@@ -39,12 +43,27 @@ public sealed class SubAgentRolePolicy(Func<bool> readOnly, string workspace, Ex
     private (string? Name, string Effect, string? Version) Evaluate(AgentToolDescriptor tool, JsonElement arguments)
     {
         var current = role?.Invoke();
-        if (parentTools?.Invoke() is { } parent && !parent.Contains(tool.Name, StringComparer.Ordinal))
+        var live = EvaluateRole(current, tool, arguments);
+        if (grant == null) return live;
+        var original = EvaluateRole(grant, tool, arguments);
+        var effect = live.Effect == "deny" || original.Effect == "deny" ? "deny" : live.Effect == "ask" || original.Effect == "ask" ? "ask" : "allow";
+        return (current?.Name, effect, live.Version + ":" + original.Version);
+    }
+
+    public static IReadOnlyList<string>? IntersectTools(IReadOnlyList<string>? live, IReadOnlyList<string>? grant) =>
+        live == null ? grant : grant == null ? live : live.Where(name => grant.Any(original => Canonical(original) == Canonical(name))).ToArray();
+
+    private static string Canonical(string name) => name switch { "file_read" => "read", "file_write" => "write", "file_edit" => "edit", "file_search" => "grep", "list_directory" => "ls", _ => name };
+
+    private (string? Name, string Effect, string? Version) EvaluateRole(AgentRoleDefinition? current, AgentToolDescriptor tool, JsonElement arguments)
+    {
+        if (parentToolGrant is { } original && !original.Any(name => Canonical(name) == Canonical(tool.Name))) return (current?.Name, "deny", null);
+        if (parentTools?.Invoke() is { } parent && !parent.Any(name => Canonical(name) == Canonical(tool.Name)))
             return (current?.Name, "deny", null);
         if (tool.Name is "skill_read" or "skill_reference" && current?.Execution?.Skills is { } skills &&
             !skills.Contains(ToolArguments.Get<string>(arguments, "name", ""), StringComparer.OrdinalIgnoreCase))
             return (current.Name, "deny", JsonSerializer.Serialize(current));
-        var canonical = tool.Name switch { "file_read" => "read", "file_write" => "write", "file_edit" => "edit", "file_search" => "grep", "everything_search" => "find", "list_directory" => "ls", _ => tool.Name };
+        var canonical = tool.Name switch { "file_read" => "read", "file_write" => "write", "file_edit" => "edit", "file_search" => "grep", "list_directory" => "ls", _ => tool.Name };
         if (current?.Tools is { } tools && !tools.Contains(canonical, StringComparer.Ordinal) && !tools.Contains(tool.Name, StringComparer.Ordinal))
             return (current.Name, "deny", JsonSerializer.Serialize(current));
         if (current?.Permissions == null) return (current?.Name, "allow", null);
@@ -56,7 +75,7 @@ public sealed class SubAgentRolePolicy(Func<bool> readOnly, string workspace, Ex
         };
         var resource = tool.Name switch
         {
-            "file_read" or "file_write" or "file_edit" or "list_directory" or "file_search" or "everything_search" or "read" or "write" or "edit" or "grep" or "find" or "ls" => _workspace.Value.ResolveForApproval(ToolArguments.Get(arguments, "path", ".")),
+            "file_read" or "file_write" or "file_edit" or "list_directory" or "file_search" or "read" or "write" or "edit" or "grep" or "find" or "ls" => _workspace.Value.ResolveForApproval(ToolArguments.Get(arguments, "path", ".")),
             "run_shell" => ToolArguments.Get<string>(arguments, "exe") + " " + string.Join(" ", ToolArguments.Get<string[]>(arguments, "args", [])),
             "powershell_invoke" or "powershell_command_info" => ToolArguments.Get<string>(arguments, "module") + "\\" + ToolArguments.Get<string>(arguments, "command"),
             "bash" or "powershell" => ToolArguments.Get<string>(arguments, "command", ""),

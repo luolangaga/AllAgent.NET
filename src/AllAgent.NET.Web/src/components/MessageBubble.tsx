@@ -11,17 +11,19 @@ import { ToolTrace } from './ToolTrace'
 import { dataUrl } from '@/lib/attachments'
 import type { Message, ToolCall, ReasoningPart, NoticePart, ImageAttachment } from '@/types'
 import { formatClock } from '@/lib/format'
+import { languageTag, useT } from '@/i18n'
 
 const MAX_CONTENT = 150000
 const MAX_REASONING = 120000
 
 /** One inline run note. Retries settle into「连接已恢复」instead of lingering. */
 function NoticeLine({ part }: { part: NoticePart }) {
+  const tr = useT()
   const retrying = part.kind === 'retry' && part.status === 'pending'
   const failed = part.status === 'failed'
   const recovered = part.kind === 'retry' && part.status === 'settled'
   const text = recovered
-    ? `连接已恢复${part.attempts > 0 ? `（自动重试 ${part.attempts} 次）` : ''}`
+    ? tr('连接已恢复', 'Connection restored') + (part.attempts > 0 ? tr(`（自动重试 ${part.attempts} 次）`, ` (${part.attempts} automatic retries)`) : '')
     : part.text
   return <p
     aria-live={retrying ? 'polite' : undefined}
@@ -38,6 +40,7 @@ function NoticeLine({ part }: { part: NoticePart }) {
 // The streaming store replaces the active message on every event. Completed
 // bubbles keep their references and skip Markdown parsing on subsequent tokens.
 export const MessageBubble = memo(function MessageBubble({ message, awaiting = false }: { message: Message; awaiting?: boolean }) {
+  const tr = useT()
   const [copied, setCopied] = useState(false)
   const [preview, setPreview] = useState<ImageAttachment | null>(null)
   const isUser = message.role === 'user'
@@ -83,17 +86,17 @@ export const MessageBubble = memo(function MessageBubble({ message, awaiting = f
     {!isUser ? <div aria-hidden className="message-mark"><Command size={13} /></div> : null}
     <div className="message-column">
       <header className="message-identity">
-        <strong>{isUser ? '你' : 'AllAgent.NET'}</strong>
-        <span>{streaming ? awaiting ? '等待你的回复' : running ? `正在执行 ${running.name}` : content ? '正在输出…' : hasReasoning ? '正在思考…' : '正在连接模型…' : formatClock(message.createdAt)}</span>
-        {message.iteration ? <Badge color="blue" size="sm" variant="dot">第 {message.iteration.current}{message.iteration.maximum > 0 ? `/${message.iteration.maximum}` : ''} 步</Badge> : null}
-        {message.status === 'error' ? <Badge color="red" size="sm">执行失败</Badge> : null}
-        {message.finishReason === 'cancelled' ? <Badge size="sm">已停止</Badge> : null}
-        {message.finishReason === 'tool_limit' || message.finishReason === 'context_limit' ? <Badge color="amber" size="sm">已达执行上限</Badge> : null}
+        <strong>{isUser ? tr('你', 'You') : 'AllAgent.NET'}</strong>
+        <span>{streaming ? awaiting ? tr('等待你的回复', 'Waiting for your reply') : running ? tr(`正在执行 ${running.name}`, `Running ${running.name}`) : content ? tr('正在输出…', 'Writing…') : hasReasoning ? tr('正在思考…', 'Thinking…') : tr('正在连接模型…', 'Connecting to the model…') : formatClock(message.createdAt)}</span>
+        {message.iteration ? <Badge color="blue" size="sm" variant="dot">{tr(`第 ${message.iteration.current}${message.iteration.maximum > 0 ? `/${message.iteration.maximum}` : ''} 步`, `Step ${message.iteration.current}${message.iteration.maximum > 0 ? `/${message.iteration.maximum}` : ''}`)}</Badge> : null}
+        {message.status === 'error' ? <Badge color="red" size="sm">{tr('执行失败', 'Execution failed')}</Badge> : null}
+        {message.finishReason === 'cancelled' ? <Badge size="sm">{tr('已停止', 'Stopped')}</Badge> : null}
+        {message.finishReason === 'tool_limit' || message.finishReason === 'context_limit' ? <Badge color="amber" size="sm">{tr('已达执行上限', 'Execution limit reached')}</Badge> : null}
       </header>
       <div className="message-surface">
         {images.length ? <div className="message-images">
           {images.map((image, index) => <button
-            aria-label={`查看 ${image.name}`}
+            aria-label={tr(`查看 ${image.name}`, `View ${image.name}`)}
             className="message-image"
             key={`${image.name}-${index}`}
             onClick={() => setPreview(image)}
@@ -115,13 +118,13 @@ export const MessageBubble = memo(function MessageBubble({ message, awaiting = f
             {content ? <Markdown className="message-content" content={content} /> : null}
             {regular.length > 0 ? <ToolTrace calls={regular} /> : null}
           </>}
-        {message.content.length > MAX_CONTENT ? <p className="message-truncated">消息过长，已渲染前 {MAX_CONTENT.toLocaleString('zh-CN')} 个字符；完整内容请用「导出」查看。</p> : null}
+        {message.content.length > MAX_CONTENT ? <p className="message-truncated">{tr(`消息过长，已渲染前 ${MAX_CONTENT.toLocaleString(languageTag())} 个字符；完整内容请用「导出」查看。`, `The message is long; the first ${MAX_CONTENT.toLocaleString(languageTag())} characters are rendered. Use “Export” for the full content.`)}</p> : null}
         {memories.length > 0 ? <ToolTrace calls={memories} /> : null}
-        {message.error ? <Alert appearance="destructive" dismissible={false} message={message.error} timeout={0} title="执行中断" /> : null}
+        {message.error ? <Alert appearance="destructive" dismissible={false} message={message.error} timeout={0} title={tr('执行中断', 'Execution interrupted')} /> : null}
         {!content && !message.toolCalls?.length && !hasReasoning && showThinking
-          ? <div className="message-loading"><ThinkingIndicator words={['正在思考', '拆解任务', '准备工具']} /></div>
+          ? <div className="message-loading"><ThinkingIndicator words={[tr('正在思考', 'Thinking'), tr('拆解任务', 'Breaking down the task'), tr('准备工具', 'Preparing tools')]} /></div>
           : null}
-        {awaiting && streaming ? <p className="reasoning-wait">已暂停 · 等待你的回答或授权</p> : null}
+        {awaiting && streaming ? <p className="reasoning-wait">{tr('已暂停 · 等待你的回答或授权', 'Paused · waiting for your answer or approval')}</p> : null}
         {content && !streaming ? <div className="message-footer">
           <Button
             className="message-copy"
@@ -129,13 +132,13 @@ export const MessageBubble = memo(function MessageBubble({ message, awaiting = f
             onClick={copy}
             size="sm"
             variant="ghost"
-          >{copied ? '已复制' : '复制'}</Button>
+          >{copied ? tr('已复制', 'Copied') : tr('复制', 'Copy')}</Button>
         </div> : null}
       </div>
     </div>
-    {isUser ? <Avatar name="你" size="sm"><AvatarFallback /></Avatar> : null}
+    {isUser ? <Avatar name={tr('你', 'You')} size="sm"><AvatarFallback /></Avatar> : null}
     {preview ? <div className="image-lightbox" onClick={() => setPreview(null)} role="presentation">
-      <button aria-label="关闭预览" className="image-lightbox-close" onClick={() => setPreview(null)} type="button"><X size={16} /></button>
+      <button aria-label={tr('关闭预览', 'Close preview')} className="image-lightbox-close" onClick={() => setPreview(null)} type="button"><X size={16} /></button>
       {/* Clicking the picture itself must not close the overlay. */}
       <img alt={preview.name} onClick={event => event.stopPropagation()} src={dataUrl(preview)} />
     </div> : null}

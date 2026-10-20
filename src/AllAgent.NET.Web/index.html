@@ -4,12 +4,20 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="color-scheme" content="light dark">
-    <meta name="description" content="AllAgent.NET 本地 Agent 工作台：对话、工具执行、模型与技能管理。">
-    <title>AllAgent.NET · 本地 Agent 工作台</title>
+    <meta name="description" content="AllAgent.NET local agent workspace.">
+    <title>AllAgent.NET</title>
     <script>
-      // Apply the system theme before first paint so the workspace never flashes.
+      // Apply the system theme and cached language before first paint so nothing flashes.
       try {
         if (window.matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.classList.add('dark')
+      } catch (_) {}
+      try {
+        var cached = localStorage.getItem('allagent.language')
+        var preferred = navigator.languages && navigator.languages.length ? navigator.languages : [navigator.language || '']
+        var chinese = preferred.some(function (value) { return String(value).toLowerCase().indexOf('zh') === 0 })
+        var language = cached === 'zh' || cached === 'en' ? cached : (chinese ? 'zh' : 'en')
+        document.documentElement.lang = language === 'zh' ? 'zh-CN' : 'en'
+        document.documentElement.dataset.language = language
       } catch (_) {}
     </script>
   </head>

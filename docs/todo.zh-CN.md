@@ -14,7 +14,7 @@
 - `/todo remove 序号`：删除该项。
 - `/todo clear`：清空清单。
 
-桌面聊天中的 TODO 面板显示实时进度，支持添加、删除；状态只读展示，由代理的 `todo_write` 与终端 `/todo start|done|pending` 推进。生成期间暂停手动编辑。
+桌面聊天中的 TODO 面板显示实时进度，支持添加、删除；状态只读展示，由代理的 `todo_write` 与终端 `/todo start|done|pending` 推进。生成期间暂停手动编辑。终端全屏界面在清单非空时于侧栏右下角显示完成数、进度条以及进行中/待处理项，`todo_write` 和 `/todo` 更新后立即刷新。
 
 CodeAct 中使用 `call_tool("todo_read")` 读取，使用 `call_tool("todo_write", todos=[{"id":"1","content":"实现功能","status":"in_progress"}])` 替换完整清单。保留稳定 ID 和未完成项，空数组清空。工具只操作当前执行会话，不接受目标会话 ID；更新清单只记录进度，不会执行任务，也不授予额外权限。
 

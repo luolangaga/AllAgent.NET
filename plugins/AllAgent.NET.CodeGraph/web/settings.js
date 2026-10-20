@@ -1,0 +1,106 @@
+const sdk = AllAgentPlugin.connect();
+const $ = id => document.getElementById(id);
+const state = { workspace: sdk.context.workspace || '', operation: null, busy: false };
+const labels = { running: '执行中', done: '完成', error: '失败', cancelled: '已取消' };
+
+function bytes(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '未知大小';
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function date(value) {
+  if (!value) return '';
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.valueOf()) ? '' : parsed.toLocaleString();
+}
+
+function show(text, error) {
+  const output = $('output');
+  output.hidden = false;
+  output.dataset.error = error ? 'true' : 'false';
+  output.textContent = text || '';
+  sdk.resize();
+}
+
+function setActions(enabled) {
+  for (const id of ['install', 'init', 'sync', 'rebuild']) $(id).disabled = !enabled;
+}
+
+async function refresh() {
+  if (!state.workspace) {
+    $('cli').textContent = '没有可用的工作区';
+    $('cli').dataset.state = 'muted';
+    $('index').textContent = '索引：未选择工作区';
+    $('index').dataset.state = 'muted';
+    setActions(false);
+    return;
+  }
+  try {
+    const status = await sdk.invoke('status', { workspace: state.workspace });
+    $('cli').textContent = status.installed ? `CodeGraph ${status.version || ''}` : 'CodeGraph 未安装';
+    $('cli').dataset.state = status.installed ? 'ok' : 'error';
+    $('path').textContent = status.path || '';
+    $('index').textContent = status.indexed
+      ? `索引已构建 · ${bytes(status.indexBytes)}${date(status.indexUpdatedAt) ? ' · ' + date(status.indexUpdatedAt) : ''}`
+      : '索引未构建';
+    $('index').dataset.state = status.indexed ? 'ok' : 'muted';
+    $('install').disabled = state.busy || status.installed;
+    $('init').disabled = state.busy || !status.installed || status.indexed;
+    $('sync').disabled = state.busy || !status.installed || !status.indexed;
+    $('rebuild').disabled = state.busy || !status.installed || !status.indexed;
+    if (status.detail) show(status.detail);
+    if (status.error) show(status.error, true);
+  } catch (error) {
+    $('cli').textContent = error?.message || String(error);
+    $('cli').dataset.state = 'error';
+    setActions(false);
+  }
+  sdk.resize();
+}
+
+async function track(operation) {
+  state.operation = operation;
+  $('cancel').hidden = false;
+  while (operation.state === 'running') {
+    show(operation.output || '正在执行…');
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    operation = await sdk.invoke('operation', { id: operation.id });
+  }
+  state.operation = null;
+  $('cancel').hidden = true;
+  show(operation.error || operation.output || labels[operation.state] || operation.state, operation.state === 'error');
+  await refresh();
+}
+
+async function begin(method, params) {
+  if (state.busy || state.operation) return;
+  state.busy = true;
+  setActions(false);
+  try {
+    await track(await sdk.invoke(method, params));
+  } catch (error) {
+    show(error?.message || String(error), true);
+  } finally {
+    state.busy = false;
+    await refresh();
+  }
+}
+
+$('install').addEventListener('click', () => void begin('install'));
+$('init').addEventListener('click', () => void begin('index', { workspace: state.workspace, mode: 'init' }));
+$('sync').addEventListener('click', () => void begin('index', { workspace: state.workspace, mode: 'sync' }));
+$('rebuild').addEventListener('click', () => void begin('index', { workspace: state.workspace, mode: 'rebuild' }));
+$('cancel').addEventListener('click', () => {
+  if (state.operation) void sdk.invoke('cancel', { id: state.operation.id }).catch(error => show(error?.message || String(error), true));
+});
+
+sdk.on('context', context => {
+  if (context?.workspace && context.workspace !== state.workspace) {
+    state.workspace = context.workspace;
+    void refresh();
+  }
+});
+
+sdk.ready.then(refresh).catch(error => show(error?.message || String(error), true));

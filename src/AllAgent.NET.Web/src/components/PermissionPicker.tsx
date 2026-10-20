@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
 import { Check, ChevronDown, Eye, ShieldCheck, ShieldOff, ShieldQuestion, Zap } from 'lucide-react'
 import { useStore } from '@/lib/store'
-import { PERMISSION_OPTIONS, permissionHint, permissionLabel } from '@/lib/permissions'
+import { permissionOptions, permissionHint, permissionLabel } from '@/lib/permissions'
 import { useNoticesStore } from '@/stores/ui'
 import { useWorkspaceStore } from '@/stores/workspace'
 
@@ -95,7 +95,7 @@ export function PermissionPicker() {
           <strong>会话权限模式</strong>
           <span>切换立即生效；正在运行的任务从下一次工具调用起采用新模式</span>
         </div>
-        {PERMISSION_OPTIONS.map(option => <button
+        {permissionOptions().map(option => <button
           aria-checked={option.value === mode}
           className={`permission-item ${option.value === mode ? 'is-current' : ''}`}
           key={option.value}

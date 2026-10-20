@@ -2,7 +2,9 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using AllAgent.NET.Core.Bridge;
+using AllAgent.NET.Core.Localization;
 using AllAgent.NET.Core.Runtime;
+using L = AllAgent.NET.Core.Localization.HostText;
 
 namespace AllAgent.NET.Terminal;
 
@@ -70,14 +72,14 @@ internal sealed class GitBridge(string workspace, BridgeEventPusher pusher, Func
             // A ref narrows to one branch/tag; otherwise --all draws the whole graph.
             var reference = string.IsNullOrWhiteSpace(parameters.Ref) ? null : ValidateBranch(parameters.Ref);
             var grep = (parameters.Grep ?? string.Empty).Trim();
-            if (grep.Length > 200) throw new ArgumentException("搜索文本过长。");
+            if (grep.Length > 200) throw new ArgumentException(L.Pick("搜索文本过长。", "The search text is too long."));
             var (commits, more) = await _runner.LogAsync(Math.Max(0, parameters.Skip), take, parameters.All, reference, grep.Length == 0 ? null : grep, ct);
             return new GitLogDto(commits, more);
         });
         dispatcher.Register<GitShowParams, GitShowDto>("git.show", async (parameters, ct) =>
         {
             ValidateHash(parameters.Hash);
-            var commit = await _runner.CommitAsync(parameters.Hash, ct) ?? throw new InvalidOperationException("找不到提交：" + parameters.Hash);
+            var commit = await _runner.CommitAsync(parameters.Hash, ct) ?? throw new InvalidOperationException(L.Pick("找不到提交：", "Commit not found: ") + parameters.Hash);
             var body = await _runner.CommitBodyAsync(parameters.Hash, ct);
             var files = await _runner.ShowFilesAsync(parameters.Hash, ct);
             return new GitShowDto(commit, body, files);
@@ -122,8 +124,8 @@ internal sealed class GitBridge(string workspace, BridgeEventPusher pusher, Func
         dispatcher.Register<GitCommitParams, GitStatusDto>("git.commit", async (parameters, ct) =>
         {
             var message = (parameters.Message ?? string.Empty).Trim();
-            if (message.Length == 0 && !parameters.Amend) throw new ArgumentException("请填写提交信息。");
-            if (message.Length > MaxMessage) throw new ArgumentException("提交信息过长。");
+            if (message.Length == 0 && !parameters.Amend) throw new ArgumentException(L.Pick("请填写提交信息。", "Enter a commit message."));
+            if (message.Length > MaxMessage) throw new ArgumentException(L.Pick("提交信息过长。", "The commit message is too long."));
             // The single-list UI checks the files to include: stage them, then drop index entries
             // of unchecked files so the commit carries exactly the checked selection. Paths that
             // vanished since the page rendered (already committed/deleted) are ignored.
@@ -134,7 +136,7 @@ internal sealed class GitBridge(string workspace, BridgeEventPusher pusher, Func
                 var known = new HashSet<string>(current.Staged.Concat(current.Unstaged).Concat(current.Untracked).Concat(current.Conflicted)
                     .Select(entry => entry.Path), StringComparer.Ordinal);
                 var selection = requested.Where(known.Contains).ToArray();
-                if (selection.Length == 0) throw new InvalidOperationException("所选文件已不在更改列表中（可能已被提交或删除），请刷新后重试。");
+                if (selection.Length == 0) throw new InvalidOperationException(L.Pick("所选文件已不在更改列表中（可能已被提交或删除），请刷新后重试。", "The selected files are no longer in the change list (they may have been committed or deleted); refresh and retry."));
                 // A path-limited `git add -A -- path` fails for a staged deletion (the path exists in
                 // neither the index nor the worktree), so stage the whole tree and reset the rest.
                 await _runner.MustAsync(["add", "-A"], ct, TimeSpan.FromMinutes(2));
@@ -158,8 +160,8 @@ internal sealed class GitBridge(string workspace, BridgeEventPusher pusher, Func
         {
             var name = (parameters.Name ?? string.Empty).Trim();
             var email = (parameters.Email ?? string.Empty).Trim();
-            if (name.Length == 0 || name.Length > 128) throw new ArgumentException("请填写 Git 用户名。");
-            if (!email.Contains('@') || email.Length > 256) throw new ArgumentException("请填写有效的 Git 邮箱。");
+            if (name.Length == 0 || name.Length > 128) throw new ArgumentException(L.Pick("请填写 Git 用户名。", "Enter a Git user name."));
+            if (!email.Contains('@') || email.Length > 256) throw new ArgumentException(L.Pick("请填写有效的 Git 邮箱。", "Enter a valid Git email address."));
             await _runner.MustAsync(["config", "user.name", name], ct);
             await _runner.MustAsync(["config", "user.email", email], ct);
             return await _runner.IdentityAsync(ct);
@@ -206,7 +208,7 @@ internal sealed class GitBridge(string workspace, BridgeEventPusher pusher, Func
         {
             var paths = Clean([parameters.Path ?? string.Empty]);
             var side = (parameters.Side ?? string.Empty).Trim().ToLowerInvariant();
-            if (side is not ("ours" or "theirs")) throw new ArgumentException("解决方式只能是 ours 或 theirs。");
+            if (side is not ("ours" or "theirs")) throw new ArgumentException(L.Pick("解决方式只能是 ours 或 theirs。", "Resolution must be ours or theirs."));
             await _runner.MustAsync(Args(["checkout", side == "ours" ? "--ours" : "--theirs", "--"], paths), ct, TimeSpan.FromMinutes(2));
             await _runner.MustAsync(Args(["add", "--"], paths), ct, TimeSpan.FromMinutes(2));
             return await StatusAsync(ct);
@@ -225,13 +227,13 @@ internal sealed class GitBridge(string workspace, BridgeEventPusher pusher, Func
         });
         dispatcher.Register<GitStatusDto>("git.operationContinue", async (ct) =>
         {
-            var operation = await _runner.OperationAsync(ct) ?? throw new InvalidOperationException("当前没有进行中的操作。");
+            var operation = await _runner.OperationAsync(ct) ?? throw new InvalidOperationException(L.Pick("当前没有进行中的操作。", "There is no operation in progress."));
             await _runner.MustAsync([operation, "--continue"], ct, TimeSpan.FromMinutes(5));
             return await StatusAsync(ct);
         });
         dispatcher.Register<GitStatusDto>("git.operationAbort", async (ct) =>
         {
-            var operation = await _runner.OperationAsync(ct) ?? throw new InvalidOperationException("当前没有进行中的操作。");
+            var operation = await _runner.OperationAsync(ct) ?? throw new InvalidOperationException(L.Pick("当前没有进行中的操作。", "There is no operation in progress."));
             await _runner.MustAsync([operation, "--abort"], ct, TimeSpan.FromMinutes(2));
             return await StatusAsync(ct);
         });
@@ -251,20 +253,20 @@ internal sealed class GitBridge(string workspace, BridgeEventPusher pusher, Func
             }
             return remotes.Select(pair => new GitRemoteInfo(pair.Key, pair.Value.Url, pair.Value.Push)).ToList();
         });
-        dispatcher.Register<GitJobDto>("git.fetch", _ => Task.FromResult(StartJob("获取远程更新", ["fetch", "--all", "--prune", "--progress"])));
+        dispatcher.Register<GitJobDto>("git.fetch", _ => Task.FromResult(StartJob(L.Pick("获取远程更新", "Fetch remote updates"), ["fetch", "--all", "--prune", "--progress"])));
         dispatcher.Register<GitPullParams, GitJobDto>("git.pull", (parameters, _) =>
-            Task.FromResult(StartJob("拉取更新", ["pull", "--progress", parameters.Rebase ? "--rebase" : "--no-rebase"])));
+            Task.FromResult(StartJob(L.Pick("拉取更新", "Pull updates"), ["pull", "--progress", parameters.Rebase ? "--rebase" : "--no-rebase"])));
         dispatcher.Register<GitPushParams, GitJobDto>("git.push", async (parameters, ct) =>
         {
             var args = new List<string> { "push", "--progress" };
             if (parameters.SetUpstream)
             {
                 var status = await _runner.StatusAsync(ct);
-                var branch = status.Branch ?? throw new InvalidOperationException("当前处于游离 HEAD 状态，无法设置上游分支。");
+                var branch = status.Branch ?? throw new InvalidOperationException(L.Pick("当前处于游离 HEAD 状态，无法设置上游分支。", "HEAD is detached; cannot set an upstream branch."));
                 args.Add("--set-upstream"); args.Add("origin"); args.Add(branch);
             }
             if (parameters.ForceWithLease) args.Add("--force-with-lease");
-            return StartJob(parameters.SetUpstream ? "推送并设置上游" : "推送", args);
+            return StartJob(parameters.SetUpstream ? L.Pick("推送并设置上游", "Push and set upstream") : L.Pick("推送", "Push"), args);
         });
         dispatcher.Register<GitStatusDto>("git.init", async (ct) =>
         {
@@ -308,10 +310,10 @@ internal sealed class GitBridge(string workspace, BridgeEventPusher pusher, Func
     {
         // The dispatcher hands a null payload when the caller sends no params.
         var apiConfigId = parameters?.ApiConfigId;
-        if (complete == null) throw new InvalidOperationException("当前宿主未提供模型，无法生成提交信息；请在「模型与 API」中配置后再试。");
-        if (!await _runner.IsRepositoryAsync(ct)) throw new InvalidOperationException("当前工作区不是 Git 仓库。");
+        if (complete == null) throw new InvalidOperationException(L.Pick("当前宿主未提供模型，无法生成提交信息；请在「模型与 API」中配置后再试。", "The host has no model; configure one in Models & API and try again."));
+        if (!await _runner.IsRepositoryAsync(ct)) throw new InvalidOperationException(L.Pick("当前工作区不是 Git 仓库。", "The current workspace is not a Git repository."));
         var status = await _runner.StatusAsync(ct);
-        if (status.Count == 0) throw new InvalidOperationException("没有可提交的改动；先修改文件并暂存，再生成提交信息。");
+        if (status.Count == 0) throw new InvalidOperationException(L.Pick("没有可提交的改动；先修改文件并暂存，再生成提交信息。", "There are no changes to commit; modify and stage files first."));
         // Staged changes win (they define the next commit); otherwise describe the whole worktree.
         var staged = status.Staged.Count > 0;
         var patchArgs = new List<string> { "diff", "--no-color", "--unified=2", "--find-renames" };
@@ -320,31 +322,32 @@ internal sealed class GitBridge(string workspace, BridgeEventPusher pusher, Func
         var patch = await _runner.RunAsync(patchArgs, ct, TimeSpan.FromSeconds(60), MaxPromptCharacters);
         var recent = await _runner.LogAsync(0, 10, false, null, null, ct);
 
+        var language = L.Language == UiLanguage.Zh ? "Simplified Chinese" : "English";
         var prompt = new StringBuilder();
-        prompt.AppendLine("请为下面的改动写一条 Git 提交信息。");
-        prompt.AppendLine("要求：第一行是简洁摘要（不超过 72 个字符、不加句号）；改动较多时空一行后列 2-5 条要点；");
-        prompt.AppendLine("语言、格式与下面的「最近提交」保持一致；只输出提交信息本身，不要解释、不要 Markdown 代码块。");
+        prompt.AppendLine("Write one Git commit message for the changes below.");
+        prompt.AppendLine("Requirements: the first line is a concise summary (<=72 characters, no trailing period); for larger changes, add a blank line and 2-5 bullet points.");
+        prompt.AppendLine($"Write the message in {language}, regardless of the language of the recent commits. Use the recent commits only as a style/format reference. Output only the commit message itself, no explanations or Markdown fences.");
         if (recent.Commits.Count > 0)
         {
             prompt.AppendLine();
-            prompt.AppendLine("最近提交（风格参考）：");
+            prompt.AppendLine("Recent commits (style reference only):");
             foreach (var commit in recent.Commits) prompt.AppendLine("- " + commit.Subject);
         }
         prompt.AppendLine();
-        prompt.AppendLine(staged ? "已暂存的改动：" : "工作区改动（尚未暂存）：");
+        prompt.AppendLine(staged ? "Staged changes:" : "Working-tree changes (not staged):");
         if (!string.IsNullOrWhiteSpace(stat.Stdout)) prompt.AppendLine(stat.Stdout.Trim());
-        prompt.AppendLine(string.IsNullOrWhiteSpace(patch.Stdout) ? "（没有文本差异，可能只包含新增或二进制文件。）" : patch.Stdout);
+        prompt.AppendLine(string.IsNullOrWhiteSpace(patch.Stdout) ? "(No textual diff; the change may only add files or binaries.)" : patch.Stdout);
         if (!staged)
         {
             var untracked = await UntrackedDigestAsync(status.Untracked, ct);
             if (untracked.Length > 0) prompt.AppendLine(untracked);
         }
         if (patch.Truncated || prompt.Length > MaxPromptCharacters)
-            prompt.AppendLine("（注意：改动内容过长已截断，放宽描述粒度。）");
+            prompt.AppendLine("(Note: the change was truncated because it is large; describe it at a higher level.)");
 
         var generated = await complete(prompt.ToString(), apiConfigId, ct);
         var message = CleanDraft(generated);
-        if (message.Length == 0) throw new InvalidOperationException("模型没有返回提交信息；请重试或手动填写。");
+        if (message.Length == 0) throw new InvalidOperationException(L.Pick("模型没有返回提交信息；请重试或手动填写。", "The model did not return a commit message; retry or write one manually."));
         return message;
     }
 
@@ -354,15 +357,15 @@ internal sealed class GitBridge(string workspace, BridgeEventPusher pusher, Func
         if (files.Count == 0) return string.Empty;
         var digest = new StringBuilder();
         digest.AppendLine();
-        digest.AppendLine("未跟踪的新文件：");
+        digest.AppendLine("Untracked new files:");
         foreach (var entry in files.Take(8))
         {
-            digest.AppendLine("--- " + entry.Path + " (新文件) ---");
+            digest.AppendLine("--- " + entry.Path + " (new file) ---");
             var (text, _, note) = await ReadUntrackedAsync(entry.Path, ct);
-            if (note != null && text.Length == 0) { digest.AppendLine("（" + note.TrimEnd('。') + "）"); continue; }
-            digest.AppendLine(text.Length > 1500 ? text[..1500] + "\n…（已截断）" : text);
+            if (note != null && text.Length == 0) { digest.AppendLine("(" + note.TrimEnd('.', '。') + ")"); continue; }
+            digest.AppendLine(text.Length > 1500 ? text[..1500] + "\n…(truncated)" : text);
         }
-        if (files.Count > 8) digest.AppendLine($"…以及另外 {files.Count - 8} 个新文件。");
+        if (files.Count > 8) digest.AppendLine($"…and {files.Count - 8} more new files.");
         return digest.ToString();
     }
 
@@ -416,12 +419,12 @@ internal sealed class GitBridge(string workspace, BridgeEventPusher pusher, Func
                 var (text, truncated, note) = await ReadUntrackedAsync(path, ct);
                 var added = UnifiedDiff.ParseAdded(text);
                 return new GitDiffDto(path, null, false, added.Added, added.Removed, added.Truncated || truncated, false,
-                    added.Rows, note ?? "未跟踪文件 · 全部显示为新增。");
+                    added.Rows, note ?? L.Pick("未跟踪文件 · 全部显示为新增。", "Untracked file · all lines shown as additions."));
             }
         }
         var patch = await _runner.DiffAsync(path, parameters.Staged, parameters.Commit, ct);
-        return new GitDiffDto(path ?? "全部更改", parameters.Commit, parameters.Staged, patch.Added, patch.Removed, patch.Truncated,
-            patch.Binary, patch.Rows, patch.Binary ? "二进制文件，无法显示文本差异。" : null);
+        return new GitDiffDto(path ?? L.Pick("全部更改", "All changes"), parameters.Commit, parameters.Staged, patch.Added, patch.Removed, patch.Truncated,
+            patch.Binary, patch.Rows, patch.Binary ? L.Pick("二进制文件，无法显示文本差异。", "Binary file; no textual diff available.") : null);
     }
 
     private async Task<(string Text, bool Truncated, string? Note)> ReadUntrackedAsync(string path, CancellationToken ct)
@@ -430,8 +433,8 @@ internal sealed class GitBridge(string workspace, BridgeEventPusher pusher, Func
         var root = Path.GetFullPath(await _runner.CwdAsync(ct));
         var full = Path.GetFullPath(path.Replace('/', Path.DirectorySeparatorChar), root);
         var prefix = Path.TrimEndingDirectorySeparator(root) + Path.DirectorySeparatorChar;
-        if (!full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("路径越界：" + path);
-        if (!File.Exists(full)) return (string.Empty, false, "文件不存在或已被删除。");
+        if (!full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException(L.Pick("路径越界：", "Path escapes the workspace: ") + path);
+        if (!File.Exists(full)) return (string.Empty, false, L.Pick("文件不存在或已被删除。", "The file does not exist or was deleted."));
         var info = new FileInfo(full);
         var length = (int)Math.Min(info.Length, MaxUntrackedBytes);
         var bytes = new byte[length];
@@ -449,12 +452,12 @@ internal sealed class GitBridge(string workspace, BridgeEventPusher pusher, Func
         try
         {
             var text = new UTF8Encoding(false, true).GetString(bytes, 0, length);
-            if (text.Contains('\0')) return (string.Empty, false, "二进制文件，无法显示文本差异。");
+            if (text.Contains('\0')) return (string.Empty, false, L.Pick("二进制文件，无法显示文本差异。", "Binary file; no textual diff available."));
             return info.Length > MaxUntrackedBytes
-                ? (text, true, "文件较大，仅显示前 256 KB。")
+                ? (text, true, L.Pick("文件较大，仅显示前 256 KB。", "The file is large; only the first 256 KB is shown."))
                 : (text, false, null);
         }
-        catch (DecoderFallbackException) { return (string.Empty, false, "二进制文件，无法显示文本差异。"); }
+        catch (DecoderFallbackException) { return (string.Empty, false, L.Pick("二进制文件，无法显示文本差异。", "Binary file; no textual diff available.")); }
     }
 
     private GitJobDto StartJob(string label, IReadOnlyList<string> args)
@@ -485,7 +488,7 @@ internal sealed class GitBridge(string workspace, BridgeEventPusher pusher, Func
                     if (line.Trim().Length == 0) return;
                     if (emitted >= MaxJobLines)
                     {
-                        if (!truncated) { truncated = true; Push("git.output", new { jobId = id, text = "… 输出过多，后续内容已省略。", error = false }); }
+                        if (!truncated) { truncated = true; Push("git.output", new { jobId = id, text = L.Pick("… 输出过多，后续内容已省略。", "… output is too long; the rest was omitted."), error = false }); }
                         return;
                     }
                     emitted++;
@@ -495,7 +498,7 @@ internal sealed class GitBridge(string workspace, BridgeEventPusher pusher, Func
                 Emit(pending[0], false);
                 Emit(pending[1], true);
                 var ok = result.Ok;
-                var message = ok ? (label + "完成。") : GitRunner.Friendly(result);
+                var message = ok ? (label + L.Pick("完成。", " finished.")) : GitRunner.Friendly(result);
                 Push("git.done", new { jobId = id, label, ok, message });
             }
             catch (Exception ex)
@@ -508,15 +511,15 @@ internal sealed class GitBridge(string workspace, BridgeEventPusher pusher, Func
 
     private async Task<GitInstallResult> InstallAsync(CancellationToken ct)
     {
-        if (_runner.Executable != null) return new GitInstallResult(true, "已安装：" + _runner.Executable);
+        if (_runner.Executable != null) return new GitInstallResult(true, L.Pick("已安装：", "Installed: ") + _runner.Executable);
         var winget = EnvironmentDoctor.FindExecutable("winget.exe")
-            ?? throw new InvalidOperationException("未找到 winget，无法自动安装 Git。请手动安装 Git for Windows 后重启 AllAgent。");
+            ?? throw new InvalidOperationException(L.Pick("未找到 winget，无法自动安装 Git。请手动安装 Git for Windows 后重启 AllAgent。", "winget was not found; install Git for Windows manually and restart AllAgent."));
         var result = await BoundedProcess.RunAsync(BoundedProcess.StartInfo(winget,
             ["install", "--id", "Git.Git", "--exact", "--source", "winget", "--silent", "--accept-source-agreements", "--accept-package-agreements"]),
             TimeSpan.FromMinutes(15), ct);
         var text = result.Stderr + result.Stdout;
         if (result.ExitCode != 0 && !text.Contains("already installed", StringComparison.OrdinalIgnoreCase))
-            return new GitInstallResult(false, "winget 安装失败：" + Clip(text));
+            return new GitInstallResult(false, L.Pick("winget 安装失败：", "winget installation failed: ") + Clip(text));
         // A freshly installed git is not on this process's PATH yet; refresh machine + user entries.
         var refreshed = (Environment.GetEnvironmentVariable("PATH") ?? "") + ";" +
             Environment.GetEnvironmentVariable("PATH", EnvironmentVariableTarget.Machine) + ";" +
@@ -524,8 +527,8 @@ internal sealed class GitBridge(string workspace, BridgeEventPusher pusher, Func
         Environment.SetEnvironmentVariable("PATH", refreshed);
         var located = _runner.RefreshExecutable();
         return located == null
-            ? new GitInstallResult(false, "Git 已安装，但当前进程尚未能定位 git.exe；请重启 AllAgent 后重试。")
-            : new GitInstallResult(true, "已安装：" + located);
+            ? new GitInstallResult(false, L.Pick("Git 已安装，但当前进程尚未能定位 git.exe；请重启 AllAgent 后重试。", "Git is installed but this process cannot locate git.exe yet; restart AllAgent and retry."))
+            : new GitInstallResult(true, L.Pick("已安装：", "Installed: ") + located);
     }
 
     private void Push(string eventName, object data)
@@ -547,17 +550,17 @@ internal sealed class GitBridge(string workspace, BridgeEventPusher pusher, Func
 
     private static List<string> Clean(IReadOnlyList<string> paths)
     {
-        if (paths == null || paths.Count == 0) throw new ArgumentException("请选择要操作的文件。");
-        if (paths.Count > MaxPaths) throw new ArgumentException("一次最多操作 " + MaxPaths + " 个文件。");
+        if (paths == null || paths.Count == 0) throw new ArgumentException(L.Pick("请选择要操作的文件。", "Select files to operate on."));
+        if (paths.Count > MaxPaths) throw new ArgumentException(L.Pick("一次最多操作 " + MaxPaths + " 个文件。", "At most " + MaxPaths + " files per operation."));
         var result = new List<string>(paths.Count);
         foreach (var path in paths)
         {
             var trimmed = (path ?? string.Empty).Trim();
             if (trimmed.Length == 0) continue;
-            if (trimmed.Length > 1024 || trimmed.Contains('\0')) throw new ArgumentException("路径无效：" + trimmed);
+            if (trimmed.Length > 1024 || trimmed.Contains('\0')) throw new ArgumentException(L.Pick("路径无效：", "Invalid path: ") + trimmed);
             result.Add(trimmed);
         }
-        if (result.Count == 0) throw new ArgumentException("请选择要操作的文件。");
+        if (result.Count == 0) throw new ArgumentException(L.Pick("请选择要操作的文件。", "Select files to operate on."));
         return result;
     }
 
@@ -572,18 +575,18 @@ internal sealed class GitBridge(string workspace, BridgeEventPusher pusher, Func
     {
         var trimmed = (name ?? string.Empty).Trim();
         if (trimmed.Length == 0 || trimmed.Length > 255 || !BranchName.IsMatch(trimmed) || trimmed.StartsWith('-'))
-            throw new ArgumentException("分支名称无效：" + name);
+            throw new ArgumentException(L.Pick("分支名称无效：", "Invalid branch name: ") + name);
         return trimmed;
     }
 
     private static void ValidateHash(string hash)
     {
-        if (string.IsNullOrWhiteSpace(hash) || !Hash.IsMatch(hash.Trim())) throw new ArgumentException("提交哈希无效：" + hash);
+        if (string.IsNullOrWhiteSpace(hash) || !Hash.IsMatch(hash.Trim())) throw new ArgumentException(L.Pick("提交哈希无效：", "Invalid commit hash: ") + hash);
     }
 
     private static string StashRef(int index)
     {
-        if (index < 0 || index > 9999) throw new ArgumentException("贮藏编号无效。");
+        if (index < 0 || index > 9999) throw new ArgumentException(L.Pick("贮藏编号无效。", "Invalid stash index."));
         return "stash@{" + index + "}";
     }
 

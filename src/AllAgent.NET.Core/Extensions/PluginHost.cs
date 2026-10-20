@@ -23,6 +23,7 @@ public sealed class PluginHost : IAsyncDisposable
     private void RaiseChanged() => Changed?.Invoke();
     private readonly Dictionary<string, string> _errors = new(StringComparer.OrdinalIgnoreCase);
     private readonly string _root;
+    private readonly PluginSettingsStore _settings;
     private readonly object _sync = new();
     private IReadOnlyList<InstalledPlugin>? _installedSnapshot;
     private (long Length, DateTime Modified)? _manifestStamp;
@@ -32,7 +33,7 @@ public sealed class PluginHost : IAsyncDisposable
     public void ReserveAuthenticationIds(params string[] ids) { lock (_sync) { if (_loaded.Count > 0) throw new InvalidOperationException("必须在加载插件前保留登录 ID。"); foreach (var id in ids) _reservedAuthenticationIds.Add(id); } }
     private readonly System.Collections.Concurrent.ConcurrentDictionary<Type, object> _services = new();
     public void ProvideService<T>(T service) where T : class => _services[typeof(T)] = service;
-    public PluginHost(string dataDirectory) { _root = Path.Combine(Path.GetFullPath(dataDirectory), "plugins"); Directory.CreateDirectory(_root); if (File.Exists(Path.Combine(_root, "disabled-hooks.json"))) foreach (var name in JsonSerializer.Deserialize<string[]>(File.ReadAllText(Path.Combine(_root, "disabled-hooks.json"))) ?? []) _disabledHooks.Add(name); Hooks = new(() => HookSnapshot()); }
+    public PluginHost(string dataDirectory) { _root = Path.Combine(Path.GetFullPath(dataDirectory), "plugins"); Directory.CreateDirectory(_root); _settings = new PluginSettingsStore(_root); if (File.Exists(Path.Combine(_root, "disabled-hooks.json"))) foreach (var name in JsonSerializer.Deserialize<string[]>(File.ReadAllText(Path.Combine(_root, "disabled-hooks.json"))) ?? []) _disabledHooks.Add(name); Hooks = new(() => HookSnapshot()); }
     public HookPipeline Hooks { get; }
     public AgentExtensionPipeline Extensions => new(
         () => { lock (_sync) return _loaded.SelectMany(l => l.Context.TurnExtensions).ToArray(); },
@@ -61,7 +62,7 @@ public sealed class PluginHost : IAsyncDisposable
     public IReadOnlyList<PluginStatus> Status => Installed.Select(p => { lock (_sync) { var loaded = _loaded.FirstOrDefault(l => l.Package.PackageId.Equals(p.PackageId, StringComparison.OrdinalIgnoreCase)); _web.TryGetValue(p.PackageId, out var web); return new PluginStatus(loaded?.Plugin.Id ?? p.PackageId, loaded?.Plugin.Name ?? p.PackageId, p.PackageId, p.Version, p.Enabled, _errors.GetValueOrDefault(p.PackageId),
         loaded == null ? [] : loaded.Context.Tools.SelectMany(t => t.Definitions).Select(d => d.Name).ToArray(),
         loaded == null ? [] : loaded.Context.Commands.Select(c => c.Name).ToArray(),
-        web == null ? null : new PluginWebStatus(p.WebEnabled, web.Contributions.Pages?.Count ?? 0, web.Contributions.Panels?.Count ?? 0, web.Contributions.ToolCards?.Count ?? 0, web.Manifest.Capabilities ?? [], web.Error)); } }).ToArray();
+        web == null ? null : new PluginWebStatus(p.WebEnabled, web.Contributions.Pages?.Count ?? 0, web.Contributions.Panels?.Count ?? 0, web.Contributions.ToolCards?.Count ?? 0, web.Manifest.Capabilities ?? [], web.Error) { Settings = web.Contributions.Settings?.Count ?? 0 }); } }).ToArray();
     /// <summary>Every loaded plugin tool with the package it belongs to, for source attribution in tool catalogs.</summary>
     public IReadOnlyList<(string PackageId, AgentToolDescriptor Tool)> PluginTools
     {
@@ -146,6 +147,39 @@ public sealed class PluginHost : IAsyncDisposable
     {
         var package = Installed.Single(p => p.PackageId.Equals(packageId, StringComparison.OrdinalIgnoreCase));
         Save(package with { WebEnabled = enabled });
+    }
+
+    /// <summary>Values declared by a plugin's web settings sections, for the host settings page.</summary>
+    public IReadOnlyDictionary<string, string> SettingsSnapshot(string packageId)
+    {
+        var declared = DeclaredSettings(packageId).ToHashSet(StringComparer.Ordinal);
+        return _settings.GetAll(packageId)
+            .Where(pair => declared.Contains(pair.Key))
+            .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+    }
+
+    /// <summary>Setting keys declared by the plugin manifest; the host refuses undeclared writes.</summary>
+    public IReadOnlyCollection<string> DeclaredSettings(string packageId)
+    {
+        lock (_sync)
+        {
+            if (!_web.TryGetValue(packageId, out var web) || web.Error != null) return [];
+            return web.Contributions.Settings?
+                .SelectMany(section => section.Fields ?? [])
+                .Select(field => field.Key)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray() ?? [];
+        }
+    }
+
+    /// <summary>Host-side write path: only keys the manifest declared are accepted.</summary>
+    public bool SetSetting(string packageId, string key, string? value)
+    {
+        if (!DeclaredSettings(packageId).Contains(key ?? "", StringComparer.Ordinal))
+            throw new ArgumentException("插件未声明该设置项。", nameof(key));
+        _settings.Set(packageId, key!, value);
+        RaiseChanged();
+        return true;
     }
 
     /// <summary>Install directory of an active web plugin, or null when its assets must not be served.</summary>
@@ -258,7 +292,7 @@ public sealed class PluginHost : IAsyncDisposable
         {
             var type = loader.LoadEntry(path).GetType(manifest.EntryType, true)!;
             plugin = Activator.CreateInstance(type) as IAllAgentPlugin ?? throw new InvalidDataException("入口类型必须实现 IAllAgentPlugin。");
-            var context = new PluginContext(Path.Combine(directory, "data"), _services, package.PackageId, WebEvents); Directory.CreateDirectory(context.DataDirectory); plugin.Register(context);
+            var context = new PluginContext(Path.Combine(directory, "data"), _services, package.PackageId, WebEvents, _settings); Directory.CreateDirectory(context.DataDirectory); plugin.Register(context);
             var web = ValidateWeb(directory, manifest.Web, context);
             lock (_sync)
             {

@@ -133,6 +133,80 @@ public sealed class ConfigStorageSplitTests
     }
 
     [Fact]
+    public void does_not_create_a_shared_manifest_from_an_empty_workspace()
+    {
+        using var workspace = new TestWorkspace();
+        var data = Path.Combine(workspace.Root, "data");
+        var shared = Path.Combine(workspace.Root, "shared");
+        Directory.CreateDirectory(data);
+        File.WriteAllText(Path.Combine(data, "allagent.json"), JsonSerializer.Serialize(new { version = 3 }));
+
+        using var store = new DataStore(data, false, shared);
+
+        Assert.Empty(store.ApiConfigs);
+        // A missing shared file can be a transient state (another process replacing it).
+        // Startup must never manufacture an empty manifest that then hides the real one.
+        Assert.False(File.Exists(Path.Combine(shared, "allagent.json")));
+    }
+
+    [Fact]
+    public void recovers_the_shared_manifest_from_backup_when_main_is_missing()
+    {
+        using var workspace = new TestWorkspace();
+        var shared = Path.Combine(workspace.Root, "shared");
+        var main = Path.Combine(shared, "allagent.json");
+        var backup = main + ".bak";
+        using (var store = new DataStore(Path.Combine(workspace.Root, "first"), false, shared))
+            store.AddApiConfig(Provider("recovered-provider"));
+
+        File.Move(main, backup, overwrite: true);
+        File.Delete(main);
+
+        using var recovered = new DataStore(Path.Combine(workspace.Root, "second"), false, shared);
+
+        Assert.Equal("recovered-provider", Assert.Single(recovered.ApiConfigs).DisplayName);
+        Assert.True(File.Exists(main));
+    }
+
+    [Fact]
+    public void refuses_to_replace_an_unreadable_shared_manifest()
+    {
+        using var workspace = new TestWorkspace();
+        var shared = Path.Combine(workspace.Root, "shared");
+        Directory.CreateDirectory(shared);
+        var main = Path.Combine(shared, "allagent.json");
+        File.WriteAllText(main, "{ not valid json");
+
+        Assert.Throws<InvalidDataException>(() => new DataStore(Path.Combine(workspace.Root, "data"), false, shared));
+        Assert.Equal("{ not valid json", File.ReadAllText(main));
+    }
+
+    [Fact]
+    public void seeds_the_shared_manifest_from_a_legacy_workspace_login_behind_an_empty_manifest()
+    {
+        using var workspace = new TestWorkspace();
+        var data = Path.Combine(workspace.Root, "data");
+        var shared = Path.Combine(workspace.Root, "shared");
+        Directory.CreateDirectory(data);
+        // The current manifest exists but carries no configuration (the workspace layout
+        // keeps providers in the shared file); the pre-split file still has the login.
+        File.WriteAllText(Path.Combine(data, "allagent.json"), JsonSerializer.Serialize(new { version = 3 }));
+        File.WriteAllText(Path.Combine(data, "lanagent.json"), JsonSerializer.Serialize(new
+        {
+            version = 3,
+            apiConfigs = new[] { Provider("legacy-provider") },
+            appSettings = new Dictionary<string, string> { ["terminal:lastConfig"] = "legacy-config" },
+        }));
+
+        using var store = new DataStore(data, false, shared);
+
+        Assert.Equal("legacy-provider", Assert.Single(store.ApiConfigs).DisplayName);
+        Assert.Equal("legacy-config", store.GetSetting("terminal:lastConfig"));
+        var sharedJson = File.ReadAllText(Path.Combine(shared, "allagent.json"));
+        Assert.Contains("legacy-provider", sharedJson);
+    }
+
+    [Fact]
     public void legacy_small_output_limits_follow_the_model_catalog_once()
     {
         using var workspace = new TestWorkspace();

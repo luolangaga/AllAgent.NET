@@ -126,6 +126,44 @@ describe('tool card summaries', () => {
     expect(card.body).toMatchObject({ kind: 'paths', more: true })
   })
 
+  it('lists file_search name-mode files', () => {
+    const card = describeToolCard(call({
+      id: 'p2', name: 'file_search', args: JSON.stringify({ names_only: true, file_pattern: '*.tsx' }),
+      output: JSON.stringify({ ok: true, data: { mode: 'names', pattern: '', path: '.', file_pattern: '*.tsx', files: ['src/a.tsx', 'src/b.tsx'], hasMore: false } }),
+    }))
+    expect(card.label).toBe('搜索文件名')
+    expect(card.target).toBe('*.tsx')
+    expect(card.badges.map(badge => badge.text)).toEqual(['2 个文件'])
+    expect(card.body).toMatchObject({ kind: 'paths', paths: ['src/a.tsx', 'src/b.tsx'] })
+  })
+
+  it('marks an approved plan proposal and keeps the compact preview', () => {
+    const card = describeToolCard(call({
+      id: 'plan-1', name: 'plan_propose',
+      args: JSON.stringify({ title: 'Add plan mode', markdown: '# Plan\n\nImplement it.', markdownCharacters: 24 }),
+      output: JSON.stringify({ ok: true, data: { approved: true, mode: 'full' } }),
+    }))
+    expect(card.label).toBe('提交计划')
+    expect(card.target).toBe('Add plan mode')
+    expect(card.badges).toEqual([{ text: '已批准', tone: 'ok' }])
+    expect(card.body.kind).toBe('json')
+  })
+
+  it('renders a declarative card attached to the result', () => {
+    const card = describeToolCard(call({
+      id: 'cg1', name: 'codegraph_explore', args: JSON.stringify({ query: 'AgentEngine' }),
+      output: JSON.stringify({ ok: true, data: { output: 'source' }, card: {
+        badge: 'CODEGRAPH', title: 'AgentEngine 如何选择工具？', summary: '12.4k 字符', body: 'code',
+        text: 'src/AgentEngine.cs:1',
+        fields: [{ label: '工作区', value: 'LanAgent' }, { label: '截断', value: '否', tone: 'muted' }],
+      } }),
+    }))
+    expect(card.label).toBe('AgentEngine 如何选择工具？')
+    expect(card.target).toBe('12.4k 字符')
+    expect(card.badges).toEqual([{ text: '工作区: LanAgent', tone: 'muted' }, { text: '截断: 否', tone: 'muted' }])
+    expect(card.body).toMatchObject({ kind: 'code', code: 'src/AgentEngine.cs:1' })
+  })
+
   it('falls back to raw arguments and result for unknown tools', () => {
     const card = describeToolCard(call({
       id: 'x1', name: 'mcp_abc_lookup', args: JSON.stringify({ url: 'https://example.com' }),

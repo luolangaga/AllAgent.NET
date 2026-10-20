@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using AllAgent.NET.Core.Data;
 using AllAgent.NET.Core.Services;
+using L = AllAgent.NET.Core.Localization.HostText;
 using Spectre.Console;
 using Spectre.Console.Rendering;
 
@@ -81,7 +82,7 @@ internal sealed class FullScreenTerminal : IDisposable
     private int _lastWidth, _lastHeight;
     private DateTime _skillsChecked;
     private int _enabledSkills;
-    private string _status = "准备就绪";
+    private string _status = L.Pick("准备就绪", "Ready");
     private IRenderable? _activity, _dialog, _conversationPrompt;
     private bool _busyDialogActive;
     private InputState _input = new();
@@ -122,10 +123,12 @@ internal sealed class FullScreenTerminal : IDisposable
     /// <summary>Runs living in the other workspaces this process has open, so they stay visible here.</summary>
     public Func<IReadOnlyList<(string Name, int Running, int Waiting)>>? OtherWorkspaces { get; set; }
     private int _sidebarRunRevision = -1;
+    private long _sidebarTodoRevision = -1;
+    private long _sidebarPlanRevision = -1;
     public Func<BackgroundTaskInfo, IRenderable>? TaskTranscript { get; set; }
     public Func<BackgroundTaskInfo, IRenderable>? TaskPreview { get; set; }
     public Guid SessionId { get; private set; }
-    public string Model { get; private set; } = "未选择模型";
+    public string Model { get; private set; } = L.Pick("未选择模型", "No model selected");
     public TerminalTheme Theme { get; set; }
     private Color Background => Theme.Background;
     private Color Surface => Theme.Surface;
@@ -164,7 +167,7 @@ internal sealed class FullScreenTerminal : IDisposable
         {
             if (!message.IsInternal && message.Role is "user" or "assistant" && (!string.IsNullOrEmpty(message.Content) || message.Images.Count > 0))
             {
-                var block = Message(message.Role == "user" ? "你" : "AllAgent", message.Role == "user" ? SessionTimeline.Text(message) : message.Content, message.Role == "user");
+                var block = Message(message.Role == "user" ? L.Pick("你", "You") : "AllAgent", message.Role == "user" ? SessionTimeline.Text(message) : message.Content, message.Role == "user");
                 _messageAnchors[message.Id] = block; _transcript.Add(block);
             }
             if (!message.IsInternal && message.Images.Count > 0)
@@ -208,7 +211,7 @@ internal sealed class FullScreenTerminal : IDisposable
         }
     }
     private IRenderable Message(string label, string content, bool user) => TerminalMarkdown.Message(label, content, user);
-    public void UserMessage(string message) => Append(Message("你", message, true));
+    public void UserMessage(string message) => Append(Message(L.Pick("你", "You"), message, true));
     public void Append(IRenderable renderable)
     {
         _transcript.Add(renderable); if (_transcript.Count > 800) _transcript.RemoveRange(0, 100);
@@ -297,7 +300,7 @@ internal sealed class FullScreenTerminal : IDisposable
         if (!_messageAnchors.TryGetValue(message, out var target) || !_transcript.Contains(target))
         {
             Session(SessionId, Model, reload: true);
-            if (!_messageAnchors.TryGetValue(message, out target)) throw new ArgumentException("无法定位这条消息。");
+            if (!_messageAnchors.TryGetValue(message, out target)) throw new ArgumentException(L.Pick("无法定位这条消息。", "Could not locate that message."));
         }
         ClearTranscriptSelection(); _jumpTarget = target; _lastFrameKey = null;
     }
@@ -382,7 +385,7 @@ internal sealed class FullScreenTerminal : IDisposable
         while (!reading.IsCompleted) { Draw(); await Task.WhenAny(reading, Task.Delay(8)); }
         var clipboard = await reading;
         if (clipboard != null) await paste(clipboard);
-        else state.InsertPaste("", "剪贴板没有可粘贴的文字或图片");
+        else state.InsertPaste("", L.Pick("剪贴板没有可粘贴的文字或图片", "The clipboard has no text or image to paste"));
         return true;
     }
     private SelectionRegion? FindSelectionRegion(int x, int y)
@@ -425,13 +428,13 @@ internal sealed class FullScreenTerminal : IDisposable
         if (key.Key == ConsoleKey.C && key.Modifiers.HasFlag(ConsoleModifiers.Control) && _inspectorViewport is { } detail && _detailStart is { } a && _detailEnd is { } b)
         {
             var text = new SelectionRegion(0, 0, detail.Width, detail.Lines.Count).Extract(detail.Lines, a, b);
-            _selectionNotice = ClipboardText.Write(text) ? "已复制选中详情文字" : "剪贴板暂不可用";
+            _selectionNotice = ClipboardText.Write(text) ? L.Pick("已复制选中详情文字", "Copied the selected detail text") : L.Pick("剪贴板暂不可用", "Clipboard unavailable");
             return true;
         }
         if (key.Key != ConsoleKey.C || !key.Modifiers.HasFlag(ConsoleModifiers.Control) || _transcriptSelectionStart is not { } start || _transcriptSelectionEnd is not { } end) return false;
         var selected = ExtractSelection(start, end);
-        if (selected.Length == 0) { _selectionNotice = "请先拖选消息文字"; return true; }
-        _selectionNotice = ClipboardText.Write(selected) ? "已复制选中消息文字" : "剪贴板暂不可用";
+        if (selected.Length == 0) { _selectionNotice = L.Pick("请先拖选消息文字", "Drag to select message text first"); return true; }
+        _selectionNotice = ClipboardText.Write(selected) ? L.Pick("已复制选中消息文字", "Copied the selected message text") : L.Pick("剪贴板暂不可用", "Clipboard unavailable");
         return true;
     }
     internal string ExtractSelection((int X, int Y) first, (int X, int Y) last)
@@ -445,7 +448,7 @@ internal sealed class FullScreenTerminal : IDisposable
         if (width < 40 || height < 16)
         {
             _inputText = null;
-            return new ScreenSurface(new Rows(new Text("AllAgent", new Style(Accent, decoration: Decoration.Bold)), new Text("请放大终端窗口至至少 40 列 × 16 行。", new Style(Color.Grey)), new Text("输入和任务会保留；Esc 返回，Ctrl+C 取消。", new Style(Color.Grey))), width, height, Background, Theme.Foreground);
+            return new ScreenSurface(new Rows(new Text("AllAgent", new Style(Accent, decoration: Decoration.Bold)), new Text(L.Pick("请放大终端窗口至至少 40 列 × 16 行。", "Enlarge the terminal to at least 40 columns x 16 rows."), new Style(Color.Grey)), new Text(L.Pick("输入和任务会保留；Esc 返回，Ctrl+C 取消。", "Input and tasks are preserved; Esc goes back, Ctrl+C cancels."), new Style(Color.Grey))), width, height, Background, Theme.Foreground);
         }
         var narrow = width < 100 || !ShowSidebar; var sidebarWidth = narrow ? 0 : 29;
         var inputRows = new InputLayout(_input.Text, Math.Max(1, width - sidebarWidth - 4)).Rows.Count;
@@ -458,7 +461,7 @@ internal sealed class FullScreenTerminal : IDisposable
         _hintsTop = height - 3 - inputHeight - hintsHeight; _hintsHeight = hintsHeight == 0 ? 0 : hintsHeight - 1;
         _transcriptTop = 3; _transcriptHeight = Math.Max(1, bodyHeight - 2); _transcriptLeft = 1; _transcriptRight = Math.Max(2, width - sidebarWidth - 1);
         var conversation = _store.GetConversation(SessionId);
-        var title = conversation?.Title is { Length: > 0 } text && text != "New Conversation" ? text : "开始新的对话";
+        var title = conversation?.Title is { Length: > 0 } text && text != "New Conversation" ? text : L.Pick("开始新的对话", "Start a new conversation");
         var layout = new Layout("screen").SplitRows(new Layout("header").Size(2), new Layout("main"), new Layout("footer").Size(3));
         layout["header"].Update(new Rows(new SingleLineText(" AllAgent │ " + title, new Style(Accent, decoration: Decoration.Bold)), new SingleLineText(" " + _ui.Workspace, new Style(Color.Grey))));
         var dialog = _dialog;
@@ -477,12 +480,12 @@ internal sealed class FullScreenTerminal : IDisposable
             viewport.SelectionStart = _detailStart; viewport.SelectionEnd = _detailEnd;
             viewport.SelectionColor = Accent;
             _detailLeft = 2; _detailTop = 5;
-            dialog = new Panel(viewport).Header(child ? "子代理消息 · " + Markup.Escape(TerminalSafeText.Clean(task!.Title)) : "工具执行详情").Border(BoxBorder.Rounded).BorderColor(Accent).Padding(1, 1);
+            dialog = new Panel(viewport).Header(child ? L.Pick("子代理消息 · ", "Child-agent message · ") + Markup.Escape(TerminalSafeText.Clean(task!.Title)) : L.Pick("工具执行详情", "Tool execution details")).Border(BoxBorder.Rounded).BorderColor(Accent).Padding(1, 1);
         }
         if (dialog != null)
         {
             layout["main"].Update(new Align(dialog, HorizontalAlignment.Center, VerticalAlignment.Middle));
-            layout["footer"].Update(new Text(_busyDialogActive ? " 正在自动连接 · 双击 Esc / Ctrl+C 取消" : _inspector != null && _dialog == null ? " 滚轮/↑↓ 查看 · 拖选/Ctrl+A 全选 · Ctrl+C 复制 · ←→ 切换 · Esc 关闭" : " ↑↓ 选择 · Enter 确认 · Esc 返回 / 拒绝", new Style(Color.Grey)));
+            layout["footer"].Update(new Text(_busyDialogActive ? L.Pick(" 正在自动连接 · 双击 Esc / Ctrl+C 取消", " Connecting automatically · double Esc / Ctrl+C to cancel") : _inspector != null && _dialog == null ? L.Pick(" 滚轮/↑↓ 查看 · 拖选/Ctrl+A 全选 · Ctrl+C 复制 · ←→ 切换 · Esc 关闭", " Wheel/↑↓ scroll · drag/Ctrl+A select · Ctrl+C copy · ←→ switch · Esc close") : L.Pick(" ↑↓ 选择 · Enter 确认 · Esc 返回 / 拒绝", " ↑↓ select · Enter confirm · Esc back / reject"), new Style(Color.Grey)));
             return new ScreenSurface(layout, width, height, Background, Theme.Foreground);
         }
         var left = new Layout("chat").SplitRows(new Layout("messages"), new Layout("suggestions").Size(Math.Max(1, hintsHeight)), new Layout("input").Size(inputHeight));
@@ -493,7 +496,7 @@ internal sealed class FullScreenTerminal : IDisposable
         if (_conversationPrompt != null) messageRows.Add(_conversationPrompt);
         IRenderable main;
         if (_dialog != null) main = new Align(_dialog, HorizontalAlignment.Center, VerticalAlignment.Middle);
-        else if (messageRows.Count == 0) main = new Align(new Rows(new FigletText("AllAgent").Color(Accent), new Text("直接描述任务，Agent 会使用工具并按需派发子代理。", new Style(Color.Grey)), new Text("\nF2 选择模型   输入 / 查看常用操作\nCtrl+J 换行   @ 引用文件   Esc 停止任务   Ctrl+C 两次退出", new Style(Color.Grey)), new Text("\n第一次使用：F2 配置模型，或 /login 登录。", new Style(Accent))), HorizontalAlignment.Center, VerticalAlignment.Middle);
+        else if (messageRows.Count == 0) main = new Align(new Rows(new FigletText("AllAgent").Color(Accent), new Text(L.Pick("直接描述任务，Agent 会使用工具并按需派发子代理。", "Describe a task; the agent uses tools and dispatches child agents when useful."), new Style(Color.Grey)), new Text(L.Pick("\nF2 选择模型   输入 / 查看常用操作\nCtrl+J 换行   @ 引用文件   Esc 停止任务   Ctrl+C 两次退出", "\nF2 select model   type / for common actions\nCtrl+J newline   @ reference files   Esc stop task   Ctrl+C twice to exit"), new Style(Color.Grey)), new Text(L.Pick("\n第一次使用：F2 配置模型，或 /login 登录。", "\nFirst time: F2 configures a model, or use /login."), new Style(Accent))), HorizontalAlignment.Center, VerticalAlignment.Middle);
         else main = new TranscriptViewport(messageRows, Math.Max(1, bodyHeight - 2), _scroll, value => { _scroll = value; _jumpTarget = null; }, PreserveScroll, _jumpTarget,
             (top, bottom) => _visibleBlocks.Add(new(_transcriptLeft, _transcriptTop + top, _transcriptRight, _transcriptTop + bottom)));
         left["messages"].Update(new Padder(main, new Padding(1, 1)));
@@ -507,63 +510,105 @@ internal sealed class FullScreenTerminal : IDisposable
             left["suggestions"].Update(new Rows(hints));
         }
         _inputText = new InputText(_input, maxRows: inputHeight - 2); _inputX = 2; _inputY = height - 3 - inputHeight + 1; _inputWidth = width - sidebarWidth - 4;
-        left["input"].Update(new Panel(_inputText).Header("[bold " + TerminalUi.AccentMarkup() + "] " + (string.IsNullOrEmpty(_input.Text) ? "输入任务" : "正在输入") + " [/]").Border(BoxBorder.Heavy).BorderColor(Accent).Padding(1, 0).Expand());
+        left["input"].Update(new Panel(_inputText).Header("[bold " + TerminalUi.AccentMarkup() + "] " + (string.IsNullOrEmpty(_input.Text) ? L.Pick("输入任务", "Describe a task") : L.Pick("正在输入", "Typing")) + " [/]").Border(BoxBorder.Heavy).BorderColor(Accent).Padding(1, 0).Expand());
         if (!narrow) layout["sidebar"].Update(new ScreenSurface(new Panel(Sidebar()).Border(BoxBorder.None).Padding(1, 1).Expand(), sidebarWidth, height - 5, Surface));
         var imageLabel = PromptReferences.ImageDraftLabel(_input.Text);
-        if (conversation?.Revert != null) imageLabel = "已暂存撤回 · /redo 恢复原历史和文件 · 提交新任务后丢弃被撤回的历史" + (imageLabel.Length > 0 ? " · " + imageLabel : "");
-        layout["footer"].Update(new Rows(new SingleLineText(" " + _ui.TurnTokenLabel + (ModelFooter?.Invoke() is { Length: > 0 } extra ? " │ " + extra : ""), new Style(Color.Grey)), new SingleLineText(" " + _ui.ContextLabel + " │ " + TaskNotice?.Invoke() + (_scroll > 0 ? "阅读历史 ↑ · PgDn | " : "") + (_selectionNotice ?? _input.Notice ?? _status), new Style(_ui.ContextUsedTokens >= _ui.ContextCapacityTokens * 0.85 ? Color.Yellow : Color.Grey)), new SingleLineText(" " + _ui.ThinkingEffortLabel + " │ " + (imageLabel.Length > 0 ? imageLabel : "F1 菜单  F2 模型  Ctrl+O 展开详情  消息区拖选文字 · Ctrl+C 复制 | 输入区 Shift+方向选择"), new Style(Color.Grey))));
+        if (conversation?.Revert != null) imageLabel = L.Pick("已暂存撤回 · /redo 恢复原历史和文件 · 提交新任务后丢弃被撤回的历史", "Undo staged · /redo restores history and files · sending a new task discards the undone history") + (imageLabel.Length > 0 ? " · " + imageLabel : "");
+        layout["footer"].Update(new Rows(new SingleLineText(" " + _ui.TurnTokenLabel + (ModelFooter?.Invoke() is { Length: > 0 } extra ? " │ " + extra : ""), new Style(Color.Grey)), new SingleLineText(" " + _ui.ContextLabel + " │ " + TaskNotice?.Invoke() + (_scroll > 0 ? "阅读历史 ↑ · PgDn | " : "") + (_selectionNotice ?? _input.Notice ?? _status), new Style(_ui.ContextUsedTokens >= _ui.ContextCapacityTokens * 0.85 ? Color.Yellow : Color.Grey)), new SingleLineText(" " + _ui.ThinkingEffortLabel + " │ " + (imageLabel.Length > 0 ? imageLabel : L.Pick("F1 菜单  F2 模型  Ctrl+O 展开详情  消息区拖选文字 · Ctrl+C 复制 | 输入区 Shift+方向选择", "F1 menu  F2 model  Ctrl+O details  drag to select text · Ctrl+C copy | Shift+arrows in the input")), new Style(Color.Grey))));
         return new ScreenSurface(layout, width, height, Background, Theme.Foreground);
     }
     private IRenderable Sidebar()
     {
         var now = Environment.TickCount64;
         var runRevision = RunRevision?.Invoke() ?? 0;
-        if (_cachedSidebar != null && now - _sidebarTime < 1000 && runRevision == _sidebarRunRevision) return _cachedSidebar;
-        _sidebarTime = now; _sidebarRunRevision = runRevision;
+        var todoRevision = _store.TodosRevision;
+        var planRevision = _store.PlansRevision;
+        if (_cachedSidebar != null && now - _sidebarTime < 1000 && runRevision == _sidebarRunRevision && todoRevision == _sidebarTodoRevision && planRevision == _sidebarPlanRevision) return _cachedSidebar;
+        _sidebarTime = now; _sidebarRunRevision = runRevision; _sidebarTodoRevision = todoRevision; _sidebarPlanRevision = planRevision;
         var sessions = SessionOperations.MainSessions(_store, _ui.Workspace).Take(5).ToArray();
         var c = _store.GetConversation(SessionId);
         var messages = _store.GetMessages(SessionId); var characters = messages.Sum(m => m.Content.Length + (m.ToolCallsJson?.Length ?? 0));
         var cacheRate = c is { CacheUsageRequests: > 0, CacheInputTokens: > 0 }
             ? $"{Math.Min(c.CachedInputTokens, c.CacheInputTokens) * 100.0 / c.CacheInputTokens:F1}%"
-            : "暂无数据";
-        var cacheLabel = c is { CacheUsageRequests: > 0, CacheInputTokens: > 0, CacheWriteInputTokens: > 0 }
-            ? "模型缓存命中率 · " + cacheRate + "（写入 " + c.CacheWriteInputTokens.ToString("N0") + " tok）"
-            : "模型缓存命中率 · " + cacheRate;
-        var rows = new List<IRenderable> { new Markup("[bold]会话信息[/]"), new Text(Model, new Style(Accent)).Fold(), new Text(cacheLabel, new Style(Color.Grey)), new Text($"{messages.Count} 条消息 · {characters:N0} 字符\n上下文为字符估算", new Style(Color.Grey)), new Rule().RuleStyle("grey"), new Markup("[bold]最近会话 [dim]F3[/][/]") };
+            : L.Pick("暂无数据", "no data");
+        var cacheLabel = c.CacheUsageRequests > 0
+            ? L.Pick("模型缓存命中率 · ", "Model cache hit rate · ") + cacheRate + L.Pick("（写入 ", " (write ") + c.CacheWriteInputTokens.ToString("N0", L.Culture) + " tok)"
+            : L.Pick("模型缓存命中率 · ", "Model cache hit rate · ") + cacheRate;
+        var rows = new List<IRenderable> { new Markup(L.Pick("[bold]会话信息[/]", "[bold]Conversation[/]")), new Text(Model, new Style(Accent)).Fold(), new Text(cacheLabel, new Style(Color.Grey)), new Text(L.Pick($"{messages.Count} 条消息 · {characters:N0} 字符\n上下文为字符估算", $"{messages.Count} messages · {characters.ToString("N0", L.Culture)} characters\ncontext is estimated by characters"), new Style(Color.Grey)), new Rule().RuleStyle("grey"), new Markup(L.Pick("[bold]最近会话 [dim]F3[/][/]", "[bold]Recent conversations [dim]F3[/][/]")) };
         for (var index = 0; index < sessions.Length; index++)
         {
             var session = sessions[index];
             var marker = SessionOperations.RunLabel(Runs, session.Id);
             rows.Add(new SingleLineText((session.Id == SessionId ? "› " : "  ") + (index + 1) + ". " + SessionOperations.SingleLineTitle(session.Title) + marker, new Style(session.Id == SessionId ? Accent : marker.Length > 0 ? Color.Yellow : Color.Grey)));
         }
-        rows.Add(new Rule().RuleStyle("grey")); rows.Add(new Markup("[bold]扩展[/]"));
+        rows.Add(new Rule().RuleStyle("grey")); rows.Add(new Markup(L.Pick("[bold]扩展[/]", "[bold]Extensions[/]")));
         if (DateTime.UtcNow - _skillsChecked > TimeSpan.FromSeconds(1)) { _enabledSkills = _skills.CachedList.Count(s => s.Enabled); _skillsChecked = DateTime.UtcNow; }
-        rows.Add(new Text($"Skills · {_enabledSkills} 个启用  [F4]", new Style(Color.Grey)));
-        rows.Add(new Text($"MCP · {_mcp.GetAllServerTools().Count} 个连接  [F5]", new Style(Color.Grey)));
+        rows.Add(new Text(L.Pick($"Skills · {_enabledSkills} 个启用  [F4]", $"Skills · {_enabledSkills} enabled  [F4]"), new Style(Color.Grey)));
+        rows.Add(new Text(L.Pick($"MCP · {_mcp.GetAllServerTools().Count} 个连接  [F5]", $"MCP · {_mcp.GetAllServerTools().Count} connected  [F5]"), new Style(Color.Grey)));
         if (ExtensionSummary != null) rows.Add(new Text(ExtensionSummary(), new Style(Accent)));
         foreach (var server in _store.McpServerConfigs.Take(4)) rows.Add(new Text(($"{(_mcp.IsConnected(server.Id) ? "●" : "○")} {server.Name}"), new Style(_mcp.IsConnected(server.Id) ? Color.Green : Color.Grey)).Crop());
-        rows.Add(new Rule().RuleStyle("grey")); rows.Add(new Markup("[bold]操作[/]"));
-        rows.Add(new Text("F1  打开操作菜单\nF2  切换模型 / 提供商\nF3  恢复会话\nF6  思考强度\nShift+Tab 规划模式\nCtrl+B 隐藏侧栏\nCtrl+P 搜索所有命令\n/exit 退出", new Style(Color.Grey)));
+        rows.Add(new Rule().RuleStyle("grey")); rows.Add(new Markup(L.Pick("[bold]操作[/]", "[bold]Actions[/]")));
+        rows.Add(new Text(L.Pick("F1  打开操作菜单\nF2  切换模型 / 提供商\nF3  恢复会话\nF6  思考强度\nShift+Tab 计划模式\nCtrl+B 隐藏侧栏\nCtrl+P 搜索所有命令\n/exit 退出", "F1  action menu\nF2  switch model / provider\nF3  resume conversation\nF6  reasoning effort\nShift+Tab plan mode\nCtrl+B hide sidebar\nCtrl+P search all commands\n/exit quit"), new Style(Color.Grey)));
         // Bottom-right: the sessions that are still working while this one is on screen.
-        rows.Add(new Rule().RuleStyle("grey")); rows.Add(new Markup("[bold]后台会话[/]"));
+        rows.Add(new Rule().RuleStyle("grey")); rows.Add(new Markup(L.Pick("[bold]后台会话[/]", "[bold]Background conversations[/]")));
         var elsewhere = (OtherWorkspaces?.Invoke() ?? []).Where(item => item.Running > 0).ToArray();
         var background = (Runs?.Active ?? []).Where(run => run.ConversationId != SessionId).ToArray();
-        if (background.Length == 0 && elsewhere.Length == 0) rows.Add(new Text("没有其他会话在运行\n/new 开新会话 · 切走不会停止任务", new Style(Color.Grey)));
+        if (background.Length == 0 && elsewhere.Length == 0) rows.Add(new Text(L.Pick("没有其他会话在运行\n/new 开新会话 · 切走不会停止任务", "No other conversations are running\n/new starts one · switching away does not stop tasks"), new Style(Color.Grey)));
         foreach (var workspace in elsewhere)
-            rows.Add(new SingleLineText("◇ " + workspace.Name + " · " + workspace.Running + " 个会话运行中" + (workspace.Waiting > 0 ? " · 待处理 " + workspace.Waiting : "") + "  /workspace 路径", new Style(Color.Cyan1)));
+            rows.Add(new SingleLineText("◇ " + workspace.Name + L.Pick(" · " + workspace.Running + " 个会话运行中", " · " + workspace.Running + " conversations running") + (workspace.Waiting > 0 ? L.Pick(" · 待处理 " + workspace.Waiting, " · " + workspace.Waiting + " waiting") : "") + L.Pick("  /workspace 路径", "  /workspace path"), new Style(Color.Cyan1)));
         foreach (var run in background.Take(6))
         {
             var status = run.State switch
             {
-                SessionRunState.AwaitingApproval => "需要授权 · 切回处理",
-                SessionRunState.AwaitingAnswer => "需要回答 · 切回处理",
-                SessionRunState.Cancelling => "正在停止",
-                _ => "运行中",
+                SessionRunState.AwaitingApproval => L.Pick("需要授权 · 切回处理", "approval needed · switch back"),
+                SessionRunState.AwaitingAnswer => L.Pick("需要回答 · 切回处理", "answer needed · switch back"),
+                SessionRunState.AwaitingPlan => L.Pick("等待计划审批 · 切回处理", "plan approval pending · switch back"),
+                SessionRunState.Cancelling => L.Pick("正在停止", "stopping"),
+                _ => L.Pick("运行中", "running"),
             };
             rows.Add(new SingleLineText("● " + SessionOperations.SingleLineTitle(run.Title) + " · " + status, new Style(run.Waiting ? Color.Yellow : Accent)));
         }
-        if (background.Length > 6) rows.Add(new Text("… 还有 " + (background.Length - 6) + " 个", new Style(Color.Grey)));
+        if (background.Length > 6) rows.Add(new Text(L.Pick("… 还有 " + (background.Length - 6) + " 个", "… " + (background.Length - 6) + " more"), new Style(Color.Grey)));
+        if (c != null) AddTodoRows(rows);
+        if (c != null) AddPlanRows(rows);
         return _cachedSidebar = new Rows(rows);
+    }
+    private void AddPlanRows(List<IRenderable> rows)
+    {
+        AllAgent.NET.Core.Models.PlanDocument? plan;
+        try { plan = _store.GetPlan(SessionId); }
+        catch (ArgumentException) { return; }
+        if (plan == null) return;
+        var status = plan.Status switch
+        {
+            "approved" => L.Pick("[green]已批准 · 完全访问[/]", "[green]Approved · full access[/]"),
+            "rejected" => L.Pick("[yellow]已拒绝 · 继续规划[/]", "[yellow]Rejected · keep planning[/]"),
+            _ => L.Pick("[yellow]待批准[/]", "[yellow]Pending approval[/]"),
+        };
+        rows.Add(new Rule().RuleStyle("grey"));
+        rows.Add(new Markup("[bold]PLAN[/] " + status));
+        rows.Add(new SingleLineText(plan.Title, new Style(plan.Status == "approved" ? Color.Green : Color.Grey)));
+        if (plan.Feedback is { Length: > 0 } feedback) rows.Add(new SingleLineText(feedback, new Style(Color.Grey)));
+    }
+    private void AddTodoRows(List<IRenderable> rows)
+    {
+        IReadOnlyList<AllAgent.NET.Core.Models.TodoItem> todos;
+        try { todos = _store.GetTodos(SessionId); }
+        catch (ArgumentException) { return; }
+        if (todos.Count == 0) return;
+        var completed = todos.Count(todo => todo.Status == "completed");
+        var percent = completed * 100 / todos.Count;
+        var filled = Math.Clamp((int)Math.Round(completed * 12.0 / todos.Count, MidpointRounding.AwayFromZero), 0, 12);
+        rows.Add(new Rule().RuleStyle("grey"));
+        rows.Add(new Markup("[bold]TODO[/] [dim]" + completed + "/" + todos.Count + "[/]" + (completed == todos.Count ? L.Pick(" [green]✓ 全部完成[/]", " [green]✓ All done[/]") : "")));
+        rows.Add(new Markup("[green]" + new string('█', filled) + "[/][grey]" + new string('░', 12 - filled) + "[/] [dim]" + percent + "%[/]"));
+        // Show what is being worked on now, then what comes next; completed items only when everything is done.
+        var visible = todos.Where(todo => todo.Status == "in_progress").Concat(todos.Where(todo => todo.Status == "pending")).Take(4).ToArray();
+        if (visible.Length == 0) visible = todos.TakeLast(2).ToArray();
+        foreach (var item in visible)
+            rows.Add(new SingleLineText((item.Status switch { "in_progress" => "▶ ", "completed" => "☑ ", _ => "☐ " }) + item.Content,
+                new Style(item.Status == "in_progress" ? Accent : item.Status == "completed" ? Color.Green : Color.Grey)));
+        if (todos.Count > visible.Length) rows.Add(new Text(L.Pick("… 还有 " + (todos.Count - visible.Length) + " 项 · /todo", "… " + (todos.Count - visible.Length) + " more · /todo"), new Style(Color.Grey)));
     }
     internal static IRenderable Input(InputState state, bool secret = false)
     {
@@ -589,7 +634,7 @@ internal sealed class FullScreenTerminal : IDisposable
             key.Add(_detailStart); key.Add(_detailEnd);
             key.Add(_transcriptSelectionStart); key.Add(_transcriptSelectionEnd); key.Add(_inspector); key.Add(_inspectorScroll); key.Add(_inspectorSelection);
             key.Add(_dialog); key.Add(_conversationPrompt);
-            key.Add(TaskRevision?.Invoke() ?? 0); key.Add(RunRevision?.Invoke() ?? 0);
+            key.Add(TaskRevision?.Invoke() ?? 0); key.Add(RunRevision?.Invoke() ?? 0); key.Add(_store.TodosRevision); key.Add(_store.PlansRevision);
             // The clock only matters while an activity line or detail view is animating.
             if (_activity != null || _inspector != null) key.Add(now / 1000);
             foreach (var hint in _hints) key.Add(hint);
@@ -693,9 +738,9 @@ internal sealed class FullScreenTerminal : IDisposable
             {
                 cancelled.Token.ThrowIfCancellationRequested();
                 var glyph = LoadingIndicator.Frame(watch.ElapsedMilliseconds);
-                if (bodyProvider != null) SetDialog(new Panel(new Rows(bodyProvider(), new Text($"\n{glyph} {titleProvider?.Invoke() ?? title} · {watch.Elapsed.TotalSeconds:F0}s · {(allowEscape ? "Esc 取消 · " : "")}Ctrl+C 取消", new Style(Accent))))
+                if (bodyProvider != null) SetDialog(new Panel(new Rows(bodyProvider(), new Text($"\n{glyph} {titleProvider?.Invoke() ?? title} · {watch.Elapsed.TotalSeconds:F0}s · {(allowEscape ? L.Pick("Esc 取消 · ", "Esc cancel · ") : "")}Ctrl+C" + L.Pick(" 取消", " cancel"), new Style(Accent))))
                     .Header(Markup.Escape(title)).Border(BoxBorder.Rounded).BorderColor(Accent).Padding(1, 1));
-                SetActivity(new Text($"{glyph} {titleProvider?.Invoke() ?? title}… {watch.Elapsed.TotalSeconds:F0}s · {(allowEscape ? "Esc 取消 · " : "")}Ctrl+C 取消", new Style(Accent))); Draw();
+                SetActivity(new Text($"{glyph} {titleProvider?.Invoke() ?? title}… {watch.Elapsed.TotalSeconds:F0}s · {(allowEscape ? L.Pick("Esc 取消 · ", "Esc cancel · ") : "")}Ctrl+C" + L.Pick(" 取消", " cancel"), new Style(Accent))); Draw();
                 if (keys?.HasInput == true)
                 {
                     var key = await keys.ReadAsync(cancelled.Token);
@@ -761,7 +806,7 @@ internal sealed class FullScreenTerminal : IDisposable
                     if (submitted.Length > 0)
                     {
                         state.Set(""); ScrollToLatest();
-                        if (!submitted.StartsWith('/')) { UserMessage(submitted); SetInput(state, [], "任务已提交 · 准备 Agent"); Draw(); }
+                        if (!submitted.StartsWith('/')) { UserMessage(submitted); SetInput(state, [], L.Pick("任务已提交 · 准备 Agent", "Task submitted · preparing the agent")); Draw(); }
                     }
                     return submitted;
                 }
@@ -772,12 +817,23 @@ internal sealed class FullScreenTerminal : IDisposable
     }
     private async Task<string?> MenuAsync(CancellationToken ct)
     {
-        var entries = new[] { ("继续聊天", ""), ("开始新任务", "/new"), ("恢复历史会话", "/session"), ("选择 / 配置模型", "/model"), ("账号登录", "/login"), ("子代理与后台任务", "/tasks"), ("撤销上一轮任务", "/undo"), ("权限模式", "/permissions"), ("显示与主题设置", "/settings"), ("全部操作与快捷键", "/help all") };
-        var selected = await ChooseAsync("操作菜单", entries, e => e.Item1, ct); return selected.Item2.Length > 0 ? selected.Item2 : null;
+        var entries = new[] {
+            (L.Pick("继续聊天", "Continue chatting"), ""),
+            (L.Pick("开始新任务", "Start a new task"), "/new"),
+            (L.Pick("恢复历史会话", "Resume a conversation"), "/session"),
+            (L.Pick("选择 / 配置模型", "Select / configure a model"), "/model"),
+            (L.Pick("账号登录", "Account sign-in"), "/login"),
+            (L.Pick("子代理与后台任务", "Child agents and background tasks"), "/tasks"),
+            (L.Pick("撤销上一轮任务", "Undo the last turn"), "/undo"),
+            (L.Pick("权限模式", "Permission mode"), "/permissions"),
+            (L.Pick("显示与主题设置", "Display and theme settings"), "/settings"),
+            (L.Pick("全部操作与快捷键", "All actions and shortcuts"), "/help all"),
+        };
+        var selected = await ChooseAsync(L.Pick("操作菜单", "Action menu"), entries, e => e.Item1, ct); return selected.Item2.Length > 0 ? selected.Item2 : null;
     }
     private async Task<string?> PaletteAsync(InputEditor editor, CancellationToken ct)
     {
-        var choice = await ChooseAsync("命令面板 · 输入关键字搜索", editor.Commands().ToArray(), h => h.Text + " · " + h.Description, ct); return choice.Text;
+        var choice = await ChooseAsync(L.Pick("命令面板 · 输入关键字搜索", "Command panel · type to search"), editor.Commands().ToArray(), h => h.Text + " · " + h.Description, ct); return choice.Text;
     }
     public T Choose<T>(string title, IReadOnlyList<T> choices, Func<T,string> label) => ChooseAsync(title, choices, label, CancellationToken.None).GetAwaiter().GetResult();
     internal sealed record TimelineChoice(Guid MessageId, string Action);
@@ -801,7 +857,7 @@ internal sealed class FullScreenTerminal : IDisposable
                 if (entries.Length > 0) JumpToMessage(entries[selected].Id);
                 var listHeight = Math.Clamp(_native.Profile.Height - 9, 3, 16);
                 var start = Math.Clamp(selected - listHeight + 1, 0, Math.Max(0, entries.Length - listHeight));
-                var rows = new List<IRenderable> { new Markup("[dim]搜索 › [/]" + Markup.Escape(search.Text) + "[dim]  · " + entries.Length + " 条[/]") };
+                var rows = new List<IRenderable> { new Markup(L.Pick("[dim]搜索 › [/]", "[dim]Search › [/]") + Markup.Escape(search.Text) + "[dim]  · " + entries.Length + L.Pick(" 条[/]", " items[/]")) };
                 foreach (var (message, index) in entries.Select((message, index) => (message, index)).Skip(start).Take(listHeight))
                 {
                     var label = message.CreatedAt.ToLocalTime().ToString("MM-dd HH:mm") + " · " + message.Id.ToString()[..8] + " · " + SessionTimeline.Text(message).Replace('\n', ' ');
@@ -809,9 +865,9 @@ internal sealed class FullScreenTerminal : IDisposable
                         ? new Markup("[black on " + TerminalUi.AccentMarkup() + "]› " + Markup.Escape(TerminalSafeText.Clean(label)) + " [/]")
                         : new Markup("  " + Markup.Escape(TerminalSafeText.Clean(label))));
                 }
-                if (entries.Length == 0) rows.Add(new Text("没有匹配的用户消息。", new Style(Color.Grey)));
-                rows.Add(new Text("↑↓ 选择并定位 · 输入搜索 · Enter 消息操作 · Esc 返回会话", new Style(Color.Grey)));
-                SetDialog(new Panel(new Rows(rows)).Header("会话时间线").Border(BoxBorder.Rounded).BorderColor(Accent).Padding(1, 1));
+                if (entries.Length == 0) rows.Add(new Text(L.Pick("没有匹配的用户消息。", "No matching user messages."), new Style(Color.Grey)));
+                rows.Add(new Text(L.Pick("↑↓ 选择并定位 · 输入搜索 · Enter 消息操作 · Esc 返回会话", "↑↓ select and jump · type to search · Enter message actions · Esc back"), new Style(Color.Grey)));
+                SetDialog(new Panel(new Rows(rows)).Header(L.Pick("会话时间线", "Conversation timeline")).Border(BoxBorder.Rounded).BorderColor(Accent).Padding(1, 1));
                 Draw();
                 var input = await ReadKeyAsync(OverlayKeys, cancellation.Token); var key = input.Key;
                 if (input.Paste != null) { search.Insert(input.Paste); selected = 0; continue; }
@@ -824,8 +880,14 @@ internal sealed class FullScreenTerminal : IDisposable
             }
         }
         finally { _promptCancellation = null; SetDialog(previous); Draw(); }
-        var actions = new[] { ("跳转到消息", "jump"), ("复制消息正文", "copy"), ("恢复到草稿", "restore"), ("从此消息之前分支", "fork"), ("撤回此消息起的任务和文件修改", "revert") };
-        var action = await ChooseAsync("消息操作", actions, item => item.Item1, ct);
+        var actions = new[] {
+            (L.Pick("跳转到消息", "Jump to message"), "jump"),
+            (L.Pick("复制消息正文", "Copy message text"), "copy"),
+            (L.Pick("恢复到草稿", "Restore to draft"), "restore"),
+            (L.Pick("从此消息之前分支", "Branch before this message"), "fork"),
+            (L.Pick("撤回此消息起的任务和文件修改", "Undo tasks and file changes from this message"), "revert"),
+        };
+        var action = await ChooseAsync(L.Pick("消息操作", "Message actions"), actions, item => item.Item1, ct);
         return new(chosen.Value, action.Item2);
     }
     public async Task<string?> PendingInputsAsync(InputInbox inbox, string draft, CancellationToken ct)
@@ -846,14 +908,14 @@ internal sealed class FullScreenTerminal : IDisposable
                 var rows = new List<IRenderable>();
                 foreach (var (item, index) in items.Select((item, index) => (item, index)).Skip(start).Take(listHeight))
                 {
-                    var label = item.Id.ToString()[..8] + " · " + item.Delivery + " · " + item.Draft.Replace('\n', ' ') + (item.Images.Count > 0 ? $" · 图片 {item.Images.Count}" : "");
+                    var label = item.Id.ToString()[..8] + " · " + item.Delivery + " · " + item.Draft.Replace('\n', ' ') + (item.Images.Count > 0 ? L.Pick($" · 图片 {item.Images.Count}", $" · {item.Images.Count} images") : "");
                     rows.Add(index == selected
                         ? new Markup("[black on " + TerminalUi.AccentMarkup() + "]› " + Markup.Escape(TerminalSafeText.Clean(label)) + " [/]")
                         : new Markup("  " + Markup.Escape(TerminalSafeText.Clean(label))));
                 }
-                rows.Add(new Text("Enter 当前任务处理 · Tab 移回队列 · Ctrl+D/Delete 删除 · Ctrl+U/Z 恢复草稿 · Esc 返回", new Style(Color.Grey)));
+                rows.Add(new Text(L.Pick("Enter 当前任务处理 · Tab 移回队列 · Ctrl+D/Delete 删除 · Ctrl+U/Z 恢复草稿 · Esc 返回", "Enter process in the current task · Tab move back to queue · Ctrl+D/Delete remove · Ctrl+U/Z restore draft · Esc back"), new Style(Color.Grey)));
                 if (notice != null) rows.Add(new Text(notice, new Style(Color.Yellow)));
-                SetDialog(new Panel(new Rows(rows)).Header("待处理输入").Border(BoxBorder.Rounded).BorderColor(Accent).Padding(1, 1));
+                SetDialog(new Panel(new Rows(rows)).Header(L.Pick("待处理输入", "Pending input")).Border(BoxBorder.Rounded).BorderColor(Accent).Padding(1, 1));
                 Draw();
                 var input = await ReadKeyAsync(OverlayKeys, cancellation.Token); var key = input.Key;
                 if (key.Key == ConsoleKey.Escape) return null;
@@ -870,7 +932,7 @@ internal sealed class FullScreenTerminal : IDisposable
                 {
                     var restored = await inbox.CommandAsync("/queue " + action + " " + items[selected].Id, draft, cancellation.Token);
                     if (action is "steer" or "edit") return restored;
-                    notice = action == "delete" ? "已删除待处理输入。" : "已移回队列。";
+                    notice = action == "delete" ? L.Pick("已删除待处理输入。", "Pending input removed.") : L.Pick("已移回队列。", "Moved back to the queue.");
                 }
                 catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException)
                 { notice = ex.Message; }
@@ -881,7 +943,7 @@ internal sealed class FullScreenTerminal : IDisposable
     }
     public async Task<T> ChooseAsync<T>(string title, IReadOnlyList<T> choices, Func<T,string> label, CancellationToken ct, Func<T,string>? group = null, Func<T,string>? color = null, IRenderable? body = null)
     {
-        if (choices.Count == 0) throw new ArgumentException("没有可选项。");
+        if (choices.Count == 0) throw new ArgumentException(L.Pick("没有可选项。", "There are no options."));
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _promptCancellation = cancellation;
         var previous = _dialog;
@@ -898,8 +960,8 @@ internal sealed class FullScreenTerminal : IDisposable
                 var start = Math.Clamp(selected - listHeight + 1, 0, Math.Max(0, filtered.Length - listHeight));
                 var rows = new List<IRenderable>();
                 if (body != null) rows.Add(new TextViewport(new SafeTerminalRenderable(body), bodyHeight, 0));
-                if (search.Text.Length > 0) rows.Add(new Markup("[dim]过滤 › [/]" + Markup.Escape(search.Text) + "[dim]  · " + filtered.Length + " 项[/]"));
-                if (filtered.Length == 0) rows.Add(new Text("没有匹配项；退格调整过滤条件。", new Style(Color.Yellow)));
+                if (search.Text.Length > 0) rows.Add(new Markup(L.Pick("[dim]过滤 › [/]", "[dim]Filter › [/]") + Markup.Escape(search.Text) + "[dim]  · " + filtered.Length + L.Pick(" 项[/]", " items[/]")));
+                if (filtered.Length == 0) rows.Add(new Text(L.Pick("没有匹配项；退格调整过滤条件。", "No matches; press Backspace to adjust the filter."), new Style(Color.Yellow)));
                 foreach (var (item, index) in filtered.Select((item, index) => (item, index)).Skip(start).Take(listHeight))
                 {
                     var text = label(item) + (group?.Invoke(item) is { Length: > 0 } extra ? " · " + extra : "");
@@ -908,14 +970,14 @@ internal sealed class FullScreenTerminal : IDisposable
                         ? new Markup("[black on " + TerminalUi.AccentMarkup() + "]› " + styled + " [/]")
                         : new Markup("  " + styled));
                 }
-                if (filtered.Length > listHeight) rows.Add(new Text($"  {start + 1}–{Math.Min(filtered.Length, start + listHeight)} / {filtered.Length} · ↑↓ 滚动", new Style(Color.Grey)));
-                rows.Add(new Text("↑↓ 选择 · Enter 确认 · Esc 返回 · 输入过滤", new Style(Color.Grey)));
+                if (filtered.Length > listHeight) rows.Add(new Text(L.Pick($"  {start + 1}–{Math.Min(filtered.Length, start + listHeight)} / {filtered.Length} · ↑↓ 滚动", $"  {start + 1}-{Math.Min(filtered.Length, start + listHeight)} / {filtered.Length} · ↑↓ scroll"), new Style(Color.Grey)));
+                rows.Add(new Text(L.Pick("↑↓ 选择 · Enter 确认 · Esc 返回 · 输入过滤", "↑↓ select · Enter confirm · Esc back · type to filter"), new Style(Color.Grey)));
                 SetDialog(new Panel(new Rows(rows)).Header(Markup.Escape(TerminalSafeText.Clean(title))).Border(BoxBorder.Rounded).BorderColor(Accent).Padding(1, 1));
                 Draw();
                 var input = await ReadKeyAsync(OverlayKeys, cancellation.Token); var key = input.Key;
                 if (input.Paste != null) { search.Insert(input.Paste); selected = 0; continue; }
                 if (input.Wheel != 0) { selected = Math.Clamp(selected - input.Wheel, 0, Math.Max(0, filtered.Length - 1)); continue; }
-                if (key.Key == ConsoleKey.Escape) throw new OperationCanceledException("已返回。");
+                if (key.Key == ConsoleKey.Escape) throw new OperationCanceledException(L.Pick("已返回。", "Returned."));
                 if (key.Key == ConsoleKey.Enter) { if (filtered.Length > 0) return filtered[selected]; continue; }
                 if (key.Key == ConsoleKey.UpArrow) { selected = Math.Max(0, selected - 1); continue; }
                 if (key.Key == ConsoleKey.DownArrow) { selected = Math.Min(Math.Max(0, filtered.Length - 1), selected + 1); continue; }
@@ -937,7 +999,7 @@ internal sealed class FullScreenTerminal : IDisposable
                 _entered ? _keys : new TerminalKeyReader(_native.Input.IsKeyAvailable, () => _native.Input.ReadKey(true) ?? default),
                 question, cancellation.Token, body =>
                 {
-                    SetConversationPrompt(new Panel(body).Header("需要你的回答").Border(BoxBorder.Rounded).BorderColor(Color.Yellow));
+                    SetConversationPrompt(new Panel(body).Header(L.Pick("需要你的回答", "Your answer is needed")).Border(BoxBorder.Rounded).BorderColor(Color.Yellow));
                     Draw();
                 });
         }
@@ -959,21 +1021,29 @@ internal sealed class FullScreenTerminal : IDisposable
                 if (body != null) rows.Add(new TextViewport(new SafeTerminalRenderable(body), Math.Clamp(_native.Profile.Height / 4, 3, 8), 0));
                 rows.Add(new InputText(state, secret, Math.Clamp(_native.Profile.Height - 10, 1, 8)));
                 if (state.Notice is { Length: > 0 } notice) rows.Add(new Text(notice, new Style(Color.Yellow)));
-                rows.Add(new Text("Enter 保存 · Esc 返回 · Ctrl+V 粘贴", new Style(Color.Grey)));
+                rows.Add(new Text(L.Pick("Enter 保存 · Esc 返回 · Ctrl+V 粘贴", "Enter save · Esc back · Ctrl+V paste"), new Style(Color.Grey)));
                 SetDialog(new Panel(new Rows(rows)).Header(Markup.Escape(TerminalSafeText.Clean(title))).Border(BoxBorder.Rounded).BorderColor(Accent).Padding(1, 1));
                 Draw();
                 var input = await ReadKeyAsync(OverlayKeys, cancellation.Token); var key = input.Key;
                 if (input.Paste != null) { state.Insert(input.Paste); continue; }
-                if (key.Key == ConsoleKey.Escape && !key.Modifiers.HasFlag(ConsoleModifiers.Alt)) throw new OperationCanceledException("已返回。");
+                if (key.Key == ConsoleKey.Escape && !key.Modifiers.HasFlag(ConsoleModifiers.Alt)) throw new OperationCanceledException(L.Pick("已返回。", "Returned."));
                 var submitted = state.Key(key, [], []);
                 if (submitted == null) continue;
-                if (!empty && string.IsNullOrWhiteSpace(submitted)) { state.SetNotice("此项不能为空。"); continue; }
+                if (!empty && string.IsNullOrWhiteSpace(submitted)) { state.SetNotice(L.Pick("此项不能为空。", "This field cannot be empty.")); continue; }
                 return submitted;
             }
         }
         finally { _promptCancellation = null; SetDialog(previous); Draw(); }
     }
-    public async Task<bool> ConfirmAsync(string title, CancellationToken ct = default) => await ChooseAsync(title, new[] { "返回 / 拒绝", "确认" }, c => c, ct) == "确认";
+    public async Task<bool> ConfirmAsync(string title, CancellationToken ct = default)
+    {
+        var choice = await ChooseAsync(title, new[]
+        {
+            (Id: false, Label: L.Pick("返回 / 拒绝", "Back / Reject")),
+            (Id: true, Label: L.Pick("确认", "Confirm")),
+        }, item => item.Label, ct);
+        return choice.Id;
+    }
     public async Task<bool> ApproveAsync(ApprovalPreview preview, CancellationToken ct)
     {
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(ct); _promptCancellation = cancellation;
@@ -982,7 +1052,7 @@ internal sealed class FullScreenTerminal : IDisposable
         {
             while (true)
             {
-                SetConversationPrompt(new Panel(preview.Render(selected, scroll, expanded, 2)).Header("需要授权").Border(BoxBorder.Rounded).BorderColor(Color.Yellow)); Draw();
+                SetConversationPrompt(new Panel(preview.Render(selected, scroll, expanded, 2)).Header(L.Pick("需要授权", "Approval required")).Border(BoxBorder.Rounded).BorderColor(Color.Yellow)); Draw();
                 var input = await ReadKeyAsync(reader, cancellation.Token); var key = input.Key;
                 if (input.Wheel != 0) { scroll = Math.Clamp(scroll - input.Wheel, 0, Math.Max(0, preview.Lines.Count - 1)); continue; }
                 if (input.Paste != null) continue;
@@ -993,6 +1063,28 @@ internal sealed class FullScreenTerminal : IDisposable
                 if (key.Modifiers.HasFlag(ConsoleModifiers.Control) && key.Key is ConsoleKey.UpArrow or ConsoleKey.DownArrow) { scroll = Math.Clamp(scroll + (key.Key == ConsoleKey.UpArrow ? -1 : 1), 0, Math.Max(0, preview.Lines.Count - 1)); continue; }
                 if (key.Key is ConsoleKey.UpArrow or ConsoleKey.DownArrow) { var count = preview.RememberForSession == null ? 2 : 3; selected = Math.Clamp(selected + (key.Key == ConsoleKey.UpArrow ? -1 : 1), 0, count - 1); }
                 if (key.Key == ConsoleKey.Enter) { if (selected == 2) preview.RememberForSession?.Invoke(); return selected != 1; }
+            }
+        }
+        finally { SetConversationPrompt(null); _promptCancellation = null; Draw(); }
+    }
+    public async Task<bool> ApprovePlanAsync(PlanPreview preview, CancellationToken ct)
+    {
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(ct); _promptCancellation = cancellation;
+        var reader = _keys; var selected = 1; var scroll = 0; var expanded = false;
+        try
+        {
+            while (true)
+            {
+                SetConversationPrompt(new Panel(preview.Render(selected, scroll, expanded, 6)).Header(L.Pick("计划审批", "Plan approval")).Border(BoxBorder.Rounded).BorderColor(Color.Yellow)); Draw();
+                var input = await ReadKeyAsync(reader, cancellation.Token); var key = input.Key;
+                if (input.Wheel != 0) { scroll = Math.Clamp(scroll - input.Wheel, 0, Math.Max(0, preview.Lines.Count - 1)); continue; }
+                if (input.Paste != null) continue;
+                if (key.Key is ConsoleKey.Escape or ConsoleKey.N or ConsoleKey.D2 or ConsoleKey.NumPad2) return false;
+                if (key.Key is ConsoleKey.Y or ConsoleKey.D1 or ConsoleKey.NumPad1) return true;
+                if (key.Key == ConsoleKey.Tab) { expanded = !expanded; continue; }
+                if (key.Modifiers.HasFlag(ConsoleModifiers.Control) && key.Key is ConsoleKey.UpArrow or ConsoleKey.DownArrow) { scroll = Math.Clamp(scroll + (key.Key == ConsoleKey.UpArrow ? -1 : 1), 0, Math.Max(0, preview.Lines.Count - 1)); continue; }
+                if (key.Key is ConsoleKey.UpArrow or ConsoleKey.DownArrow) selected = Math.Clamp(selected + (key.Key == ConsoleKey.UpArrow ? -1 : 1), 0, 1);
+                if (key.Key == ConsoleKey.Enter) return selected == 0;
             }
         }
         finally { SetConversationPrompt(null); _promptCancellation = null; Draw(); }

@@ -1,4 +1,5 @@
 import type { TaskState } from '@/types'
+import { languageTag, t } from '@/i18n'
 
 const numericTaskStates: TaskState[] = [
   'queued', 'running', 'awaitingApproval', 'awaitingAnswer',
@@ -10,20 +11,18 @@ export function taskState(state: TaskState | number): TaskState {
   return state
 }
 
-const taskStateLabels: Record<TaskState, string> = {
-  queued: '排队中',
-  running: '执行中',
-  awaitingApproval: '等待授权',
-  awaitingAnswer: '等待回答',
-  completed: '已完成',
-  failed: '失败',
-  cancelled: '已取消',
-  interrupted: '已中断',
-  cancelling: '正在取消',
-}
-
 export function taskStateLabel(state: TaskState | number): string {
-  return taskStateLabels[taskState(state)]
+  switch (taskState(state)) {
+    case 'queued': return t('排队中', 'Queued')
+    case 'running': return t('执行中', 'Running')
+    case 'awaitingApproval': return t('等待授权', 'Awaiting approval')
+    case 'awaitingAnswer': return t('等待回答', 'Awaiting answer')
+    case 'completed': return t('已完成', 'Completed')
+    case 'failed': return t('失败', 'Failed')
+    case 'cancelled': return t('已取消', 'Cancelled')
+    case 'interrupted': return t('已中断', 'Interrupted')
+    case 'cancelling': return t('正在取消', 'Cancelling')
+  }
 }
 
 export function taskStateTone(state: TaskState | number): 'neutral' | 'active' | 'success' | 'warning' | 'error' {
@@ -46,13 +45,13 @@ export function taskIsActive(state: TaskState | number): boolean {
 export function formatClock(iso: string): string {
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return ''
-  return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+  return date.toLocaleTimeString(languageTag(), { hour: '2-digit', minute: '2-digit' })
 }
 
 export function formatDateTime(iso: string): string {
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return ''
-  return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+  return date.toLocaleString(languageTag(), { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
 /** Fixed `yyyy/MM/dd HH:mm` for the commit graph's date column. */
@@ -67,11 +66,11 @@ export function formatRelative(iso: string): string {
   const date = new Date(iso).getTime()
   if (Number.isNaN(date)) return ''
   const seconds = Math.max(0, Math.round((Date.now() - date) / 1000))
-  if (seconds < 60) return '刚刚'
+  if (seconds < 60) return t('刚刚', 'just now')
   const minutes = Math.round(seconds / 60)
-  if (minutes < 60) return `${minutes} 分钟前`
+  if (minutes < 60) return t(`${minutes} 分钟前`, `${minutes} min ago`)
   const hours = Math.round(minutes / 60)
-  if (hours < 24) return `${hours} 小时前`
+  if (hours < 24) return t(`${hours} 小时前`, `${hours} h ago`)
   return formatDateTime(iso)
 }
 

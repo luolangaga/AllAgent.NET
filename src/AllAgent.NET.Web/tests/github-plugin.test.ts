@@ -1,10 +1,6 @@
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import html from '../../../plugins/AllAgent.NET.GitHub/web/index.html?raw'
+import script from '../../../plugins/AllAgent.NET.GitHub/web/app.js?raw'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-
-const pluginRoot = resolve(__dirname, '../../../plugins/AllAgent.NET.GitHub/web')
-const html = readFileSync(resolve(pluginRoot, 'index.html'), 'utf8')
-const script = readFileSync(resolve(pluginRoot, 'app.js'), 'utf8')
 const issue = { title: '<img src=x onerror=alert(1)>', number: 7, repository_url: 'https://api.github.com/repos/octo/demo', state: 'open', body: '待修复问题', user: { login: 'octo' }, updated_at: '2026-10-19T00:00:00Z', html_url: 'https://github.com/octo/demo/issues/7' }
 const settle = async () => { for (let i = 0; i < 15; i++) await Promise.resolve() }
 let invoke: ReturnType<typeof vi.fn>

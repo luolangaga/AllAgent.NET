@@ -190,12 +190,18 @@ export function connect(): PluginClient {
     invoke<T = unknown>(method: string, params?: unknown): Promise<T> {
       return new Promise<T>((resolve, reject) => {
         const id = randomId()
+        const packageId = state.plugin.packageId.toLowerCase()
+        // Short names reach this plugin's own bridge namespace; host.* and an explicit
+        // plugin.* method pass through unchanged.
+        const qualified = method.startsWith('plugin.') || method.startsWith('host.') || !packageId
+          ? method
+          : `plugin.${packageId}.${method}`
         const timer = window.setTimeout(() => {
           pending.delete(id)
           reject(new PluginClientError(`调用超时：${method}`, 'timeout'))
         }, INVOKE_TIMEOUT_MS)
         pending.set(id, { resolve: value => resolve(value as T), reject, timer })
-        send('invoke', { method, params }, id)
+        send('invoke', { method: qualified, params }, id)
       })
     },
     on<T = unknown>(name: string, handler: (data: T) => void): () => void {

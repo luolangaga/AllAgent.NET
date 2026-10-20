@@ -1,5 +1,5 @@
 import mitt from 'mitt'
-import type { ContextUsage, RunningConversation } from '@/types'
+import type { ContextUsage, Language, LanguageSetting, Message, PlanDocument, PlanProposalRequest, RunningConversation, SessionControlState } from '@/types'
 import { createMockTransport } from './mock'
 
 // Events pushed from the C# backend. Every agent event carries the streamId of
@@ -16,8 +16,16 @@ type BridgePayloads = {
   'agent.error': { message: string; streamId: string }
   'agent.notice': { message: string; resetResponse: boolean; streamId: string }
   'agent.contextUsage': ContextUsage & { streamId: string }
+  // A steer or queued prompt was admitted into the running turn's history.
+  'agent.inputAdmitted': { message: Message; streamId: string }
   'agent.approvalRequest': { requestId: string; conversationId?: string; name: string; risk: string; args: string; source?: string | null; requiresExplicitApproval?: boolean; streamId?: string }
   'agent.question': { id: string; conversationId?: string; question: string; choices: string[]; multiple: boolean; streamId?: string }
+  // A plan waiting for approval. The host replays it after a reload through interactions.pending.
+  'agent.planProposed': PlanProposalRequest & { streamId?: string }
+  'plans.updated': { conversationId?: string; plan: PlanDocument }
+  'session.controls': SessionControlState
+  // The host changed the shared language preference (terminal /settings or another page).
+  'settings.changed': { language: LanguageSetting; languageResolved: Language }
   'interactions.resolved': { id: string }
   'workspace.changed': { workspace: string; dataDirectory: string }
   'workspace.folderPicked': { path: string | null; error?: string | null }
@@ -50,7 +58,7 @@ interface BridgeRequest {
 
 interface BridgeResponse {
   id?: string
-  type?: 'response' | 'event' | 'tasks.updated' | 'workspace.changed' | 'workspace.folderPicked' | 'runs.changed' | 'auth.changed' | 'web.contributions.changed'
+  type?: 'response' | 'event' | 'tasks.updated' | 'workspace.changed' | 'workspace.folderPicked' | 'runs.changed' | 'auth.changed' | 'web.contributions.changed' | 'agent.planProposed' | 'plans.updated' | 'session.controls' | 'settings.changed'
   eventName?: string
   streamId?: string
   sequence?: number
@@ -60,6 +68,9 @@ interface BridgeResponse {
   workspace?: string
   dataDirectory?: string
   path?: string | null
+  plan?: PlanDocument
+  language?: LanguageSetting
+  languageResolved?: Language
   data?: unknown
   result?: unknown
   error?: string
@@ -117,8 +128,16 @@ function dispatch(json: string) {
   // The interaction broker also sends top-level notifications, without the
   // streaming event envelope. They must never be treated as RPC responses.
   const notification = msg as unknown as Record<string, unknown>
-  if (notification.type === 'agent.approvalRequest' || notification.type === 'agent.question' || notification.type === 'interactions.resolved') {
+  if (notification.type === 'agent.approvalRequest' || notification.type === 'agent.question' || notification.type === 'agent.planProposed' || notification.type === 'interactions.resolved') {
     bridgeEvents.emit(notification.type, notification as never)
+    return
+  }
+  if (msg.type === 'plans.updated') {
+    if (msg.plan) bridgeEvents.emit('plans.updated', { conversationId: msg.conversationId ? String(msg.conversationId) : undefined, plan: msg.plan })
+    return
+  }
+  if (msg.type === 'session.controls') {
+    bridgeEvents.emit('session.controls', (msg.data ?? msg.result) as SessionControlState)
     return
   }
   if (msg.type === 'tasks.updated') {
@@ -147,6 +166,13 @@ function dispatch(json: string) {
   }
   if (msg.type === 'web.contributions.changed') {
     bridgeEvents.emit('web.contributions.changed', {})
+    return
+  }
+  if (msg.type === 'settings.changed') {
+    bridgeEvents.emit('settings.changed', {
+      language: (msg.language === 'zh' || msg.language === 'en' ? msg.language : 'auto') as LanguageSetting,
+      languageResolved: (msg.languageResolved === 'zh' ? 'zh' : 'en') as Language,
+    })
     return
   }
   if (msg.type === 'event' && msg.eventName) {

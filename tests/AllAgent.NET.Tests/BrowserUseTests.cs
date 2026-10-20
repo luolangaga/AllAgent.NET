@@ -228,14 +228,15 @@ public sealed class BrowserUseTests
         Assert.DoesNotContain("agent-browser:", catalog.Instructions);
         await using var browser = new BrowserUseTools(new BrowserUseState());
         var registry = new ToolRegistry(); registry.Register(new BrowserSkillTools(browser)); registry.Register(new SkillTools(catalog));
-        await using var code = new CodeActProvider(registry, new PythonCodeValidator(workspace.Python), new UnusedSandbox());
+        await using var code = new CodeActProvider(registry, new PythonCodeValidator(workspace.Python), new UnusedSandbox(), skills: catalog);
         Assert.DoesNotContain("arguments_json", code.Instructions);
         var denied = await code.CallToolAsync("browser", JsonSerializer.SerializeToElement(new { operation = "status" }), default);
         Assert.False(denied.Ok); Assert.Contains("skill_read", denied.Error);
         var loaded = await code.CallToolAsync("skill_read", JsonSerializer.SerializeToElement(new { name = "browser-use" }), default);
         Assert.True(loaded.Ok, loaded.Error);
         Assert.True((await code.CallToolAsync("browser", JsonSerializer.SerializeToElement(new { operation = "status" }), default)).Ok);
-        Assert.DoesNotContain("arguments_json", code.Instructions); // Full contract never enters the permanent catalog.
+        // Disclosure is the point: the schema enters the catalog only after the contract is loaded.
+        Assert.Contains("arguments_json", code.Instructions);
     }
 
     private sealed class UnusedSandbox : ICodeSandbox

@@ -111,7 +111,7 @@ dotnet test tests/AllAgent.NET.Tests --filter "FullyQualifiedName~WorkspaceNavig
 - Hyperlight 依赖带预览版本，升级需重跑真实 microVM 测试（README）。
 - 两个沙箱都不可用时明确报错、不降级为宿主 Python（`FallbackCodeSandbox.cs:51`）——安全上正确，但离线/无虚拟化环境的可用性下降。
 - 项目目标框架 net8.0，但解决方案用 `.slnx`，需要 .NET 9+ SDK 才能构建（README 快速开始表）。
-- `file_search` 依赖系统 `rg`；缺失时需 `doctor install`（`everything_search` 自带 Everything 引擎，不依赖 rg）。
+- `file_search` 依赖系统 `rg`；缺失时需 `doctor install`（随包的 Everything 引擎不依赖 rg，但默认不注册为工具；按名字查找现在同样走 rg `--files`）。
 
 ### 9. 数据与部署（P3）
 - 项目索引 `allagent-projects.json` 在程序目录；若程序装在 Program Files 且无写权限，索引写入会失败（可用 `--data-dir` 规避，但报错信息不一定指向根因）。

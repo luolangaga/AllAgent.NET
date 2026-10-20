@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text;
 using HyperlightSandbox.Guest.Python;
 using AllAgent.NET.Core.Tools;
+using AllAgent.NET.Core.CodeAct;
 using Microsoft.Agents.AI.Hyperlight;
 using Microsoft.Extensions.AI;
 
@@ -12,8 +13,9 @@ Console.InputEncoding = System.Text.Encoding.UTF8;
 Console.OutputEncoding = new System.Text.UTF8Encoding(false);
 try
 {
-    using var init = JsonDocument.Parse(Console.In.ReadLine() ?? throw new IOException("Missing init."));
+    using var init = SandboxProtocol.ReadAsync(WorkerChannel.Input).GetAwaiter().GetResult();
     var root = init.RootElement;
+    SandboxProtocol.Validate(root, null);
     if (root.GetProperty("kind").GetString() != "init") throw new InvalidOperationException("Invalid init.");
     var guest = root.TryGetProperty("guestPath", out var value) && value.ValueKind == JsonValueKind.String
         ? value.GetString()! : PythonGuestModule.GetModulePath();
@@ -45,12 +47,16 @@ try
         if (!warm.GetProperty("success").GetBoolean() || warm.GetProperty("stdout").GetString()?.Trim() != "allagent-sandbox-ready")
             throw new InvalidOperationException("Hyperlight guest initialization failed: " + ToolResult.Clip(warm.GetProperty("stderr").GetString() ?? "No ready marker."));
     }
-    const string AutoImportGuidance = " Standard-library modules the guest provides (json, base64, struct, math, re, random, collections, itertools, functools, typing, dataclasses, enum, copy, operator, array, bisect, zlib, io, os, sys, encodings and similar) are imported on first use and need no import statement; explicit imports remain valid. A module outside that set raises NameError. Host filesystem, network and process access still requires call_tool.";
-    Send(new { kind = "ready", instructions = guidance.BuildInstructions(toolsVisibleToModel: false) + AutoImportGuidance, description = guidance.Description });
-    string? line;
-    while ((line = Console.In.ReadLine()) != null)
+    // A fixed catalog keeps worker startup free of module probing. It lists only modules
+    // verified in both the Hyperlight guest and the Monty fallback, so following the prompt
+    // cannot fail on a module this backend lacks.
+    const string ModuleGuidance = " Standard-library modules available in this sandbox: base64, binascii, collections, copy, dataclasses, functools, itertools, json, math, os, random, re, sys, time, typing, unicodedata. They are imported automatically on first use and need no import statement; explicit imports remain valid. asyncio, datetime and pathlib are not available in this guest. Any other module fails with ModuleNotFoundError. Do not retry a different module name: host-side automation belongs to call_tool, primarily powershell_script on Windows, while Python is the data-processing and orchestration layer; use call_tool(...) for host filesystem, network and process access.";
+    Send(new { kind = "ready", instructions = guidance.BuildInstructions(toolsVisibleToModel: false) + ModuleGuidance, description = guidance.Description });
+    while (true)
     {
-        using var request = JsonDocument.Parse(line);
+        using var request = SandboxProtocol.ReadAsync(WorkerChannel.Input).GetAwaiter().GetResult();
+        WorkerChannel.ExecutionId = request.RootElement.GetProperty("executionId").GetString() ?? throw new InvalidDataException("Missing execution ID.");
+        SandboxProtocol.Validate(request.RootElement, WorkerChannel.ExecutionId);
         if (request.RootElement.GetProperty("kind").GetString() != "execute") throw new InvalidOperationException("Invalid execute request.");
         var code = request.RootElement.GetProperty("code").GetString()!;
         transport.Reset();
@@ -115,7 +121,10 @@ try
                 def __missing__(self, key):
                     if key.startswith('_') or key in _lan_builtins:
                         raise KeyError(key)
-                    _lan_imported = __import__(key)
+                    try:
+                        _lan_imported = __import__(key)
+                    except ImportError:
+                        raise NameError("name '" + key + "' is not defined; this sandbox has no importable module named '" + key + "'. Use call_tool(...) for host operations, or check the Sandbox runtime module list.") from None
                     self[key] = _lan_imported
                     return _lan_imported
             """ + "\n_lan_source = _lan_json.loads(" + JsonSerializer.Serialize(JsonSerializer.Serialize(code, ToolResult.JsonOptions), ToolResult.JsonOptions) + ")\n" + """
@@ -135,9 +144,13 @@ try
                         _lan_frames.append({'line': _lan_line, 'function': _lan_tb.tb_frame.f_code.co_name})
                     _lan_tb = _lan_tb.tb_next
                 _lan_lines = _lan_source.splitlines()
+                _lan_hint = None
+                if isinstance(_lan_error, ImportError):
+                    _lan_hint = "The active sandbox does not provide this module. Use call_tool(...) for host I/O; the Sandbox runtime section lists every verified module. Do not retry a different module name."
                 _lan_diagnostic = {'source': 'allagent-code.py', 'line': _lan_line, 'column': _lan_column,
                     'type': type(_lan_error).__name__, 'message': str(_lan_error)[:500], 'frames': _lan_frames[-16:],
-                    'sourceLine': _lan_lines[_lan_line - 1][:200] if _lan_line and _lan_line <= len(_lan_lines) else None}
+                    'sourceLine': _lan_lines[_lan_line - 1][:200] if _lan_line and _lan_line <= len(_lan_lines) else None,
+                    'hint': _lan_hint}
                 _lan_host_call_tool('_lan_diagnostic', text=_lan_json.dumps(_lan_diagnostic))
                 raise
             """;
@@ -149,9 +162,13 @@ try
         var success = data.GetProperty("success").GetBoolean();
         if (!success && transport.Diagnostic is { } diagnostic && diagnostic.TryGetProperty("line", out var sourceLine) && sourceLine.ValueKind == JsonValueKind.Number)
             stderr = "allagent-code.py:" + sourceLine.GetInt32() + ": " + stderr;
+        var hint = !success && transport.Diagnostic is { } failureDiagnostic &&
+            failureDiagnostic.TryGetProperty("hint", out var hintElement) && hintElement.ValueKind == JsonValueKind.String
+            ? hintElement.GetString() : null;
+        var failure = success ? null : "Python execution failed: " + ToolResult.Clip(stderr.Trim(), 1500) + (string.IsNullOrEmpty(hint) ? "" : " " + hint);
         Send(new { kind = "result", result = new ToolResult(success,
             new { stdout = ToolResult.Clip(stdout), stderr = ToolResult.Clip(stderr), exitCode = data.GetProperty("exit_code").GetInt32(), diagnostic = transport.Diagnostic },
-            success ? null : "Python execution failed: " + ToolResult.Clip(stderr.Trim(), 1500), stdout.Length >= ToolResult.MaxOutputCharacters || stderr.Length > ToolResult.MaxOutputCharacters) });
+            failure, stdout.Length >= ToolResult.MaxOutputCharacters || stderr.Length > ToolResult.MaxOutputCharacters) });
     }
 }
 catch (Exception error)
@@ -159,12 +176,9 @@ catch (Exception error)
     Send(new { kind = "error", error = ToolResult.Clip(error.Message) });
     return 1;
 }
-return 0;
-
 static void Send(object message)
 {
-    Console.Out.WriteLine(JsonSerializer.Serialize(message, ToolResult.JsonOptions));
-    Console.Out.Flush();
+    WorkerChannel.Send(message);
 }
 
 sealed class HostFunction(AgentToolDescriptor tool, GuestTransport transport) : AIFunction
@@ -175,15 +189,7 @@ sealed class HostFunction(AgentToolDescriptor tool, GuestTransport transport) : 
     protected override ValueTask<object?> InvokeCoreAsync(AIFunctionArguments arguments, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        Console.Out.WriteLine(JsonSerializer.Serialize(new { kind = "call", name = Name, arguments }, ToolResult.JsonOptions));
-        Console.Out.Flush();
-        using var response = JsonDocument.Parse(Console.In.ReadLine() ?? throw new IOException("Host channel closed."));
-        if (response.RootElement.GetProperty("kind").GetString() != "tool_result") throw new IOException("Invalid host response.");
-        // The native Python bridge treats a top-level 'error' as a RuntimeError.
-        // Preserve the AllAgent ok/data/error contract as a value, so model code can
-        // handle denied/invalid operations with ordinary if statements. Only trusted
-        // prelude code unwraps this internal transport envelope.
-        return new(transport.Wrap(response.RootElement.GetProperty("result")));
+        return new(transport.Wrap(WorkerChannel.Call(Name, JsonSerializer.SerializeToElement(arguments, ToolResult.JsonOptions))));
     }
 }
 
@@ -214,9 +220,10 @@ sealed class GuestTransport
     private readonly StringBuilder _stdout = new();
     private string _result = "";
     private readonly StringBuilder _arguments = new();
+    private int _argumentBytes;
     public string Stdout => _stdout.ToString();
     public JsonElement? Diagnostic { get; private set; }
-    public void Reset() { _stdout.Clear(); _arguments.Clear(); _result = ""; Diagnostic = null; }
+    public void Reset() { _stdout.Clear(); _arguments.Clear(); _argumentBytes = 0; _result = ""; Diagnostic = null; }
     public object ReportDiagnostic(string text)
     {
         if (text.Length > 12000) throw new InvalidDataException("Guest diagnostic exceeds the transport budget.");
@@ -229,21 +236,23 @@ sealed class GuestTransport
     {
         if (text.Length > FragmentCharacters)
             throw new InvalidDataException("Tool argument fragment exceeds the transport frame size.");
+        _argumentBytes = checked(_argumentBytes + Encoding.UTF8.GetByteCount(text));
+        if (_argumentBytes > SandboxProtocol.MaxFrameBytes) throw new InvalidDataException("Cumulative tool arguments exceed 16 MiB.");
         _arguments.Append(text);
         return new { uploaded = true };
     }
     public JsonElement TakeArguments()
     {
         var text = _arguments.ToString();
-        _arguments.Clear();
-        using var document = JsonDocument.Parse(text);
+        _arguments.Clear(); _argumentBytes = 0;
+        using var document = JsonDocument.Parse(text, new JsonDocumentOptions { MaxDepth = SandboxProtocol.MaxDepth });
         if (document.RootElement.ValueKind != JsonValueKind.Object) throw new InvalidDataException("Tool arguments must be an object.");
         return document.RootElement.Clone();
     }
     public object Wrap(JsonElement result)
     {
         _result = result.GetRawText();
-        if (_result.Length > 4_000_000) throw new InvalidDataException("Host tool response exceeds its transport budget.");
+        if (Encoding.UTF8.GetByteCount(_result) > SandboxProtocol.MaxFrameBytes - 65536) throw new InvalidDataException("Host tool response exceeds its transport budget.");
         if (Encoding.UTF8.GetByteCount(_result) <= 6000) return new { result = result.Clone() };
         return new { _lan_parts = (_result.Length + FragmentCharacters - 1) / FragmentCharacters };
     }
@@ -291,15 +300,27 @@ sealed class DispatchFunction(AgentToolDescriptor[] tools, GuestTransport transp
         var name = JsonSerializer.SerializeToElement(arguments["name"]).GetString();
         var payload = transport.TakeArguments();
         if (!tools.Any(tool => tool.Name == name)) throw new InvalidDataException("Unknown host tool.");
-        SendCall();
-        using var response = JsonDocument.Parse(Console.In.ReadLine() ?? throw new IOException("Host channel closed."));
-        if (response.RootElement.GetProperty("kind").GetString() != "tool_result") throw new IOException("Invalid host response.");
-        return new(transport.Wrap(response.RootElement.GetProperty("result")));
+        return new(transport.Wrap(WorkerChannel.Call(name!, payload)));
+    }
+}
 
-        void SendCall()
-        {
-            Console.Out.WriteLine(JsonSerializer.Serialize(new { kind = "call", name, arguments = payload }, ToolResult.JsonOptions));
-            Console.Out.Flush();
-        }
+static class WorkerChannel
+{
+    internal static readonly Stream Input = Console.OpenStandardInput();
+    public static string? ExecutionId { get; set; }
+    public static void Send(object value, string? callId = null)
+    {
+        Console.Out.WriteLine(SandboxProtocol.Encode(value, ExecutionId, callId));
+        Console.Out.Flush();
+    }
+    public static JsonElement Call(string name, JsonElement arguments)
+    {
+        var callId = Guid.NewGuid().ToString("N");
+        Send(new { kind = "call", name, arguments }, callId);
+        using var response = SandboxProtocol.ReadAsync(Input).GetAwaiter().GetResult();
+        SandboxProtocol.Validate(response.RootElement, ExecutionId);
+        if (response.RootElement.GetProperty("kind").GetString() != "tool_result" || response.RootElement.GetProperty("callId").GetString() != callId)
+            throw new InvalidDataException("Host response call ID mismatch.");
+        return response.RootElement.GetProperty("result").Clone();
     }
 }

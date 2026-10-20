@@ -3,9 +3,9 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
     <EnableDynamicLoading>true</EnableDynamicLoading>
-    <PackageId>AllAgent.NET.WorkBuddy</PackageId><Version>1.0.0</Version>
-    <PackageTags>AllAgent.NET;LanAgent;WorkBuddy;Authentication</PackageTags>
-    <Description>WorkBuddy browser login, streaming adapter and quota query.</Description>
+    <PackageId>AllAgent.NET.WorkBuddy</PackageId><Version>1.1.0</Version>
+    <PackageTags>AllAgent.NET;LanAgent;WorkBuddy;Authentication;Automation</PackageTags>
+    <Description>WorkBuddy browser login, streaming adapter, quota query and daily automation.</Description>
     <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
   <ItemGroup>

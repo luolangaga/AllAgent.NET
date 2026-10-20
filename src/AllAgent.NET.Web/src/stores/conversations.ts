@@ -1,5 +1,5 @@
 import { defineStore, ref, computed } from '@/lib/store'
-import type { ContextUsage, Conversation, ConversationUsage, ImageAttachment, Message, NoticePart, RunningConversation, TodoItem, ToolCall } from '@/types'
+import type { ContextUsage, Conversation, ConversationUsage, ImageAttachment, InputDelivery, Message, NoticePart, PendingInput, PlanDocument, RunningConversation, TodoItem, ToolCall } from '@/types'
 import { bridgeEvents, invoke, type BridgeEvents } from '@/bridge'
 import { parseObject, restoreMessages, toolFailed } from '@/utils/execution'
 
@@ -8,6 +8,12 @@ export const useConversationsStore = defineStore('conversations', () => {
   const activeId = ref<string | null>(null)
   const messages = ref<Message[]>([])
   const todos = ref<TodoItem[]>([])
+  // The latest approved/proposed plan persisted with this conversation. Markdown is
+  // rendered to HTML by the Markdown component, so the terminal and browser share one source.
+  const plan = ref<PlanDocument | null>(null)
+  // Prompts parked while this conversation is running: steers reach the next model step,
+  // queued items start their own turn once the run finishes.
+  const pendingInputs = ref<PendingInput[]>([])
   const sending = ref(false)
   const streamingMessageId = ref<string | null>(null)
   const activeStreamId = ref<string | null>(null)
@@ -87,6 +93,16 @@ export const useConversationsStore = defineStore('conversations', () => {
     }
   }
 
+  /** Optional chrome: an older host may not serve plans, and the transcript must still load. */
+  async function loadPlan(id: string) {
+    try {
+      const current = await invoke<PlanDocument | null>('plans.get', { conversationId: id })
+      if (activeId.value === id) plan.value = current
+    } catch {
+      // The plan panel stays empty; the run itself is unaffected.
+    }
+  }
+
   async function selectConversation(id: string) {
     // Starting a run owns the optimistic bubbles for a few milliseconds; leaving the
     // stream behind (below) is what keeps the run itself alive.
@@ -98,6 +114,8 @@ export const useConversationsStore = defineStore('conversations', () => {
     activeId.value = id
     messages.value = []
     todos.value = []
+    plan.value = null
+    pendingInputs.value = []
     contextUsage.value = null
     conversationUsage.value = null
     isLoading.value = true
@@ -114,12 +132,14 @@ export const useConversationsStore = defineStore('conversations', () => {
 
   async function loadConversationView(id: string, version: number) {
     void loadUsage(id)
+    void loadPlan(id)
     const early: StreamEvent[] = []
     const buffer = (type: keyof BridgeEvents, event: BridgeEvents[keyof BridgeEvents]) => { early.push([type, event]) }
     bridgeEvents.on('*', buffer)
     try {
-      const [checklist, state] = await Promise.all([
+      const [checklist, pending, state] = await Promise.all([
         invoke<TodoItem[]>('todos.get', { conversationId: id }),
+        invoke<PendingInput[]>('chat.pendingInputs', { conversationId: id }),
         invoke<StreamSnapshot | null>('chat.getStreamState', { conversationId: id }),
       ])
       // Read persisted history only after observing no active journal. Reading
@@ -131,6 +151,7 @@ export const useConversationsStore = defineStore('conversations', () => {
         streamingMessageId.value = null
         activeStreamId.value = null
         todos.value = checklist
+        pendingInputs.value = pending
         if (state?.streamId) {
           const assistantId = `stream-${state.streamId}`
           messages.value = [...restoreMessages(state.history),
@@ -159,6 +180,8 @@ export const useConversationsStore = defineStore('conversations', () => {
     activeId.value = conversation.id
     messages.value = []
     todos.value = []
+    plan.value = null
+    pendingInputs.value = []
     contextUsage.value = null
     conversationUsage.value = null
     isLoading.value = false
@@ -182,6 +205,88 @@ export const useConversationsStore = defineStore('conversations', () => {
     return created.id
   }
 
+  /** Refresh the parked input list (reload, run end, or an input admitted into history). */
+  async function loadPending(id = activeId.value) {
+    if (!id) return
+    try {
+      const items = await invoke<PendingInput[]>('chat.pendingInputs', { conversationId: id })
+      if (activeId.value === id) pendingInputs.value = items
+    } catch {
+      // Optional chrome: an offline host must not break the transcript.
+    }
+  }
+
+  /**
+   * Submit while a turn is running. `steer` interrupts the current plan at the next
+   * model step; `queue` starts a fresh turn after the run ends. The draft stays in
+   * the input box only if the host rejects it.
+   */
+  async function enqueueMessage(content: string, delivery: InputDelivery, images?: ImageAttachment[], prompt?: string) {
+    if (!content.trim()) throw new Error('消息不能为空')
+    const conversationId = await ensureConversation()
+    const item = await invoke<PendingInput>('chat.enqueueInput', {
+      conversationId,
+      message: content,
+      delivery,
+      prompt: prompt ?? null,
+      images: images?.length ? images : null,
+    })
+    if (activeId.value === conversationId) {
+      pendingInputs.value = [...pendingInputs.value.filter(existing => existing.id !== item.id), item]
+    }
+    return item
+  }
+
+  async function cancelPending(id: string) {
+    const conversationId = activeId.value
+    if (!conversationId) return
+    await invoke('chat.cancelPendingInput', { conversationId, id })
+    pendingInputs.value = pendingInputs.value.filter(item => item.id !== id)
+  }
+
+  /**
+   * Deliver the next parked prompt as its own turn. The engine promotes steers first
+   * and otherwise takes one queued item; events arrive on a fresh stream.
+   */
+  async function runPending(apiConfigId: string, thinkingEnabled = false, thinkingBudget = 8000, model?: string, reasoningEffort?: string) {
+    if (sending.value || streamingMessageId.value || !activeId.value) return
+    const conversationId = activeId.value
+    const assistantId = crypto.randomUUID()
+    sending.value = true
+    try {
+      messages.value = [...messages.value, {
+        id: assistantId, role: 'assistant', content: '', createdAt: new Date().toISOString(), status: 'streaming', toolCalls: [],
+      }]
+      streamingMessageId.value = assistantId
+      const early: StreamEvent[] = []
+      const buffer = (type: keyof BridgeEvents, event: BridgeEvents[keyof BridgeEvents]) => { early.push([type, event]) }
+      bridgeEvents.on('*', buffer)
+      let streamId: string | null
+      try {
+        streamId = await invoke<string | null>('chat.runPending', {
+          conversationId, apiConfigId, thinkingEnabled, thinkingBudget,
+          model: model ?? null, reasoningEffort: reasoningEffort ?? null,
+        })
+      } catch (error) {
+        bridgeEvents.off('*', buffer)
+        messages.value = messages.value.filter(message => message.id !== assistantId)
+        if (streamingMessageId.value === assistantId) streamingMessageId.value = null
+        throw error
+      }
+      bridgeEvents.off('*', buffer)
+      if (!streamId) {
+        messages.value = messages.value.filter(message => message.id !== assistantId)
+        if (streamingMessageId.value === assistantId) streamingMessageId.value = null
+        await loadPending(conversationId)
+        return
+      }
+      activeStreamId.value = streamId
+      attachStream(streamId, conversationId, assistantId, '', early)
+    } finally {
+      sending.value = false
+    }
+  }
+
   async function renameConversation(id: string, title: string) {
     await invoke('conversations.rename', { id, title })
     conversations.value = conversations.value.map(item => (item.id === id ? { ...item, title } : item))
@@ -196,6 +301,7 @@ export const useConversationsStore = defineStore('conversations', () => {
     activeId.value = null
     messages.value = []
     todos.value = []
+    pendingInputs.value = []
     contextUsage.value = null
     conversationUsage.value = null
     isLoading.value = false
@@ -221,6 +327,9 @@ export const useConversationsStore = defineStore('conversations', () => {
 
   function attachStream(streamId: string, conversationId: string, assistantId: string, content: string, early: StreamEvent[]) {
     let lastSequence = 0
+    // A steer admitted mid-run closes the current answer bubble and continues in a
+    // fresh one, so the user's guidance stays at the point it took effect.
+    let currentAssistantId = assistantId
     const current = (eventStreamId?: string, sequence?: number) => {
       if (eventStreamId !== streamId) return false
       if (sequence !== undefined) {
@@ -229,7 +338,7 @@ export const useConversationsStore = defineStore('conversations', () => {
       }
       // A new message reference lets React memoize historical bubbles while
       // this one continues to stream. Nested tool state stays observable.
-      messages.value = messages.value.map(message => message.id === assistantId ? { ...message } : message)
+      messages.value = messages.value.map(message => message.id === currentAssistantId ? { ...message } : message)
       return true
     }
     let completedText = ''
@@ -243,7 +352,7 @@ export const useConversationsStore = defineStore('conversations', () => {
     const onToken = (data: BridgeEvents['agent.token']) => {
       if (!current(data.streamId, data.sequence)) return
       if (!data.text) return
-      const message = findMessage(assistantId)
+      const message = findMessage(currentAssistantId)
       if (message) {
         settleReasoning(message, eventTime(data))
         message.content += data.text
@@ -257,7 +366,7 @@ export const useConversationsStore = defineStore('conversations', () => {
     const onThinking = (data: BridgeEvents['agent.thinking']) => {
       if (!current(data.streamId, data.sequence)) return
       if (!data.text) return
-      const message = findMessage(assistantId)
+      const message = findMessage(currentAssistantId)
       if (message) {
         message.reasoningContent = (message.reasoningContent ?? '') + data.text
         settleNotices(message)
@@ -269,7 +378,7 @@ export const useConversationsStore = defineStore('conversations', () => {
     }
     const onIteration = (data: BridgeEvents['agent.iteration']) => {
       if (!current(data.streamId, data.sequence)) return
-      const message = findMessage(assistantId)
+      const message = findMessage(currentAssistantId)
       if (message) {
         settleReasoning(message, eventTime(data))
         settleNotices(message)
@@ -283,7 +392,7 @@ export const useConversationsStore = defineStore('conversations', () => {
     // answer back but keep their notice, and one line covers consecutive attempts.
     const onNotice = (data: BridgeEvents['agent.notice']) => {
       if (!current(data.streamId, data.sequence)) return
-      const message = findMessage(assistantId)
+      const message = findMessage(currentAssistantId)
       if (!message) return
       const text = data.message ?? ''
       if (data.resetResponse) {
@@ -309,8 +418,34 @@ export const useConversationsStore = defineStore('conversations', () => {
         parts.push({ type: 'notice', id: crypto.randomUUID(), text, kind: 'retry', status: 'pending', attempts: 1 })
       }
     }
+    // A steer admitted at a step boundary becomes a normal user turn in the timeline;
+    // the answer that follows streams into a fresh assistant bubble.
+    const onInputAdmitted = (data: BridgeEvents['agent.inputAdmitted']) => {
+      if (!current(data.streamId, data.sequence)) return
+      const previous = findMessage(currentAssistantId)
+      if (previous) {
+        settleReasoning(previous, Date.now())
+        settleNotices(previous)
+        if (previous.status === 'streaming') previous.status = 'done'
+      }
+      const admitted: Message = { ...data.message, status: 'done' }
+      if (!admitted.parts?.length) {
+        admitted.parts = admitted.content ? [{ type: 'text', text: admitted.content }] : undefined
+      }
+      const nextId = crypto.randomUUID()
+      const next: Message = {
+        id: nextId, role: 'assistant', content: '', createdAt: new Date().toISOString(), status: 'streaming', toolCalls: [],
+      }
+      messages.value = [...messages.value.filter(message => message.id !== admitted.id), admitted, next]
+      currentAssistantId = nextId
+      streamingMessageId.value = nextId
+      completedText = ''
+      completedThinking = ''
+      completedParts = []
+      pendingInputs.value = pendingInputs.value.filter(item => item.id !== data.message.id)
+    }
     function ensureTool(id: string, name = 'tool'): ToolCall | undefined {
-      const message = findMessage(assistantId)
+      const message = findMessage(currentAssistantId)
       if (!message) return
       const calls = message.toolCalls ?? (message.toolCalls = [])
       let call = calls.find(item => item.id === id)
@@ -324,20 +459,20 @@ export const useConversationsStore = defineStore('conversations', () => {
     }
     const onToolCallStarted = (data: BridgeEvents['agent.toolCallStarted']) => {
       if (!current(data.streamId, data.sequence)) return
-      settleReasoning(findMessage(assistantId), eventTime(data))
-      settleNotices(findMessage(assistantId))
+      settleReasoning(findMessage(currentAssistantId), eventTime(data))
+      settleNotices(findMessage(currentAssistantId))
       const call = ensureTool(data.id, data.name)
       if (call) { call.name = data.name; call.args = data.args; call.parentId = data.parentId }
     }
     const onToolCallOutput = (data: BridgeEvents['agent.toolCallOutput']) => {
       if (!current(data.streamId, data.sequence)) return
-      settleReasoning(findMessage(assistantId), eventTime(data))
+      settleReasoning(findMessage(currentAssistantId), eventTime(data))
       const call = ensureTool(data.id)
       if (call) call.outputLines = [...(call.outputLines ?? []), data.isError ? `[stderr] ${data.line}` : data.line].slice(-400)
     }
     const onToolCallCompleted = (data: BridgeEvents['agent.toolCallCompleted']) => {
       if (!current(data.streamId, data.sequence)) return
-      settleReasoning(findMessage(assistantId), eventTime(data))
+      settleReasoning(findMessage(currentAssistantId), eventTime(data))
       applyTodoResult(data.name, data.result)
       const call = ensureTool(data.id, data.name)
       if (call) {
@@ -349,7 +484,7 @@ export const useConversationsStore = defineStore('conversations', () => {
     // Policy rejections are recoverable: the tool row turns red, the run continues.
     const onToolCallRejected = (data: BridgeEvents['agent.toolCallRejected']) => {
       if (!current(data.streamId, data.sequence)) return
-      const message = findMessage(assistantId)
+      const message = findMessage(currentAssistantId)
       if (!message) return
       settleReasoning(message, eventTime(data))
       const calls = message.toolCalls ?? (message.toolCalls = [])
@@ -371,7 +506,7 @@ export const useConversationsStore = defineStore('conversations', () => {
     }
     const onDone = (data: BridgeEvents['agent.done']) => {
       if (!current(data.streamId, data.sequence)) return
-      const message = findMessage(assistantId)
+      const message = findMessage(currentAssistantId)
       if (message) {
         message.finishReason = data.reason
         if (data.reason === 'error' || data.reason === 'protocol_error' || data.reason === 'timeout') message.status = 'error'
@@ -384,7 +519,7 @@ export const useConversationsStore = defineStore('conversations', () => {
     }
     const onError = (data: BridgeEvents['agent.error']) => {
       if (!current(data.streamId, data.sequence)) return
-      const message = findMessage(assistantId)
+      const message = findMessage(currentAssistantId)
       if (message) {
         message.status = 'error'
         message.error = data.message
@@ -405,6 +540,7 @@ export const useConversationsStore = defineStore('conversations', () => {
       bridgeEvents.off('agent.toolCallCompleted', onToolCallCompleted)
       bridgeEvents.off('agent.toolCallRejected', onToolCallRejected)
       bridgeEvents.off('agent.contextUsage', onContextUsage)
+      bridgeEvents.off('agent.inputAdmitted', onInputAdmitted)
       bridgeEvents.off('agent.done', onDone)
       bridgeEvents.off('agent.error', onError)
       if (detachStream === detach) detachStream = null
@@ -413,10 +549,10 @@ export const useConversationsStore = defineStore('conversations', () => {
     function finish(status: 'done' | null) {
       detach()
       if (status) {
-        const message = findMessage(assistantId)
+        const message = findMessage(currentAssistantId)
         if (message && message.status === 'streaming') message.status = 'done'
       }
-      if (streamingMessageId.value === assistantId) {
+      if (streamingMessageId.value === currentAssistantId) {
         streamingMessageId.value = null
         activeStreamId.value = null
       }
@@ -439,6 +575,7 @@ export const useConversationsStore = defineStore('conversations', () => {
     bridgeEvents.on('agent.toolCallCompleted', onToolCallCompleted)
     bridgeEvents.on('agent.toolCallRejected', onToolCallRejected)
     bridgeEvents.on('agent.contextUsage', onContextUsage)
+    bridgeEvents.on('agent.inputAdmitted', onInputAdmitted)
     bridgeEvents.on('agent.done', onDone)
     bridgeEvents.on('agent.error', onError)
     const handlers: Partial<{ [K in keyof BridgeEvents]: (data: BridgeEvents[K]) => void }> = {
@@ -446,14 +583,14 @@ export const useConversationsStore = defineStore('conversations', () => {
       'agent.notice': onNotice, 'agent.toolCallStarted': onToolCallStarted,
       'agent.toolCallOutput': onToolCallOutput, 'agent.toolCallCompleted': onToolCallCompleted,
       'agent.toolCallRejected': onToolCallRejected, 'agent.contextUsage': onContextUsage,
-      'agent.done': onDone, 'agent.error': onError,
+      'agent.inputAdmitted': onInputAdmitted, 'agent.done': onDone, 'agent.error': onError,
     }
     for (const [type, event] of early) {
-      if (streamingMessageId.value !== assistantId) break
+      if (streamingMessageId.value !== currentAssistantId) break
       const handler = handlers[type] as ((data: BridgeEvents[keyof BridgeEvents]) => void) | undefined
       handler?.(event)
     }
-    if (streamingMessageId.value === assistantId) detachStream = detach
+    if (streamingMessageId.value === currentAssistantId) detachStream = detach
   }
 
   async function sendMessage(content: string, apiConfigId: string, thinkingEnabled = false, thinkingBudget = 8000, model?: string, reasoningEffort?: string, images?: ImageAttachment[], prompt?: string) {
@@ -607,6 +744,8 @@ export const useConversationsStore = defineStore('conversations', () => {
       activeId.value = null
       messages.value = []
       todos.value = []
+      plan.value = null
+      pendingInputs.value = []
       contextUsage.value = null
       conversationUsage.value = null
       isLoading.value = false
@@ -619,11 +758,30 @@ export const useConversationsStore = defineStore('conversations', () => {
   // as they happen, so the sidebar and the dock never need to poll.
   bridgeEvents.on('runs.changed', data => { running.value = data.conversations ?? [] })
 
+  // Plan proposals arrive as top-level notifications; the persisted record is
+  // reloaded on conversation switch and after the decision.
+  bridgeEvents.on('agent.planProposed', data => {
+    if (data.conversationId && data.conversationId !== activeId.value) return
+    plan.value = {
+      id: data.id,
+      title: data.title,
+      markdown: data.markdown,
+      status: data.status ?? 'proposed',
+      createdAt: data.createdAt ?? new Date().toISOString(),
+      decidedAt: null,
+    }
+  })
+  bridgeEvents.on('plans.updated', data => {
+    if (data.conversationId && data.conversationId !== activeId.value) return
+    plan.value = data.plan
+  })
+
   return {
-    conversations, activeId, active, messages, todos, contextUsage, conversationUsage,
+    conversations, activeId, active, messages, todos, plan, pendingInputs, contextUsage, conversationUsage,
     sending, streamingMessageId, activeStreamId, isLoading, running,
     isRunning, runState, runsIn, loadRunning, cancelRun,
     loadAll, selectConversation, createConversation, renameConversation,
     deleteConversation, setTodos, sendMessage, compact, cancelStream, refreshAfterBackendChange,
+    loadPending, enqueueMessage, cancelPending, runPending,
   }
 })

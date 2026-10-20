@@ -102,7 +102,7 @@ AllAgent.NET.Sandbox.exe       Hyperlight microVM worker
 AllAgent.NET.PowerShell.exe    内嵌 PowerShell SDK worker
 Modules/                       PowerShell SDK 内置模块（worker 从这里加载）
 web/                           React 工作台静态资源
-everything/ everything_search 的便携索引
+everything/ 可选 Everything 文件名索引（默认不注册工具）
 builtin-plugins/               内置插件
 runtimes/                      各 worker 的按 RID 原生资源
 ```

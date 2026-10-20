@@ -56,13 +56,14 @@ public sealed class EverythingSearchTests(ITestOutputHelper log) : IDisposable
     }
 
     [Fact]
-    public async Task ToolIsRegisteredAndEnforcesExternalDirectoryApprovalAndCancellation()
+    public async Task ToolIsNotRegisteredButStillEnforcesExternalDirectoryApprovalAndCancellation()
     {
-        Assert.Contains(Tools.Definitions, t => t.Name == "everything_search" && t.Risk == ToolRisk.Read);
+        // Name search is served by file_search(names_only=true); the Everything engine stays optional.
+        Assert.DoesNotContain(Tools.Definitions, t => t.Name == "everything_search");
         Assert.DoesNotContain(Tools.Definitions, t => t.Name == "file_glob");
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Tools.SearchEverythingAsync("*", ".."));
         var args = JsonSerializer.SerializeToElement(new { path = Path.GetDirectoryName(_root) });
-        await Assert.ThrowsAsync<UnauthorizedAccessException>(async () => await Tools.RequestAccessAsync("everything_search", args, null, default));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(async () => await Tools.RequestAccessAsync("file_search", args, null, default));
         using var cancellation = new CancellationTokenSource(); cancellation.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Tools.SearchEverythingAsync("*", ct: cancellation.Token));
         Assert.False((await Tools.SearchEverythingAsync("", limit: 1)).Ok);
